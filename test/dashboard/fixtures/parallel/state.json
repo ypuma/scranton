@@ -1,0 +1,140 @@
+{
+  "v": 1,
+  "runId": "run-20261108-091500-demo",
+  "status": "running",
+  "request": "Build a tiny todo CLI with add, list and done, stored in todos.json, with tests and a README",
+  "workspace": "C:\\demo\\todo-cli",
+  "updatedAt": "2026-11-08T09:15:27.900Z",
+  "lastSeq": 27,
+  "milestones": [
+    {
+      "id": "m1",
+      "title": "Todo storage module",
+      "dependsOn": [],
+      "status": "active",
+      "cycle": 1,
+      "failedCycles": 0
+    },
+    {
+      "id": "m2",
+      "title": "Command line interface",
+      "dependsOn": [],
+      "status": "active",
+      "cycle": 1,
+      "failedCycles": 0
+    },
+    {
+      "id": "m3",
+      "title": "Tests and README",
+      "dependsOn": [
+        "m1",
+        "m2"
+      ],
+      "status": "pending",
+      "cycle": 0,
+      "failedCycles": 0
+    }
+  ],
+  "currentMilestoneId": "m1",
+  "activeMilestoneIds": [
+    "m1",
+    "m2"
+  ],
+  "instances": {
+    "michael": {
+      "id": "michael",
+      "agent": "michael",
+      "milestoneId": null,
+      "sessionId": "00000000-0000-4000-8000-000000000001",
+      "worktree": "C:\\demo\\hive\\isolation\\michael",
+      "sandbox": "host",
+      "status": "done",
+      "activity": "Planning complete",
+      "tool": null
+    },
+    "dwight-m1": {
+      "id": "dwight-m1",
+      "agent": "dwight",
+      "milestoneId": "m1",
+      "sessionId": "00000000-0000-4000-8000-000000000003",
+      "worktree": "C:\\demo\\hive\\isolation\\dwight-m1",
+      "sandbox": "host",
+      "status": "working",
+      "activity": "Listing .",
+      "tool": "ls"
+    },
+    "dwight-m2": {
+      "id": "dwight-m2",
+      "agent": "dwight",
+      "milestoneId": "m2",
+      "sessionId": "00000000-0000-4000-8000-000000000004",
+      "worktree": "C:\\demo\\hive\\isolation\\dwight-m2",
+      "sandbox": "host",
+      "status": "working",
+      "activity": "Listing .",
+      "tool": "ls"
+    }
+  },
+  "chat": [
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "ts": "2026-11-08T09:15:27.100Z",
+      "from": "human",
+      "to": "dwight-m2",
+      "text": "Keep the commands short: add, list and done.",
+      "delivery": "delivered"
+    }
+  ],
+  "execution": {
+    "maxParallel": 2,
+    "isolation": "worktree",
+    "persistentSessions": true,
+    "maxReplans": 0,
+    "sandbox": {
+      "mode": "host"
+    },
+    "simulated": true
+  },
+  "cycle": 1,
+  "failedCycles": 0,
+  "maxFailedCycles": 2,
+  "breaker": "closed",
+  "agents": {
+    "michael": {
+      "status": "waiting",
+      "activity": "Overseeing m2: Command line interface",
+      "lastKeyword": "PLAN_READY",
+      "updatedAt": "2026-11-08T09:15:13.400Z",
+      "totals": {
+        "runs": 1,
+        "input": 1960,
+        "output": 280,
+        "cost": 0.01
+      }
+    },
+    "dwight": {
+      "status": "working",
+      "activity": "Listing .",
+      "lastKeyword": null,
+      "updatedAt": "2026-11-08T09:15:25.600Z",
+      "totals": {
+        "runs": 0,
+        "input": 0,
+        "output": 0,
+        "cost": 0
+      }
+    },
+    "angela": {
+      "status": "idle",
+      "activity": "Idle",
+      "lastKeyword": null,
+      "updatedAt": "2026-11-08T09:15:00.000Z",
+      "totals": {
+        "runs": 0,
+        "input": 0,
+        "output": 0,
+        "cost": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/staged/
+src-tauri/binaries/
+
+.scratch/
+workspace/
+demo-workspace/
+.env
+
+# hive runtime files (keep README.md and .gitkeep)
+hive/events.jsonl
+hive/state.json
+hive/runs/
+hive/sessions/
+hive/*/inbox.md
+hive/*/outbox.md
+hive/*/plan.json
+hive/*/plan.md
+hive/*/system.md
+hive/*/archive/
+hive/human/response.json
+hive/control/
+*.tmp
+
+# Private worktree repositories, per-instance runtime and run ownership
+hive/worktrees/
+hive/runtime/
+hive/instances/
+hive/isolation/
+hive/chat/
+.env.*
+!.env.example
+# Agent harness runtime data (contracts and the code map are kept)
+.enma/work/
+.enma/findings/
+
+# Scranton Pipeline build/cache output (runtime staging and .scratch are ignored above)
+engine/**/__pycache__/
+engine/**/*.py[cod]
+engine/src/*.egg-info/
+engine/.pytest_cache/
+engine/.mypy_cache/
+engine/.ruff_cache/
+engine/build/
+engine/dist/
+engine/.venv/

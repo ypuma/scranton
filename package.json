@@ -1,0 +1,32 @@
+{
+  "name": "project-scranton",
+  "version": "0.1.0",
+  "description": "Multi-agent harness around the pi coding agent: Michael plans, Dwight codes, Angela tests - talking through Markdown mailboxes in the Hive.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "scranton": "bin/scranton.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "start": "node bin/scranton.js",
+    "demo": "node bin/scranton.js demo",
+    "dashboard": "node bin/scranton.js dashboard",
+    "visualize": "node bin/scranton.js visualize",
+    "app:prepare": "node scripts/prepare-desktop.mjs",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build",
+    "app:icon": "node scripts/generate-desktop-icon.mjs && tauri icon src-tauri/icons/source.png",
+    "test:packaging": "node --test \"test/packaging/*.test.js\""
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

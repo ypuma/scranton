@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "models": {
+    "planner": {"provider": "command", "model": "operator-selected", "command": ["node", "C:/path/to/Project_Scranton/tools/pipeline-pi-complete.js", "--provider", "anthropic", "--model", "operator-selected"], "structured_output": "json_text"},
+    "implementer": {"provider": "command", "model": "operator-selected", "command": ["node", "C:/path/to/Project_Scranton/tools/pipeline-pi-complete.js", "--provider", "anthropic", "--model", "operator-selected"], "structured_output": "json_text"},
+    "reviewer": {"provider": "command", "model": "operator-selected", "command": ["node", "C:/path/to/Project_Scranton/tools/pipeline-pi-complete.js", "--provider", "anthropic", "--model", "operator-selected"], "structured_output": "json_text"}
+  },
+  "sandbox": {"mode": "docker", "docker": {"image": "scranton-sandbox:1.5.0"}},
+  "checks": [{"id": "tests", "kind": "test", "argv": ["node", "--test"]}]
+}

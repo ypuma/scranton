@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Scranton - Agent Orchestration</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <button type="button" class="icon-btn nav-toggle" id="nav-toggle" aria-controls="sidebar" aria-expanded="false" hidden>
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        <span class="sr-only" id="nav-toggle-label">Projects and chats</span>
+        <span class="nav-alert mono" id="nav-alert" aria-hidden="true" hidden></span>
+      </button>
+      <span class="wordmark" title="Scranton - Agent Orchestration">SCRANTON</span>
+    </div>
+    <div class="top-actions">
+      <div class="run-actions" id="run-actions" hidden>
+        <button type="button" class="icon-btn" id="notify-toggle" aria-pressed="false" aria-label="Desktop notifications" hidden>
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1.2 1.2H2.8zM6.5 14h3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path class="bell-off" d="M2.5 2.5l11 11" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="agents-open" aria-haspopup="dialog" aria-label="Agents" title="Agents and their prompts" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 2.5h5.3L12 5.2v8.3H4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6 7.5h4M6 10h4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+        <button type="button" class="btn" id="accounts-open" aria-haspopup="dialog" aria-label="Accounts" aria-describedby="accounts-open-state" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="5.5" r="2.7" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2.8 14c.6-2.8 2.7-4.3 5.2-4.3s4.6 1.5 5.2 4.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="btn-mark" id="accounts-mark" aria-hidden="true"></span><span class="sr-only" id="accounts-open-state"></span></button>
+        <button type="button" class="btn" id="stop-run" hidden>Stop run</button>
+        <button type="button" class="btn btn-primary" id="new-run">New run</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell">
+  <nav class="sidebar" id="sidebar" aria-labelledby="nav-title" hidden>
+    <div class="nav-head">
+      <h2 id="nav-title">Projects</h2>
+      <span class="badge" id="nav-mode" hidden>single</span>
+      <button type="button" class="icon-btn" id="project-new" aria-haspopup="dialog" aria-label="New project" title="New project">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+    </div>
+    <p class="nav-status" id="nav-status" role="status" aria-live="polite"></p>
+    <ul class="projects" id="projects"></ul>
+    <p class="nav-empty hint" id="nav-empty" hidden>No project yet. Create one for a folder on this computer; each project keeps its own chats.</p>
+    <footer class="nav-foot">
+      <span class="hint" id="nav-capacity"></span>
+    </footer>
+  </nav>
+  <div class="nav-scrim" id="nav-scrim" hidden></div>
+  <div class="main" id="main-col">
+
+  <section class="thread" id="thread" hidden aria-labelledby="thread-title">
+    <div class="thread-head">
+      <div class="thread-name">
+        <span class="thread-project" id="thread-project"></span>
+        <span class="thread-sep" aria-hidden="true">/</span>
+        <h1 class="thread-title" id="thread-title" tabindex="-1"></h1>
+        <span class="sr-only" id="thread-state"></span>
+        <button type="button" class="btn btn-small btn-quiet" id="thread-rename" aria-haspopup="dialog">Rename</button>
+      </div>
+      <div class="thread-runs" id="thread-runs">
+        <label class="field-label" for="run-picker">Run</label>
+        <select id="run-picker" aria-describedby="thread-status"></select>
+      </div>
+    </div>
+    <p class="thread-empty" id="thread-empty" hidden><strong id="thread-empty-title">No chat yet</strong> <span id="thread-empty-detail"></span> <button type="button" class="btn btn-small" id="thread-empty-action"></button></p>
+    <div class="replay" id="replay-banner" role="status" hidden>
+      <span class="replay-mark" aria-hidden="true">◐</span>
+      <strong class="replay-title">Viewing earlier run</strong>
+      <span class="replay-detail mono" id="replay-detail"></span>
+      <span class="replay-note">read only</span>
+      <button type="button" class="btn btn-small btn-primary" id="replay-back">Back to live</button>
+    </div>
+    <p class="hitl-status" id="thread-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="pview" id="pipeline-view" hidden aria-labelledby="pv-title">
+    <h2 class="sr-only" id="pv-title">Pipeline run</h2>
+    <div class="pv-head">
+      <div class="pv-line">
+        <span class="pill" id="pv-status" data-status="idle"><span class="pill-glyph" aria-hidden="true">○</span><span class="pill-text">No run</span></span>
+        <span class="pv-meta" id="pv-meta"></span>
+      </div>
+      <div class="pv-controls">
+        <div class="thread-runs pv-runs" id="pv-runs">
+          <label class="field-label" for="pv-run">Run</label>
+          <select id="pv-run"></select>
+        </div>
+        <button type="button" class="btn btn-small" id="pv-resume" hidden>Resume</button>
+        <button type="button" class="btn btn-small" id="pv-cancel" aria-haspopup="dialog" hidden>Cancel run</button>
+      </div>
+    </div>
+    <p class="sr-only" id="pv-announce" role="status" aria-live="polite"></p>
+    <p class="hitl-status pv-msg" id="pv-msg" tabindex="-1"></p>
+    <ol class="pv-stepper" id="pv-stepper" aria-label="Phases" hidden></ol>
+    <p class="thread-empty pv-empty" id="pv-empty" hidden><strong id="pv-empty-title">No pipeline run in this chat yet.</strong> <button type="button" class="btn btn-small" id="pv-start" aria-haspopup="dialog">Start a run</button></p>
+    <div class="pv-body" id="pv-body">
+      <div class="pv-sections" id="pv-sections"></div>
+      <div class="pv-side" id="pv-side"></div>
+    </div>
+  </section>
+
+  <div class="runline" id="runline" hidden>
+    <div class="run-row">
+      <div class="run-state">
+        <span class="pill" id="run-status" data-status="idle"><span class="pill-glyph" aria-hidden="true">○</span><span class="pill-text">Idle</span></span>
+        <span class="elapsed" id="elapsed" title="Elapsed run time">-</span>
+        <span class="conn" id="conn" data-mode="connecting"><span class="conn-dot" aria-hidden="true"></span><span class="conn-label" id="conn-label">Connecting</span></span>
+      </div>
+      <dl class="summary" aria-label="Key figures">
+        <div class="fig">
+          <dt>Milestones</dt>
+          <dd><span class="fig-value" id="kpi-milestones">-</span> <span class="fig-sub" id="kpi-milestones-sub">passed</span> <span class="segments" id="kpi-milestone-bar" aria-hidden="true"></span></dd>
+        </div>
+        <div class="fig fig-current" id="kpi-current-fig">
+          <dt>Current</dt>
+          <dd><span class="fig-value" id="kpi-current">-</span> <span class="fig-sub" id="kpi-current-sub">-</span></dd>
+        </div>
+        <div class="fig" id="kpi-breaker-tile">
+          <dt>Breaker</dt>
+          <dd><span class="fig-value" id="kpi-breaker">Closed</span> <span class="segments meter" id="kpi-breaker-meter" aria-hidden="true"></span> <span class="fig-sub" id="kpi-breaker-sub">0/3 failed</span></dd>
+        </div>
+        <div class="fig">
+          <dt>Tokens</dt>
+          <dd><span class="fig-value" id="kpi-tokens">0</span></dd>
+        </div>
+        <div class="fig">
+          <dt>Cost</dt>
+          <dd><span class="fig-value" id="kpi-cost">$0.00</span></dd>
+        </div>
+      </dl>
+      <button type="button" class="icon-btn more-toggle" id="run-more-toggle" aria-expanded="false" aria-controls="run-more" title="More figures">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+        <span class="sr-only">More figures</span>
+      </button>
+    </div>
+    <dl class="run-more" id="run-more" aria-label="More figures" hidden>
+      <div class="more-request"><dt>Request</dt><dd id="run-request">-</dd></div>
+      <div><dt>Run</dt><dd class="mono run-id" id="run-id" title="Run id">no run</dd></div>
+      <div><dt>Gates</dt><dd id="run-workflow">-</dd></div>
+      <div><dt>Tokens</dt><dd class="mono" id="kpi-tokens-sub">in 0 · out 0</dd></div>
+      <div><dt>Agents</dt><dd id="kpi-cost-sub">0 agent runs</dd></div>
+      <div><dt>Duration</dt><dd><span class="mono" id="kpi-duration">-</span> · <span id="kpi-duration-sub">agent time -</span></dd></div>
+    </dl>
+  </div>
+
+  <div class="alert" id="alert" role="alert" hidden>
+    <strong class="alert-title" id="alert-title"></strong>
+    <span class="alert-detail" id="alert-detail"></span>
+  </div>
+
+  <section class="hitl" id="hitl" hidden aria-labelledby="hitl-title">
+    <div class="hitl-head">
+      <span class="hitl-mark" aria-hidden="true">■</span>
+      <h2 id="hitl-title" tabindex="-1">Human input required</h2>
+      <span class="hitl-meta mono" id="hitl-meta"></span>
+    </div>
+    <p class="hitl-reason mono" id="hitl-reason"></p>
+    <div class="hitl-actions" id="hitl-actions" role="group" aria-label="Your decision"></div>
+    <form class="hitl-feedback" id="hitl-feedback" hidden novalidate>
+      <label for="hitl-text">Feedback for Dwight <span class="hint">sent to his inbox, then the milestone continues</span></label>
+      <textarea id="hitl-text" rows="4" maxlength="8000" aria-describedby="hitl-count"></textarea>
+      <div class="form-foot">
+        <span class="hint mono" id="hitl-count">0 / 8000</span>
+        <button type="button" class="btn" id="hitl-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="hitl-send">Send feedback</button>
+      </div>
+    </form>
+    <div class="hitl-status" id="hitl-status" role="status" aria-live="polite" tabindex="-1"></div>
+  </section>
+
+  <section class="exit-panel" id="exit-panel" hidden aria-labelledby="exit-title">
+    <header class="exit-head">
+      <h2 id="exit-title">Run process exited</h2>
+      <span class="exit-aside" id="exit-aside"></span>
+      <button type="button" class="btn btn-small" id="exit-dismiss">Dismiss</button>
+    </header>
+    <p class="exit-hint" id="exit-hint" hidden></p>
+    <pre class="exit-tail" id="exit-tail" tabindex="0" aria-label="Last output of the run process"></pre>
+  </section>
+
+  <section class="recovery" id="recovery" hidden aria-labelledby="recovery-title">
+    <div class="hitl-head">
+      <span class="hitl-mark" aria-hidden="true">■</span>
+      <h2 id="recovery-title" tabindex="-1">Recovery required</h2>
+      <span class="hitl-meta mono" id="recovery-meta"></span>
+    </div>
+    <p class="recovery-detail" id="recovery-detail"></p>
+    <p class="recovery-error" id="recovery-error" hidden></p>
+    <p class="recovery-times mono" id="recovery-times" hidden></p>
+    <div class="hitl-actions">
+      <button type="button" class="btn" id="recovery-stop" hidden>Request stop</button>
+      <button type="button" class="btn" id="recovery-release" aria-haspopup="dialog" hidden>Release chat</button>
+      <button type="button" class="btn btn-small" id="recovery-check">Check again</button>
+    </div>
+    <div class="hitl-status" id="recovery-status" role="status" aria-live="polite"></div>
+  </section>
+  <p class="release-note" id="release-note" hidden></p>
+
+  <form class="followup" id="followup" hidden novalidate aria-labelledby="followup-label">
+    <label class="field-label" id="followup-label" for="followup-text">Follow up</label>
+    <div class="composer">
+      <textarea id="followup-text" rows="2" maxlength="4000" aria-describedby="followup-hint followup-count" placeholder="What should the agents do next in this chat?"></textarea>
+      <div class="followup-actions">
+        <span class="hint mono" id="followup-count">0 / 4000</span>
+        <button type="button" class="btn btn-small" id="followup-options" aria-haspopup="dialog">Options</button>
+        <button type="submit" class="btn btn-primary btn-small" id="followup-send">Follow up</button>
+      </div>
+    </div>
+    <span class="hint followup-hint" id="followup-hint"></span>
+    <div class="hitl-status" id="followup-status" role="status" aria-live="polite" tabindex="-1"></div>
+    <button type="button" class="link-btn followup-fix" id="followup-fix" aria-haspopup="dialog" hidden>Open Options</button>
+  </form>
+
+  <section class="empty" id="empty" hidden aria-label="No run">
+    <p id="empty-cli"><strong>No run yet</strong> - start one with <code>scranton run "..."</code> or <code>scranton demo</code></p>
+    <p id="empty-control" hidden><strong id="empty-control-title">No run yet</strong> - <span id="empty-control-detail">start one with New run, or <code>scranton run "..."</code> in a terminal</span></p>
+  </section>
+
+  <main class="dash" id="dash">
+    <div class="dash-main">
+      <section class="section agents" aria-labelledby="h-pipeline">
+        <header class="section-head">
+          <h2 id="h-pipeline">Agents</h2>
+          <span class="section-aside" id="pipeline-aside"></span>
+        </header>
+        <div class="pipeline" id="pipeline"></div>
+        <div class="lanes-block" id="lanes-block" hidden>
+          <div class="lanes-head">
+            <h3 id="h-lanes">Instance lanes</h3>
+            <span class="lanes-exec" id="lanes-exec"></span>
+          </div>
+          <ul class="lanes" id="lanes" aria-labelledby="h-lanes"></ul>
+        </div>
+      </section>
+
+      <section class="section milestones-panel" aria-labelledby="h-milestones">
+        <header class="section-head">
+          <h2 id="h-milestones">Milestones</h2>
+          <span class="section-aside" id="milestones-aside"></span>
+        </header>
+        <ol class="milestones" id="milestones"></ol>
+      </section>
+    </div>
+
+    <section class="activity-panel" aria-labelledby="h-activity">
+      <h2 class="sr-only" id="h-activity">Activity</h2>
+      <div class="tabs" role="tablist" aria-labelledby="h-activity" id="activity-tabs">
+        <button type="button" class="tab" role="tab" id="tab-events" data-tab="events" aria-controls="log-panel" aria-selected="true">Events <span class="tab-count" id="tab-count-events">0</span></button>
+        <button type="button" class="tab" role="tab" id="tab-chat" data-tab="chat" aria-controls="chat-panel" aria-selected="false" tabindex="-1">Messages <span class="tab-count" id="tab-count-chat">0</span></button>
+        <button type="button" class="tab" role="tab" id="tab-mail" data-tab="mail" aria-controls="mail-panel" aria-selected="false" tabindex="-1">Mailboxes <span class="tab-count" id="tab-count-mail">0</span></button>
+      </div>
+
+      <div class="tabpanel log-panel" role="tabpanel" id="log-panel" aria-labelledby="tab-events">
+        <div class="panel-tools">
+          <div class="segmented" role="group" aria-label="Filter events" id="log-filters">
+            <button type="button" class="seg" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="seg" data-filter="handoffs" aria-pressed="false">Handoffs <span class="seg-count" data-count="handoffs">0</span></button>
+            <button type="button" class="seg" data-filter="tools" aria-pressed="false">Tools <span class="seg-count" data-count="tools">0</span></button>
+            <button type="button" class="seg" data-filter="results" aria-pressed="false">Results <span class="seg-count" data-count="results">0</span></button>
+          </div>
+        </div>
+        <div class="log-scroll" id="log-scroll">
+          <table class="log" id="log" data-filter="all" role="grid" aria-readonly="true" aria-label="Event log, newest at the bottom">
+            <colgroup><col class="c-time"><col class="c-source"><col class="c-type"><col></colgroup>
+            <thead><tr><th scope="col">Time</th><th scope="col">Source</th><th scope="col">Type</th><th scope="col">Detail</th></tr></thead>
+            <tbody id="log-body"></tbody>
+          </table>
+          <p class="log-empty" id="log-empty">No events yet</p>
+        </div>
+        <button type="button" class="jump" id="log-jump" hidden>Jump to latest</button>
+      </div>
+
+      <div class="tabpanel chat-panel" role="tabpanel" id="chat-panel" aria-labelledby="tab-chat" hidden>
+        <p class="panel-note" id="chat-aside">Direct messages between instances</p>
+        <div class="chat-scroll" id="chat-scroll" tabindex="0" aria-label="Message transcript, newest at the bottom">
+          <ol class="chat-list" id="chat-list"></ol>
+          <p class="log-empty" id="chat-empty">No messages yet</p>
+        </div>
+        <form class="chat-form" id="chat-form" novalidate aria-labelledby="chat-form-label">
+          <span class="sr-only" id="chat-form-label">Send a message to an agent instance</span>
+          <div class="chat-to-row">
+            <label class="chat-to-label" for="chat-to">To</label>
+            <select id="chat-to" class="mono" aria-describedby="chat-block"></select>
+            <span class="hint mono" id="chat-count">0 / 4000</span>
+          </div>
+          <label class="sr-only" for="chat-text">Message</label>
+          <textarea id="chat-text" rows="1" maxlength="4000" aria-describedby="chat-count chat-block" placeholder="Message the selected instance"></textarea>
+          <div class="form-foot">
+            <span class="hint" id="chat-block"></span>
+            <button type="submit" class="btn btn-primary btn-small" id="chat-send">Send</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="tabpanel mail-panel" role="tabpanel" id="mail-panel" aria-labelledby="tab-mail" hidden>
+        <p class="panel-note">Latest message per inbox</p>
+        <ul class="mailboxes" id="mailboxes"></ul>
+      </div>
+      <div class="hitl-status activity-status" id="chat-status" role="status" aria-live="polite" tabindex="-1"></div>
+    </section>
+  </main>
+  </div>
+  </div>
+
+  <dialog class="drawer" id="run-dialog" aria-labelledby="run-dialog-title">
+    <form id="run-form" novalidate>
+      <header class="drawer-head">
+        <h2 id="run-dialog-title">New run</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body">
+        <div class="field" role="radiogroup" aria-labelledby="f-engine-label" id="f-engine" hidden>
+          <span class="field-label" id="f-engine-label">Engine</span>
+          <label class="check"><input type="radio" name="engine" value="team" id="f-engine-team" checked><span>Team <span class="hint">Michael plans milestones, Dwight builds them, the gates check every turn</span></span></label>
+          <label class="check" id="f-engine-pipeline-row"><input type="radio" name="engine" value="pipeline" id="f-engine-pipeline" aria-describedby="f-engine-pipeline-hint"><span>Pipeline <span class="hint" id="f-engine-pipeline-hint">a fixed plan, implement, check and review graph with two approval points</span></span></label>
+        </div>
+        <p class="form-error team-only" id="config-error" role="alert" hidden></p>
+        <div class="field team-only">
+          <label for="f-request">Request <span class="hint" id="f-request-opt" hidden>optional for a demo</span></label>
+          <textarea id="f-request" name="request" rows="8" maxlength="4000" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
+          <span class="hint mono field-count" id="f-request-count">0 / 4000</span>
+        </div>
+        <div class="field team-only">
+          <label for="f-workspace">Workspace</label>
+          <input id="f-workspace" name="workspace" class="mono" type="text" spellcheck="false" autocomplete="off" aria-describedby="f-workspace-hint">
+          <span class="hint" id="f-workspace-hint">Absolute path where the agents work. Created if missing.</span>
+        </div>
+        <fieldset class="exec workflow team-only" id="workflow-fields" aria-describedby="f-gates-summary">
+          <legend>Workflow</legend>
+          <p class="hint gates-intro">The gates that check each developer turn. Gates with the same stage number run in parallel; stages run in ascending order.</p>
+          <ul class="gate-list" id="f-gate-list" aria-label="Gates"></ul>
+          <p class="hint gates-summary" id="f-gates-summary" aria-live="polite">Review + Security → Tests, after each developer turn</p>
+          <p class="hint gates-config" id="f-gates-config" hidden></p>
+        </fieldset>
+        <fieldset class="exec team-only" id="exec-fields">
+          <legend>Execution</legend>
+          <div class="field">
+            <label for="f-parallel">Parallel milestones</label>
+            <input id="f-parallel" name="maxParallel" class="mono narrow" type="text" inputmode="numeric" aria-describedby="f-parallel-hint">
+            <span class="hint" id="f-parallel-hint">Independent milestones that may run at once, each in its own worktree (1-32).</span>
+          </div>
+          <div class="field" role="radiogroup" aria-labelledby="f-sandbox-label" id="f-sandbox">
+            <span class="field-label" id="f-sandbox-label">Sandbox</span>
+            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker" checked><span>Docker container <span class="hint">agents run inside the sandbox image; needs a working Docker engine</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="host" id="f-sandbox-host"><span>Trusted host <span class="hint">no sandbox: agent commands run on this computer with your user rights</span></span></label>
+          </div>
+          <label class="check trust" id="f-trust-row" hidden><input type="checkbox" id="f-trusted" name="trustedHost"><span>I trust this request and workspace, and accept that the agents run without a sandbox</span></label>
+          <div class="field-row" id="docker-fields">
+            <div class="field">
+              <label for="f-image">Image <span class="hint">optional</span></label>
+              <input id="f-image" name="sandboxImage" class="mono" type="text" spellcheck="false" autocomplete="off" maxlength="256">
+            </div>
+            <div class="field">
+              <label for="f-network">Network</label>
+              <select id="f-network" name="sandboxNetwork">
+                <option value="bridge">bridge</option>
+                <option value="none">none (offline)</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint" id="exec-note">Docker availability is checked when the run starts; run <code>scranton doctor</code> to check it first.</p>
+        </fieldset>
+        <fieldset class="exec models team-only" id="model-fields" hidden>
+          <legend>Models</legend>
+          <p class="hint" id="models-status" hidden></p>
+          <div class="model-grid" id="model-grid">
+            <div class="field" id="model-row-michael">
+              <label for="f-model-michael">Michael <span class="hint">orchestrator</span></label>
+              <select id="f-model-michael" data-role="michael" aria-describedby="f-model-michael-note"></select>
+              <span class="hint" id="f-model-michael-note" hidden></span>
+            </div>
+            <div class="field" id="model-row-dwight">
+              <label for="f-model-dwight">Dwight <span class="hint">developer</span></label>
+              <select id="f-model-dwight" data-role="dwight" aria-describedby="f-model-dwight-note"></select>
+              <span class="hint" id="f-model-dwight-note" hidden></span>
+            </div>
+            <div class="field" id="model-row-oscar">
+              <label for="f-model-oscar">Oscar <span class="hint">reviewer</span></label>
+              <select id="f-model-oscar" data-role="oscar" aria-describedby="f-model-oscar-note"></select>
+              <span class="hint" id="f-model-oscar-note" hidden></span>
+            </div>
+            <div class="field" id="model-row-hank">
+              <label for="f-model-hank">Hank <span class="hint">security</span></label>
+              <select id="f-model-hank" data-role="hank" aria-describedby="f-model-hank-note"></select>
+              <span class="hint" id="f-model-hank-note" hidden></span>
+            </div>
+            <div class="field" id="model-row-angela">
+              <label for="f-model-angela">Angela <span class="hint">QA</span></label>
+              <select id="f-model-angela" data-role="angela" aria-describedby="f-model-angela-note"></select>
+              <span class="hint" id="f-model-angela-note" hidden></span>
+            </div>
+          </div>
+          <p class="models-need" id="models-need" hidden></p>
+          <p class="hint" id="models-plan" hidden></p>
+          <p class="hint" id="models-note">Only models of signed-in accounts and configured API keys can be picked. pi default uses the model from the agent configuration.</p>
+          <p class="hint" id="models-docker-note" hidden></p>
+          <p class="models-signin" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use.</span> <button type="button" class="link-btn" id="models-accounts">Open Accounts</button></p>
+        </fieldset>
+        <details class="advanced team-only" id="run-advanced">
+          <summary>Advanced</summary>
+          <div class="field">
+            <label for="f-cycles">Max failed cycles</label>
+            <input id="f-cycles" name="maxCycles" class="mono narrow" type="text" inputmode="numeric" placeholder="3" aria-describedby="f-cycles-hint">
+            <span class="hint" id="f-cycles-hint">Failed test cycles before the circuit breaker asks you (1-10).</span>
+          </div>
+          <label class="check"><input type="checkbox" id="f-noplan" name="noPlan"><span>Skip planning <span class="hint">one milestone for the whole request</span></span></label>
+          <label class="check" id="f-demo-row"><input type="checkbox" id="f-demo" name="demo"><span>Demo with fake pi <span class="hint">scripted agents, no model or API key</span></span></label>
+          <p class="hint" id="f-demo-none" hidden>Demo with fake pi: this server lists no demo scenarios here. Start it from a team chat.</p>
+          <div class="field-row" id="demo-fields">
+            <div class="field">
+              <label for="f-scenario">Scenario</label>
+              <select id="f-scenario" name="scenario" disabled></select>
+            </div>
+            <div class="field">
+              <label for="f-delay">Step delay (ms)</label>
+              <input id="f-delay" name="delayMs" class="mono narrow" type="text" inputmode="numeric" value="250" disabled>
+            </div>
+          </div>
+        </details>
+        <div class="pf" id="pipeline-fields" hidden>
+          <p class="form-error" id="pf-unavailable" role="alert" hidden></p>
+          <div class="field">
+            <label for="pf-task">Task <span class="hint" id="pf-task-opt" hidden>optional for the demo</span></label>
+            <textarea id="pf-task" rows="7" maxlength="32768" aria-describedby="pf-task-count" placeholder="What should change in the project?"></textarea>
+            <span class="hint mono field-count" id="pf-task-count">0 bytes</span>
+          </div>
+          <label class="check"><input type="checkbox" id="pf-demo"><span>Demo run (sample project, no model) <span class="hint">the engine fixes a bundled sample project with scripted models; it stops at both approval points</span></span></label>
+          <fieldset class="exec" id="pf-setup-set">
+            <legend>Setup</legend>
+            <p class="hint pf-note" id="pf-setup-note" hidden>Runs once in the fresh workspace before the first check, for example to install dependencies. Network stays off unless a command needs it.</p>
+            <ul class="pf-checks" id="pf-setup" aria-label="Setup commands"></ul>
+            <div class="pf-row-actions">
+              <button type="button" class="btn btn-small" id="pf-setup-add">Add setup command</button>
+            </div>
+          </fieldset>
+          <fieldset class="exec" id="pf-checks-set" aria-describedby="pf-checks-status">
+            <legend>Checks</legend>
+            <p class="hint pf-note">Commands that prove the change works. They run in the sandbox after every step; a failed required check sends the implementer back.</p>
+            <ul class="pf-checks" id="pf-checks" aria-label="Checks"></ul>
+            <div class="pf-row-actions">
+              <button type="button" class="btn btn-small" id="pf-check-add">Add check</button>
+              <button type="button" class="btn btn-small btn-quiet" id="pf-check-detect">Detect again</button>
+            </div>
+            <p class="hint form-status" id="pf-checks-status" role="status" aria-live="polite"></p>
+          </fieldset>
+          <fieldset class="exec" id="pf-sandbox-set">
+            <legend>Sandbox</legend>
+            <div class="field" role="radiogroup" aria-label="Where the checks run">
+              <label class="check"><input type="radio" name="pf-sandbox" value="docker" id="pf-docker" checked><span>Docker container <span class="hint">no network, limited CPU, memory and processes; the image must exist locally</span></span></label>
+              <label class="check"><input type="radio" name="pf-sandbox" value="host" id="pf-host"><span>Trusted host <span class="hint">checks run on this computer with your user rights</span></span></label>
+            </div>
+            <div class="field" id="pf-image-row">
+              <label for="pf-image">Image <span class="hint" id="pf-image-hint">optional</span></label>
+              <input id="pf-image" class="mono" type="text" spellcheck="false" autocomplete="off" maxlength="256">
+            </div>
+            <label class="check trust" id="pf-trust-row" hidden><input type="checkbox" id="pf-trust"><span>I accept that the checks run model-written code on this computer without OS isolation</span></label>
+          </fieldset>
+          <fieldset class="exec" id="pf-models-set">
+            <legend>Models</legend>
+            <div class="model-grid">
+              <div class="field">
+                <div class="pf-model-head">
+                  <label class="field-label" for="pf-model-planner">Planner <span class="hint">plans the steps</span></label>
+                  <button type="button" class="link-btn pf-all" id="pf-model-all">Use for all roles</button>
+                </div>
+                <select id="pf-model-planner" data-role="planner"></select>
+              </div>
+              <div class="field">
+                <label for="pf-model-implementer">Implementer <span class="hint">writes the edits</span></label>
+                <select id="pf-model-implementer" data-role="implementer"></select>
+              </div>
+              <div class="field">
+                <label for="pf-model-reviewer">Reviewer <span class="hint">checks the diff</span></label>
+                <select id="pf-model-reviewer" data-role="reviewer"></select>
+              </div>
+            </div>
+            <p class="hint" id="pf-models-note">Every model of a signed-in account or API key can be used. Models marked via pi are answered by pi with its own sign-in.</p>
+          </fieldset>
+          <fieldset class="exec" id="pf-policy-set">
+            <legend>Approval</legend>
+            <div class="field">
+              <label for="pf-approval">Plan</label>
+              <select id="pf-approval">
+                <option value="always">Always ask me</option>
+                <option value="auto_low_risk">Approve automatically when no risk flag is raised</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pf-delivery">Changes</label>
+              <select id="pf-delivery">
+                <option value="apply">Ask me before applying them to the project folder</option>
+                <option value="patch">Keep them as a patch only</option>
+              </select>
+            </div>
+          </fieldset>
+        </div>
+        <p class="form-error" id="run-error" role="alert" hidden></p>
+      </div>
+      <footer class="drawer-foot">
+        <span class="hint" id="run-busy" hidden>A run is in progress</span>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary" id="run-submit">Start run</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="drawer" id="accounts-dialog" aria-labelledby="accounts-title">
+    <div class="drawer-frame">
+      <header class="drawer-head">
+        <h2 id="accounts-title">Accounts</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body">
+        <p class="hint accounts-intro">Sign in with your Claude Pro/Max or ChatGPT subscription, or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers. Everything is stored in pi's own credential store on this computer; this page never shows a stored sign-in or key.</p>
+        <p class="form-error" id="accounts-error" role="alert" hidden></p>
+        <p class="accounts-status" id="accounts-status" role="status" aria-live="polite" tabindex="-1"></p>
+        <p class="hint" id="accounts-empty">Loading accounts...</p>
+        <ul class="accounts" id="accounts-list" aria-label="Model provider accounts" hidden></ul>
+        <section class="login" id="login-panel" hidden aria-labelledby="login-title">
+          <div class="login-head">
+            <span class="login-mark" id="login-mark" aria-hidden="true">●</span>
+            <h3 id="login-title" tabindex="-1">Signing in</h3>
+          </div>
+          <p class="login-progress" id="login-progress" role="status" aria-live="polite"></p>
+          <div class="login-url" id="login-url-row" hidden>
+            <span class="field-label" id="login-url-label">Sign-in address</span>
+            <span class="hint">The server opened it in your browser. If nothing opened, open it again or copy it into a browser on this computer.</span>
+            <div class="login-url-box">
+              <code class="login-url-text" id="login-url" tabindex="0" aria-labelledby="login-url-label"></code>
+              <div class="login-url-actions">
+                <button type="button" class="btn btn-small" id="login-reopen" aria-describedby="login-reopen-status" hidden>Open again</button>
+                <button type="button" class="btn btn-small" id="login-copy">Copy</button>
+              </div>
+            </div>
+            <span class="hint login-reopen-status" id="login-reopen-status" role="status" aria-live="polite"></span>
+            <span class="hint" id="login-copy-status" role="status" aria-live="polite"></span>
+          </div>
+          <p class="login-device mono" id="login-device" hidden></p>
+          <form class="login-code" id="login-code" hidden novalidate>
+            <label for="login-code-input">Code or page address <span class="hint">shown after you sign in</span></label>
+            <div class="login-code-row">
+              <input id="login-code-input" class="mono" type="text" maxlength="4096" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="login-code-error">
+              <button type="submit" class="btn btn-primary" id="login-code-submit">Submit</button>
+            </div>
+            <span class="hint login-code-error" id="login-code-error"></span>
+          </form>
+          <div class="login-actions">
+            <button type="button" class="btn" id="login-cancel">Cancel sign-in</button>
+            <button type="button" class="btn" id="login-dismiss" hidden>Done</button>
+          </div>
+        </section>
+        <div class="accounts-add" id="accounts-add" hidden>
+          <button type="button" class="btn btn-small" id="key-other" aria-controls="key-panel" aria-expanded="false">Add API key for another provider</button>
+          <button type="button" class="btn btn-small" id="provider-add" aria-controls="provider-panel" aria-expanded="false">Add custom provider</button>
+        </div>
+        <form class="keyform" id="key-panel" hidden novalidate aria-labelledby="key-title">
+          <h3 class="keyform-title" id="key-title">API key</h3>
+          <div class="field" id="key-provider-row" hidden>
+            <label for="key-provider">Provider</label>
+            <select id="key-provider" aria-describedby="key-provider-status"></select>
+            <span class="hint" id="key-provider-status"></span>
+          </div>
+          <p class="hint keyform-note" id="key-note" hidden></p>
+          <div class="field">
+            <label for="key-input">API key <span class="hint">never shown again once saved</span></label>
+            <input id="key-input" class="mono" type="password" maxlength="4096" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="key-error">
+            <span class="hint form-status" id="key-error" role="status" aria-live="polite"></span>
+          </div>
+          <div class="keyform-actions">
+            <button type="button" class="btn btn-small" id="key-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-small" id="key-submit">Save key</button>
+          </div>
+        </form>
+        <form class="keyform provider-form" id="provider-panel" hidden novalidate aria-labelledby="provider-title">
+          <div class="keyform-head">
+            <h3 class="keyform-title" id="provider-title">Add custom provider</h3>
+            <button type="button" class="btn btn-small" id="provider-preset">abliteration.ai preset</button>
+          </div>
+          <p class="hint keyform-note">A server that speaks the OpenAI or Anthropic API. Scranton adds it to pi's models.json and stores the key in pi's credential store, never in models.json.</p>
+          <div class="field-row">
+            <div class="field">
+              <label for="provider-label">Name</label>
+              <input id="provider-label" type="text" maxlength="64" spellcheck="false" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="provider-id">Id <span class="hint">a-z, 0-9, -</span></label>
+              <input id="provider-id" class="mono" type="text" maxlength="32" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="provider-id-hint">
+              <span class="hint" id="provider-id-hint">Starts with a letter, 2-32 characters.</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="provider-url">Base URL</label>
+            <input id="provider-url" class="mono" type="text" inputmode="url" maxlength="2048" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="https://api.example.com/v1" aria-describedby="provider-url-hint">
+            <span class="hint" id="provider-url-hint">https:// required; http:// only for localhost, 127.0.0.1 or [::1].</span>
+          </div>
+          <div class="field">
+            <label for="provider-api">API type</label>
+            <select id="provider-api"></select>
+          </div>
+          <div class="field">
+            <label for="provider-key">API key <span class="hint">never shown again once saved</span></label>
+            <input id="provider-key" class="mono" type="password" maxlength="4096" spellcheck="false" autocomplete="off" autocapitalize="off">
+          </div>
+          <div class="field provider-models-field">
+            <div class="provider-fetch">
+              <span class="field-label">Models</span>
+              <button type="button" class="btn btn-small" id="provider-fetch" aria-describedby="provider-fetch-status">Fetch models</button>
+            </div>
+            <span class="hint form-status" id="provider-fetch-status" role="status" aria-live="polite"></span>
+            <fieldset class="provider-models" id="provider-models" hidden>
+              <legend class="sr-only">Models the agents may use</legend>
+              <ul class="provider-model-list" id="provider-model-list"></ul>
+              <button type="button" class="link-btn" id="provider-all">Select all</button>
+            </fieldset>
+            <label class="provider-manual-label" for="provider-manual"><span id="provider-manual-label">Model ids</span> <span class="hint">comma separated</span></label>
+            <input id="provider-manual" class="mono" type="text" maxlength="8000" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="model-a, model-b">
+          </div>
+          <p class="form-error" id="provider-error" role="alert" hidden></p>
+          <div class="keyform-actions">
+            <span class="hint form-status" id="provider-status" role="status" aria-live="polite"></span>
+            <button type="button" class="btn btn-small" id="provider-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-small" id="provider-submit">Save provider</button>
+          </div>
+        </form>
+      </div>
+      <footer class="drawer-foot">
+        <span class="hint" id="accounts-foot"></span>
+        <button type="button" class="btn" data-close>Close</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog class="drawer" id="agents-dialog" aria-labelledby="agents-title">
+    <div class="drawer-frame">
+      <header class="drawer-head">
+        <h2 id="agents-title">Agents</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body">
+        <p class="hint accounts-intro">Each agent's model, handoff instruction and system prompt. A saved change applies to runs started afterwards, in every project on this computer; a run in progress keeps what it started with.</p>
+        <p class="form-error" id="agents-error" role="alert" hidden></p>
+        <p class="accounts-status" id="agents-status" role="status" aria-live="polite" tabindex="-1"></p>
+        <ul class="hint agents-warnings" id="agents-warnings" aria-label="Skipped agent settings" hidden></ul>
+        <p class="hint" id="agents-empty">Loading agents...</p>
+        <ul class="accounts roles" id="agents-list" aria-label="Agent roles" hidden></ul>
+        <div class="accounts-add" id="create-row" hidden>
+          <button type="button" class="btn btn-small" id="create-open" aria-controls="create-panel" aria-expanded="false">New agent</button>
+          <span class="hint" id="create-limit" hidden></span>
+        </div>
+        <form class="keyform agent-form" id="create-panel" hidden novalidate aria-labelledby="create-title">
+          <h3 class="keyform-title" id="create-title">New gate agent</h3>
+          <p class="hint keyform-note">A read-only gate that checks Dwight's work after each developer turn. Turn it on for a run under New run, Workflow.</p>
+          <div class="field-row">
+            <div class="field">
+              <label for="create-id">Id <span class="hint">a-z, 0-9</span></label>
+              <input id="create-id" class="mono" type="text" maxlength="20" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="create-id-hint">
+              <span class="hint" id="create-id-hint">2-20 characters, a letter first. Fixed once created.</span>
+            </div>
+            <div class="field">
+              <label for="create-name">Name</label>
+              <input id="create-name" type="text" maxlength="40" autocomplete="off">
+            </div>
+          </div>
+          <div class="field">
+            <label for="create-role-title">Title <span class="hint">what it checks, for example Lint</span></label>
+            <input id="create-role-title" type="text" maxlength="60" autocomplete="off">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="create-pass">Pass keyword <span class="hint">optional</span></label>
+              <input id="create-pass" class="mono" type="text" maxlength="40" spellcheck="false" autocomplete="off" autocapitalize="characters" placeholder="&lt;ID&gt;_PASSED">
+            </div>
+            <div class="field">
+              <label for="create-fail">Fail keyword <span class="hint">optional</span></label>
+              <input id="create-fail" class="mono" type="text" maxlength="40" spellcheck="false" autocomplete="off" autocapitalize="characters" placeholder="&lt;ID&gt;_FAILED">
+            </div>
+          </div>
+          <div class="field">
+            <label for="create-instruction">Handoff instruction <span class="hint">what the agent checks</span></label>
+            <textarea id="create-instruction" rows="4" maxlength="1000" aria-describedby="create-instruction-count"></textarea>
+            <span class="hint mono field-count" id="create-instruction-count">0 / 1000</span>
+          </div>
+          <fieldset class="agent-tools" id="create-tools">
+            <legend class="field-label">Tools <span class="hint">read only; at least one</span></legend>
+            <label class="check"><input type="checkbox" id="create-tool-read" value="read" checked><span class="mono">read</span></label>
+            <label class="check"><input type="checkbox" id="create-tool-grep" value="grep" checked><span class="mono">grep</span></label>
+            <label class="check"><input type="checkbox" id="create-tool-find" value="find" checked><span class="mono">find</span></label>
+            <label class="check"><input type="checkbox" id="create-tool-ls" value="ls" checked><span class="mono">ls</span></label>
+            <label class="check"><input type="checkbox" id="create-tool-bash" value="bash" checked><span class="mono">bash</span></label>
+          </fieldset>
+          <div class="field-row">
+            <div class="field">
+              <label for="create-model">Model <span class="hint">optional</span></label>
+              <select id="create-model"></select>
+            </div>
+            <div class="field">
+              <label for="create-thinking">Thinking</label>
+              <select id="create-thinking"></select>
+            </div>
+          </div>
+          <p class="form-error" id="create-error" role="alert" hidden></p>
+          <div class="keyform-actions">
+            <span class="hint form-status" id="create-status" role="status" aria-live="polite"></span>
+            <button type="button" class="btn btn-small" id="create-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-small" id="create-submit">Create agent</button>
+          </div>
+        </form>
+        <form class="keyform agent-form" id="settings-panel" hidden novalidate aria-labelledby="settings-title">
+          <h3 class="keyform-title" id="settings-title">Settings</h3>
+          <div class="agent-identity" id="settings-identity" hidden>
+            <div class="field-row">
+              <div class="field">
+                <label for="settings-name">Name</label>
+                <input id="settings-name" type="text" maxlength="40" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="settings-role-title">Title</label>
+                <input id="settings-role-title" type="text" maxlength="60" autocomplete="off">
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="settings-pass">Pass keyword</label>
+                <input id="settings-pass" class="mono" type="text" maxlength="40" spellcheck="false" autocomplete="off" autocapitalize="characters">
+              </div>
+              <div class="field">
+                <label for="settings-fail">Fail keyword</label>
+                <input id="settings-fail" class="mono" type="text" maxlength="40" spellcheck="false" autocomplete="off" autocapitalize="characters">
+              </div>
+            </div>
+            <fieldset class="agent-tools" id="settings-tools">
+              <legend class="field-label">Tools <span class="hint">read only; at least one</span></legend>
+              <label class="check"><input type="checkbox" id="settings-tool-read" value="read"><span class="mono">read</span></label>
+              <label class="check"><input type="checkbox" id="settings-tool-grep" value="grep"><span class="mono">grep</span></label>
+              <label class="check"><input type="checkbox" id="settings-tool-find" value="find"><span class="mono">find</span></label>
+              <label class="check"><input type="checkbox" id="settings-tool-ls" value="ls"><span class="mono">ls</span></label>
+              <label class="check"><input type="checkbox" id="settings-tool-bash" value="bash"><span class="mono">bash</span></label>
+            </fieldset>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="settings-model">Model</label>
+              <select id="settings-model" aria-describedby="settings-model-note"></select>
+              <span class="hint" id="settings-model-note" hidden></span>
+            </div>
+            <div class="field">
+              <label for="settings-thinking">Thinking</label>
+              <select id="settings-thinking" aria-describedby="settings-thinking-note"></select>
+              <span class="hint" id="settings-thinking-note" hidden></span>
+            </div>
+          </div>
+          <div class="field" id="settings-instruction-row" hidden>
+            <label for="settings-instruction">Handoff instruction <span class="hint">how Dwight's work is checked</span></label>
+            <textarea id="settings-instruction" rows="5" maxlength="1000" aria-describedby="settings-instruction-count"></textarea>
+            <div class="agent-instruction-foot">
+              <button type="button" class="link-btn" id="settings-instruction-reset" hidden>Reset to default</button>
+              <span class="hint mono field-count" id="settings-instruction-count"></span>
+            </div>
+          </div>
+          <p class="form-error" id="settings-error" role="alert" hidden></p>
+          <div class="keyform-actions">
+            <button type="button" class="btn btn-small" id="settings-delete" hidden>Delete agent</button>
+            <span class="hint form-status" id="settings-status" role="status" aria-live="polite"></span>
+            <button type="button" class="btn btn-small" id="settings-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-small" id="settings-save">Save settings</button>
+          </div>
+        </form>
+        <form class="keyform prompt-form" id="prompt-panel" hidden novalidate aria-labelledby="prompt-title">
+          <div class="keyform-head">
+            <h3 class="keyform-title" id="prompt-title">System prompt</h3>
+            <span class="hint mono" id="prompt-count"></span>
+          </div>
+          <p class="hint keyform-note" id="prompt-note" hidden></p>
+          <label class="sr-only" for="prompt-text">Prompt text</label>
+          <textarea id="prompt-text" class="mono prompt-text" rows="16" maxlength="32768" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="prompt-count prompt-note prompt-warning"></textarea>
+          <p class="prompt-warning" id="prompt-warning" hidden></p>
+          <p class="form-error" id="prompt-error" role="alert" hidden></p>
+          <div class="keyform-actions">
+            <span class="hint form-status" id="prompt-status" role="status" aria-live="polite"></span>
+            <button type="button" class="btn btn-small" id="prompt-reset" hidden>Reset to built-in</button>
+            <button type="button" class="btn btn-small" id="prompt-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-small" id="prompt-save">Save prompt</button>
+          </div>
+        </form>
+      </div>
+      <footer class="drawer-foot">
+        <span class="hint" id="agents-foot"></span>
+        <button type="button" class="btn" data-close>Close</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog class="confirm" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-detail"></p>
+    <p class="form-error" id="confirm-error" role="alert" hidden></p>
+    <footer class="confirm-foot">
+      <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="confirm-ok"></button>
+    </footer>
+  </dialog>
+
+  <dialog class="confirm" id="project-dialog" aria-labelledby="project-dialog-title">
+    <form class="dialog-form" id="project-form" novalidate>
+      <h2 id="project-dialog-title">New project</h2>
+      <div class="field">
+        <label for="p-name">Name</label>
+        <input id="p-name" type="text" maxlength="80" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="p-folder">Folder <span class="hint">optional</span></label>
+        <input id="p-folder" class="mono" type="text" maxlength="1024" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="C:\Users\you\code\app" aria-describedby="p-folder-hint">
+        <span class="hint" id="p-folder-hint">Absolute path of the folder the agents work in. Leave it empty to create a new folder under the default projects folder.</span>
+      </div>
+      <label class="check" id="p-create-row"><input type="checkbox" id="p-create" checked><span>Create the folder if it does not exist</span></label>
+      <p class="form-error" id="p-error" role="alert" hidden></p>
+      <footer class="confirm-foot">
+        <button type="button" class="btn" id="p-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="p-submit">Create project</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="confirm" id="rename-dialog" aria-labelledby="rn-title">
+    <form class="dialog-form" id="rename-form" novalidate>
+      <h2 id="rn-title">Rename</h2>
+      <div class="field">
+        <label for="rn-input" id="rn-label">Name</label>
+        <input id="rn-input" type="text" maxlength="120" spellcheck="false" autocomplete="off">
+      </div>
+      <p class="form-error" id="rn-error" role="alert" hidden></p>
+      <footer class="confirm-foot">
+        <button type="button" class="btn" id="rn-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="rn-submit">Rename</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="confirm" id="remove-dialog" aria-labelledby="rm-title" aria-describedby="rm-detail">
+    <form class="dialog-form" id="remove-form" novalidate>
+      <h2 id="rm-title">Remove</h2>
+      <p id="rm-detail"></p>
+      <label class="check" id="rm-history-row" hidden><input type="checkbox" id="rm-history"><span>Also delete the chat history <span class="hint">Scranton's own records only; the project folder and its files are never touched</span></span></label>
+      <p class="form-error" id="rm-error" role="alert" hidden></p>
+      <footer class="confirm-foot">
+        <button type="button" class="btn" id="rm-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="rm-submit">Remove</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="sr-only" aria-live="polite" id="announcer"></div>
+  <div class="sr-only" aria-live="polite" id="control-announcer"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+{
+  "v": 1,
+  "runId": "20250614-101502-k7f3",
+  "status": "running",
+  "request": "Build a small todo CLI in Node.js with add/list/done commands, JSON file storage and node:test tests",
+  "workspace": "C:\\work\\todo-cli",
+  "updatedAt": "2025-06-14T10:18:24.000Z",
+  "lastSeq": 50,
+  "milestones": [
+    {
+      "id": "m1",
+      "title": "Project skeleton and CLI parsing",
+      "dependsOn": [],
+      "status": "passed",
+      "cycle": 1,
+      "failedCycles": 0
+    },
+    {
+      "id": "m2",
+      "title": "JSON file storage",
+      "dependsOn": [],
+      "status": "active",
+      "cycle": 1,
+      "failedCycles": 1
+    },
+    {
+      "id": "m3",
+      "title": "Tests and README",
+      "dependsOn": [],
+      "status": "pending",
+      "cycle": 0,
+      "failedCycles": 0
+    }
+  ],
+  "currentMilestoneId": "m2",
+  "activeMilestoneIds": [
+    "m2"
+  ],
+  "instances": {},
+  "chat": [],
+  "execution": null,
+  "cycle": 2,
+  "failedCycles": 1,
+  "maxFailedCycles": 3,
+  "breaker": "closed",
+  "agents": {
+    "michael": {
+      "status": "waiting",
+      "activity": "Waiting for Dwight",
+      "lastKeyword": "PLAN_READY",
+      "updatedAt": "2025-06-14T10:15:46.000Z",
+      "totals": {
+        "runs": 1,
+        "input": 18234,
+        "output": 2210,
+        "cost": 0.0412
+      }
+    },
+    "dwight": {
+      "status": "working",
+      "activity": "Writing code...",
+      "lastKeyword": "TASK_COMPLETE",
+      "updatedAt": "2025-06-14T10:18:23.000Z",
+      "totals": {
+        "runs": 2,
+        "input": 76081,
+        "output": 11520,
+        "cost": 0.1745
+      }
+    },
+    "angela": {
+      "status": "waiting",
+      "activity": "Waiting for Dwight",
+      "lastKeyword": "TEST_FAILED",
+      "updatedAt": "2025-06-14T10:18:11.000Z",
+      "totals": {
+        "runs": 2,
+        "input": 42580,
+        "output": 3480,
+        "cost": 0.07400000000000001
+      }
+    }
+  }
+}

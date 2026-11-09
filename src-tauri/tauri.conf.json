@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Scranton",
+  "version": "0.1.0",
+  "identifier": "dev.scranton.desktop",
+  "build": {
+    "frontendDist": "loading",
+    "beforeDevCommand": "node scripts/prepare-desktop.mjs",
+    "beforeBuildCommand": "node scripts/prepare-desktop.mjs"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{
+      "label": "main",
+      "title": "Scranton",
+      "width": 1280,
+      "height": 850,
+      "minWidth": 900,
+      "minHeight": 600,
+      "visible": false,
+      "backgroundColor": "#0b0b0b",
+      "url": "index.html"
+    }],
+    "security": {
+      "capabilities": ["dashboard-notifications"],
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "externalBin": ["binaries/node"],
+    "resources": { "staged/app/": "app/" },
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "windows": {
+      "nsis": { "installMode": "currentUser", "displayLanguageSelector": false },
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
+    }
+  }
+}

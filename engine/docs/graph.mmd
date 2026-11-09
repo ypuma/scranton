@@ -1,0 +1,67 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	prepare_workspace(prepare_workspace)
+	index_repo(index_repo)
+	baseline_checks(baseline_checks)
+	plan(plan)
+	plan_context(plan_context)
+	approve_plan(approve_plan)
+	select_step(select_step)
+	implement(implement)
+	implement_context(implement_context)
+	apply_edits(apply_edits)
+	verify(verify)
+	review(review)
+	package(package)
+	approve_delivery(approve_delivery)
+	apply_to_source(apply_to_source)
+	finalize(finalize)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> prepare_workspace;
+	apply_edits -.-> finalize;
+	apply_edits -.-> implement;
+	apply_edits -.-> verify;
+	apply_to_source --> finalize;
+	approve_delivery -.-> apply_to_source;
+	approve_delivery -.-> finalize;
+	approve_plan -.-> finalize;
+	approve_plan -.-> select_step;
+	baseline_checks --> plan;
+	implement -.-> apply_edits;
+	implement -.-> finalize;
+	implement -.-> implement_context;
+	implement_context --> implement;
+	index_repo --> plan;
+	package -.-> approve_delivery;
+	package -.-> finalize;
+	plan -.-> approve_plan;
+	plan -.-> finalize;
+	plan -.-> plan_context;
+	plan_context --> plan;
+	prepare_workspace -.-> baseline_checks;
+	prepare_workspace -.-> finalize;
+	prepare_workspace -.-> index_repo;
+	review -.-> finalize;
+	review -.-> implement;
+	review -.-> package;
+	select_step -.-> finalize;
+	select_step -.-> implement;
+	select_step -.-> package;
+	select_step -.-> review;
+	verify -.-> finalize;
+	verify -.-> implement;
+	verify -.-> review;
+	verify -.-> select_step;
+	finalize --> __end__;
+	implement -.-> implement;
+	plan -.-> plan;
+	review -.-> review;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+

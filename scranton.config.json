@@ -1,0 +1,40 @@
+{
+  "workspace": "./workspace",
+  "hiveDir": "./hive",
+  "maxFailedCycles": 3,
+  "agentTimeoutMinutes": 20,
+  "pi": {
+    "command": null,
+    "extraArgs": [],
+    "minimalContext": true,
+    "transport": "rpc"
+  },
+  "agents": {
+    "michael": {
+      "provider": null,
+      "model": null,
+      "thinking": null
+    },
+    "dwight": {
+      "provider": null,
+      "model": null,
+      "thinking": null
+    },
+    "angela": {
+      "provider": null,
+      "model": null,
+      "thinking": null
+    }
+  },
+  "execution": {
+    "maxParallel": 3,
+    "isolation": "worktree",
+    "sandbox": {
+      "mode": "docker",
+      "image": "scranton-sandbox:1.5.0-r2",
+      "network": "bridge"
+    },
+    "persistentSessions": true,
+    "maxReplans": 0
+  }
+}
