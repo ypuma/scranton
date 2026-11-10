@@ -1,12 +1,14 @@
 """Isolated local Git operations; never calls network commands."""
 import os
 import shutil
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 from ..errors import EngineError, FailureClass
 from .fs import PathPolicy
 from .process import run_process, scrubbed_env
+from .secrets import Redactor
 
 DEFAULT_IGNORED_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache",
                                 ".ruff_cache", ".pytest_cache", "dist", "build", "target", ".scratch"})
@@ -25,9 +27,9 @@ def _git(root: Path, args: Sequence[str], timeout_s: float = 30, *, check: bool 
                           "-c", "core.autocrlf=false", "-c", "core.longpaths=true",
                           "-c", "core.fsmonitor=false", "-c", "credential.helper=",
                           "-c", "user.name=Scranton Pipeline", "-c", "user.email=pipeline@localhost", *args],
-                         cwd=root, env=env, timeout_s=timeout_s, tail_bytes=8000000)
+                         cwd=root, env=env, timeout_s=timeout_s, tail_bytes=8000000, redact_output=False)
     if result.timed_out or result.stopped or (check and result.exit_code != 0):
-        raise EngineError(FailureClass.INFRASTRUCTURE, "git_failed", "Local Git operation failed", detail=result.output_tail)
+        raise EngineError(FailureClass.INFRASTRUCTURE, "git_failed", "Local Git operation failed", detail=Redactor().redact(result.output_tail))
     if result.output_bytes > 8000000:
         raise EngineError(FailureClass.LIMIT, "git_output_exceeded", "Git output exceeds limit")
     if not check and result.exit_code != 0:
@@ -65,6 +67,10 @@ class WorkspaceRepo:
         repo.git_dir.parent.mkdir(parents=True, exist_ok=True)
         (repo.git_dir.parent / (repo.git_dir.name + "-hooks")).mkdir(exist_ok=True)
         repo._run(["init", "--template=", "--initial-branch=main"])
+        info = repo.git_dir / "info"
+        info.mkdir(parents=True, exist_ok=True)
+        with (info / "exclude").open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write("\n/.[pP][iI][pP][eE][lL][iI][nN][eE]/\n")
         return repo
 
     def _run(self, args: Sequence[str]) -> str:
@@ -79,9 +85,19 @@ class WorkspaceRepo:
         policy = PathPolicy(self.workspace, (), ())
         safe = [policy.normalize(p) for p in paths]
         if safe:
-            self._run(["--literal-pathspecs", "add", "-A", "--", *safe])
+            self.add_paths(safe)
         self._run(["-c", "commit.gpgsign=false", "commit", "--no-verify", "--allow-empty", "-m", message])
         return self.head()
+
+    def add_paths(self, paths: Sequence[str], *, force: bool = False) -> None:
+        with tempfile.NamedTemporaryFile(dir=self.git_dir, delete=False) as stream:
+            path = Path(stream.name)
+            stream.write(b"".join(p.encode("utf-8") + b"\0" for p in paths))
+        try:
+            self._run(["--literal-pathspecs", "add", "-A", *(["--force"] if force else []),
+                       "--pathspec-from-file=" + str(path), "--pathspec-file-nul"])
+        finally:
+            path.unlink(missing_ok=True)
 
     def head(self) -> str:
         return self._run(["rev-parse", "HEAD"]).strip()

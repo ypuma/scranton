@@ -25,44 +25,52 @@ def after_approve_plan(state: PipelineState) -> Literal["finalize", "select_step
     return "select_step"
 
 
-def after_select(state: PipelineState) -> Literal["finalize", "implement", "review", "package"]:
+def after_select(state: PipelineState) -> Literal["finalize", "implement", "review", "ground", "run_lane"]:
     if state.get("failure") or state.get("outcome"):
         return "finalize"
+    if state.get("wave"):
+        return "run_lane"
     plan = state.get("plan") or {}
     if state.get("step_index", -1) < len(plan.get("steps", [])):
         return "implement"
-    return "review" if state.get("review") is None else "package"
+    return "review" if state.get("review") is None else "ground"
 
 
-def after_implement(state: PipelineState) -> Literal["finalize", "implement_context", "apply_edits", "implement"]:
+def after_implement(state: PipelineState) -> Literal["replan", "finalize", "implement_context", "apply_edits", "implement"]:
     if state.get("failure") or state.get("outcome"):
         return "finalize"
+    if state.get("replan_request"):
+        return "replan"
     if state.get("step_requests"):
         return "implement_context"
     return "apply_edits" if state.get("pending_edits") else "implement"
 
 
-def after_apply(state: PipelineState) -> Literal["finalize", "implement", "verify"]:
+def after_apply(state: PipelineState) -> Literal["replan", "finalize", "implement", "verify"]:
     if state.get("failure") or state.get("outcome"):
         return "finalize"
+    if state.get("replan_request"):
+        return "replan"
     return "implement" if state.get("feedback") else "verify"
 
 
-def after_verify(state: PipelineState) -> Literal["finalize", "implement", "review", "select_step"]:
+def after_verify(state: PipelineState) -> Literal["replan", "finalize", "implement", "review", "select_step"]:
     if state.get("failure") or state.get("outcome"):
         return "finalize"
+    if state.get("replan_request"):
+        return "replan"
     if state.get("feedback"):
         return "implement"
     return "review" if state.get("mode") == "revision" else "select_step"
 
 
-def after_review(state: PipelineState) -> Literal["finalize", "package", "implement", "review"]:
+def after_review(state: PipelineState) -> Literal["finalize", "ground", "implement", "review"]:
     if state.get("failure") or state.get("outcome"):
         return "finalize"
     review = state.get("review")
     if not review:
         return "review"
-    return "package" if review["verdict"] == "approve" else "implement"
+    return "ground" if review["verdict"] == "approve" else "implement"
 
 
 def after_package(state: PipelineState) -> Literal["finalize", "approve_delivery"]:
@@ -77,12 +85,28 @@ def after_delivery(state: PipelineState) -> Literal["finalize", "apply_to_source
     return "apply_to_source" if (state.get("delivery_approval") or {}).get("decision") == "approve" else "finalize"
 
 
+def after_replan(state: PipelineState) -> Literal["finalize", "plan"]:
+    if state.get("failure") or state.get("outcome"):
+        return "finalize"
+    return "plan"
+
+
 def decision(route: Callable[[PipelineState], str | list[str]], state: PipelineState) -> tuple[str | list[str], str]:
     target = route(state)
     if state.get("failure"):
         reason = "failure"
     elif state.get("outcome"):
         reason = state["outcome"]
+    elif target == "run_lane":
+        reason = "parallel_wave"
+    elif route is after_merge:
+        reason = "wave_merged" if target == "verify" else "replan_requested"
+    elif route is after_verify and state.get("mode") == "integration" and state.get("feedback"):
+        reason = "integration_failed"
+    elif target == "replan":
+        reason = "replan_requested"
+    elif route is after_replan:
+        reason = "replanned"
     elif target == ["index_repo", "baseline_checks"]:
         reason = "workspace_ready"
     elif target in ("plan_context", "implement_context"):
@@ -105,3 +129,9 @@ def decision(route: Callable[[PipelineState], str | list[str]], state: PipelineS
     if route is after_select and target == "implement":
         reason = "next_step"
     return target, reason
+
+
+def after_merge(state: PipelineState) -> Literal["finalize", "replan", "verify"]:
+    if state.get("failure") or state.get("outcome"):
+        return "finalize"
+    return "replan" if state.get("replan_request") else "verify"

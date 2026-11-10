@@ -167,11 +167,12 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       const projectsRoute = ['/api/projects', '/api/projects/rename', '/api/projects/remove'].includes(pathname);
       const alias = registry && ['/events', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname);
       const detectPath = /^\/api\/projects\/([^/]+)\/pipeline\/detect$/.exec(pathname);
-      if (!scopedPath && !chatRoute && !projectsRoute && !alias && pathname !== '/api/pipeline' && !detectPath) return false;
+      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath) return false;
       authorize(req);
       if (closing) throw fail(409, 'Server is closing');
       recoverGone();
       if (pathname === '/api/pipeline' && req.method === 'GET') { json(res, 200, await pipeline.capability()); return true; }
+      if (pathname === '/api/pipeline/sandbox/build' && req.method === 'POST') { json(res, 202, await pipeline.buildSandbox(await readBody(req))); return true; }
       if (detectPath && req.method === 'POST') {
         if (!registry) throw fail(409, 'single_mode');
         json(res, 200, await pipeline.detect(registry.getProject(detectPath[1]), await readBody(req))); return true;

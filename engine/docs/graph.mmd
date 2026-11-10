@@ -17,14 +17,18 @@ graph TD;
 	apply_edits(apply_edits)
 	verify(verify)
 	review(review)
+	ground(ground)
 	package(package)
 	approve_delivery(approve_delivery)
 	apply_to_source(apply_to_source)
 	finalize(finalize)
+	replan(replan)
+	merge_wave(merge_wave)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> prepare_workspace;
 	apply_edits -.-> finalize;
 	apply_edits -.-> implement;
+	apply_edits -.-> replan;
 	apply_edits -.-> verify;
 	apply_to_source --> finalize;
 	approve_delivery -.-> apply_to_source;
@@ -32,11 +36,16 @@ graph TD;
 	approve_plan -.-> finalize;
 	approve_plan -.-> select_step;
 	baseline_checks --> plan;
+	ground --> package;
 	implement -.-> apply_edits;
 	implement -.-> finalize;
 	implement -.-> implement_context;
+	implement -.-> replan;
 	implement_context --> implement;
 	index_repo --> plan;
+	merge_wave -.-> finalize;
+	merge_wave -.-> replan;
+	merge_wave -.-> verify;
 	package -.-> approve_delivery;
 	package -.-> finalize;
 	plan -.-> approve_plan;
@@ -46,21 +55,45 @@ graph TD;
 	prepare_workspace -.-> baseline_checks;
 	prepare_workspace -.-> finalize;
 	prepare_workspace -.-> index_repo;
+	replan -.-> finalize;
+	replan -.-> plan;
 	review -.-> finalize;
+	review -.-> ground;
 	review -.-> implement;
-	review -.-> package;
+	run_lane\3alane_finish --> merge_wave;
 	select_step -.-> finalize;
+	select_step -.-> ground;
 	select_step -.-> implement;
-	select_step -.-> package;
 	select_step -.-> review;
+	select_step -.-> run_lane\3alane_prepare;
 	verify -.-> finalize;
 	verify -.-> implement;
+	verify -.-> replan;
 	verify -.-> review;
 	verify -.-> select_step;
 	finalize --> __end__;
 	implement -.-> implement;
 	plan -.-> plan;
 	review -.-> review;
+	subgraph run_lane
+	run_lane\3alane_prepare(lane_prepare)
+	run_lane\3aimplement(implement)
+	run_lane\3aimplement_context(implement_context)
+	run_lane\3aapply_edits(apply_edits)
+	run_lane\3averify(verify)
+	run_lane\3alane_finish(lane_finish)
+	run_lane\3aapply_edits -.-> run_lane\3aimplement;
+	run_lane\3aapply_edits -. &nbsp;finalize&nbsp; .-> run_lane\3alane_finish;
+	run_lane\3aapply_edits -.-> run_lane\3averify;
+	run_lane\3aimplement -.-> run_lane\3aapply_edits;
+	run_lane\3aimplement -.-> run_lane\3aimplement_context;
+	run_lane\3aimplement -. &nbsp;finalize&nbsp; .-> run_lane\3alane_finish;
+	run_lane\3aimplement_context --> run_lane\3aimplement;
+	run_lane\3alane_prepare --> run_lane\3aimplement;
+	run_lane\3averify -.-> run_lane\3aimplement;
+	run_lane\3averify -. &nbsp;finalize&nbsp; .-> run_lane\3alane_finish;
+	run_lane\3aimplement -.-> run_lane\3aimplement;
+	end
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

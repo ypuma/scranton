@@ -7,7 +7,7 @@ import { validateId } from './projects.js';
 import { writeFileAtomicSync, withFsRetry } from './util.js';
 import { killTree } from './pi-command.js';
 import { PACKAGE_ROOT } from './config.js';
-import { probePipeline, resolvePipelineCommand, execPipeline, spawnPipeline, pipelineChildEnv } from './pipeline-command.js';
+import { probePipeline, resolvePipelineCommand, execPipeline, spawnPipeline, pipelineChildEnv, probePipelineSandbox } from './pipeline-command.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const terminal = new Set(['succeeded', 'failed', 'rejected', 'cancelled']);
@@ -42,7 +42,9 @@ const optional = (file) => { try { return readJson(file); } catch (e) { if (e.co
 
 export function createPipelineSupervisor({ dataDir, env = process.env, auth = getAuthService(), checkCapacity = () => {}, onStarting = () => {} } = {}) {
   const children = new Map(), starting = new Set(), diagnostics = new Map(), secrets = new Set(), normalizing = new Map();
-  let closing = false;
+  let closing = false, sandboxProbe = null, buildEntry = null, buildStarting = false;
+  const sandboxFlights = new Map();
+  const build = { state: 'idle', startedAt: null, finishedAt: null, tail: '' };
   const workspaceRoot = path.resolve(env.SCRANTON_PIPELINE_WORKSPACE_ROOT || (process.platform === 'win32' && env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'Scranton', 'pipeline') : path.join(dataDir, 'pipeline-workspaces')));
   const scrub = (value) => {
     let text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -110,8 +112,53 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       return { provider: a.id, label: a.label, supported: !reason, reason, via, models: models.map((m) => ({ id: m.id, label: m.name ?? m.id })), baseUrl };
     });
   }
+  const sandboxText = (text) => {
+    for (const [name, value] of Object.entries(env)) if (/API_KEY|TOKEN|SECRET|PASSWORD|^SCRANTON_PROVIDER_.*_KEY$/i.test(name) && value) text = text.split(value).join('[REDACTED]');
+    return scrub(text).replace(/\bBearer\s+\S+|\b(?:sk|ghp|github_pat)[-_][A-Za-z0-9_-]{8,}/gi, '[REDACTED]').replace(/\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]');
+  };
+  const buildTail = () => Buffer.from(sandboxText(build.tail)).subarray(-8192).toString('utf8').replace(/^\uFFFD+/, '');
+  async function sandboxStatus({ image, fresh = false } = {}) {
+    if (!image && !fresh && sandboxProbe && Date.now() - sandboxProbe.at < 3000) return sandboxProbe.value;
+    const key = image ?? '';
+    if (sandboxFlights.has(key)) return !image && !fresh && sandboxProbe ? sandboxProbe.value : sandboxFlights.get(key);
+    const pending = (async () => {
+      let spec; try { spec = await available(); } catch { return { default_image: null, docker: { available: false, version: null, reason: 'Pipeline engine is not available' }, image: { name: image ?? null, present: false } }; }
+      const result = await probePipelineSandbox(spec, { env, image });
+      result.docker.reason = result.docker.reason ? sandboxText(result.docker.reason) : result.docker.available ? null : 'Docker is not available';
+      return result;
+    })().then((value) => { if (!image) sandboxProbe = { at: Date.now(), value }; return value; }).finally(() => sandboxFlights.delete(key));
+    sandboxFlights.set(key, pending);
+    return !image && !fresh && sandboxProbe ? sandboxProbe.value : pending;
+  }
   async function capability() {
-    return { ...await probePipeline({ env }), sandbox: { dockerImage: 'scranton-sandbox:1.5.0' }, models: (await modelCatalog()).map(({ baseUrl, ...m }) => m) };
+    const engine = await probePipeline({ env }), sandbox = await sandboxStatus();
+    return { ...engine, sandbox: { dockerImage: sandbox.default_image, docker: sandbox.docker, image: sandbox.image, build: { ...build, tail: buildTail() } }, models: (await modelCatalog()).map(({ baseUrl, ...m }) => m) };
+  }
+  async function buildSandbox(body) {
+    pipelineFields(body, []);
+    if (closing) throw fail(409, 'Server is closing');
+    if (buildStarting || buildEntry) throw fail(409, 'Pipeline sandbox build is already running');
+    buildStarting = true;
+    try {
+      const spec = await available(), sandbox = await sandboxStatus({ fresh: true });
+      if (!sandbox.docker.available) throw fail(503, `Docker is not available: ${sandbox.docker.reason}`);
+      if (closing) throw fail(409, 'Server is closing');
+      const child = spawnPipeline(spec, ['sandbox', 'build'], pipelineChildEnv(env));
+      Object.assign(build, { state: 'running', startedAt: new Date().toISOString(), finishedAt: null, tail: '' });
+      const entry = { child, stdout: '' }; buildEntry = entry;
+      child.stdin.on('error', () => {});
+      const output = (d) => { build.tail = Buffer.from(build.tail + String(d)).subarray(-8192).toString('utf8'); };
+      child.stderr.on('data', output);
+      child.stdout.on('data', (d) => { entry.stdout = (entry.stdout + d).slice(-8192); output(d); });
+      child.on('error', () => { build.tail = 'Pipeline sandbox build could not start'; });
+      entry.done = new Promise((resolve) => child.on('close', (code) => {
+        let value; try { value = JSON.parse(entry.stdout.trim()); } catch {}
+        build.state = code === 0 && value?.built === true ? 'succeeded' : 'failed';
+        build.finishedAt = new Date().toISOString(); build.tail = buildTail();
+        buildEntry = null; sandboxProbe = null; resolve();
+      }));
+      return { ok: true };
+    } finally { buildStarting = false; }
   }
   async function credentials(choices) {
     const catalog = await modelCatalog(), models = {}, extra = {};
@@ -139,16 +186,30 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     return { models, extra };
   }
   async function config(body) {
-    pipelineFields(body, ['task', 'demo', 'delivery', 'sandbox', 'checks', 'setup', 'models', 'approvals', 'review']);
+    pipelineFields(body, ['task', 'demo', 'demoScenario', 'delivery', 'sandbox', 'checks', 'setup', 'models', 'approvals', 'review', 'replans', 'parallelSteps', 'grounding', 'guidance']);
     if (typeof body.task !== 'string' || !body.task.trim() || Buffer.byteLength(body.task) > 32768 || body.task.includes('\0')) throw fail(400, 'Task needs 1 to 32768 bytes');
     if (body.demo !== undefined && typeof body.demo !== 'boolean') throw fail(400, 'Invalid demo');
     if (body.delivery !== undefined && !['apply', 'patch'].includes(body.delivery)) throw fail(400, 'Invalid delivery');
-    if (body.demo) return { extra: {}, operator: null, trustHost: true };
-    const sandbox = body.sandbox ?? { mode: 'docker' };
+    for (const [field, min, max] of [['replans', 0, 3], ['parallelSteps', 1, 4]]) if (body[field] !== undefined && (!Number.isInteger(body[field]) || body[field] < min || body[field] > max)) throw fail(400, `${field}: Expected integer from ${min} to ${max}`);
+    if (body.demoScenario !== undefined && (body.demo !== true || !['basic', 'replan', 'parallel', 'evidence'].includes(body.demoScenario))) throw fail(400, 'demoScenario: Expected basic, replan, parallel or evidence with demo:true');
+    if (body.grounding !== undefined && !['enforce', 'observe'].includes(body.grounding)) throw fail(400, 'grounding: Expected enforce or observe');
+    if (body.demoScenario === 'evidence' && body.grounding === 'observe') throw fail(400, 'grounding: The evidence demo needs enforce');
+    if (body.guidance !== undefined && typeof body.guidance !== 'boolean') throw fail(400, 'guidance: Expected boolean');
+    const settings = { ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
+    const sandbox = body.sandbox ?? { mode: body.demo ? 'host' : 'docker' };
     pipelineFields(sandbox, ['mode', 'image', 'trustHost']);
     if (!['docker', 'host'].includes(sandbox.mode) || sandbox.trustHost !== undefined && typeof sandbox.trustHost !== 'boolean') throw fail(400, 'Invalid sandbox');
-    if (sandbox.mode === 'host' && sandbox.trustHost !== true) throw fail(409, 'Host mode requires trustHost:true');
+    if (!body.demo && sandbox.mode === 'host' && sandbox.trustHost !== true) throw fail(409, 'Host mode requires trustHost:true');
     if (sandbox.image !== undefined && (typeof sandbox.image !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(sandbox.image))) throw fail(400, 'Invalid sandbox image');
+    async function dockerImage() {
+      if (sandbox.mode !== 'docker') return undefined;
+      const probe = await sandboxStatus({ image: sandbox.image, fresh: true });
+      if (!probe.docker.available) throw fail(409, `Docker daemon is not available: ${probe.docker.reason}`);
+      const image = sandbox.image ?? probe.default_image;
+      if (!probe.image.present) throw fail(409, `Docker image is missing: ${image}. Build the sandbox image first`);
+      return image;
+    }
+    if (body.demo) return { extra: {}, operator: null, settings, trustHost: sandbox.mode === 'host', demoScenario: body.demoScenario ?? 'basic', sandbox: sandbox.mode, image: await dockerImage() };
     const commands = (values, setup) => {
       if (!Array.isArray(values) || values.length > (setup ? 4 : 12)) throw fail(400, `${setup ? 'setup' : 'checks'}: Expected an array of at most ${setup ? 4 : 12} commands`);
       const ids = new Set();
@@ -172,7 +233,8 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     if (body.approvals !== undefined) { pipelineFields(body.approvals, ['plan']); if (!['always', 'auto_low_risk'].includes(body.approvals.plan)) throw fail(400, 'Invalid approval policy'); }
     if (body.review !== undefined && typeof body.review !== 'boolean') throw fail(400, 'Invalid review');
     const { models, extra } = await credentials(body.models);
-    const operator = { schema: 1, models, sandbox: { mode: sandbox.mode, ...(sandbox.mode === 'docker' ? { docker: { image: sandbox.image ?? 'scranton-sandbox:1.5.0' } } : {}) }, checks, setup, ...(checks.length ? {} : { allow_no_checks: true }), approvals: body.approvals ?? { plan: 'always' }, review: { enabled: body.review ?? true } };
+    const image = await dockerImage();
+    const operator = { schema: 1, ...settings, models, limits: { max_replans: body.replans ?? 1 }, execution: { max_parallel_steps: body.parallelSteps ?? 1 }, sandbox: { mode: sandbox.mode, ...(sandbox.mode === 'docker' ? { docker: { image } } : {}) }, checks, setup, ...(checks.length ? {} : { allow_no_checks: true }), approvals: body.approvals ?? { plan: 'always' }, review: { enabled: body.review ?? true } };
     if (scrub(JSON.stringify(operator)) !== JSON.stringify(operator)) throw fail(400, 'Configuration must not contain credentials');
     return { operator, extra, trustHost: sandbox.mode === 'host' };
   }
@@ -227,6 +289,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       if (cfg.operator) writeJson(request, cfg.operator);
       writeJson(request + '.launch.json', { models: body.demo ? null : body.models, trustHost: cfg.trustHost, demo: Boolean(body.demo), workspaceRoot, task: body.task, createdAt: new Date().toISOString() });
       const args = [body.demo ? 'demo' : 'run', '--run-root', runRoot, '--run-id', runId, '--workspace-root', workspaceRoot, '--delivery', body.delivery ?? 'apply'];
+      if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); }
       if (!body.demo) { const taskFile = request + '.task.txt'; writeFileAtomicSync(taskFile, body.task); args.push('--source', project.workspace, '--task-file', taskFile, '--config', request); if (cfg.trustHost) args.push('--trust-host'); }
       onStarting(chat, body.task);
       launch(spec, args, runDir, chat, cfg.extra);
@@ -261,7 +324,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     let review = null;
     const artifacts = safe(runDir, 'artifacts', false);
     if (fs.existsSync(artifacts)) { const names = fs.readdirSync(artifacts).filter((n) => /^review-\d+\.json$/.test(n)).sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0])); if (names.length) review = readObject(`artifacts/${names.at(-1)}`); }
-    return scrub({ status, launchError, live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan: readObject('artifacts/plan.json'), review, stderrTail: children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '' });
+    return scrub({ status, launchError: optional(safe(root(chat), `requests/${id}.error.json`, false)), live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan: readObject('artifacts/plan.json'), review, stderrTail: children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '' });
   }
   async function action(chat, id, action, body) {
     pipelineFields(body, action === 'decision' ? ['gate', 'decision', 'digest', 'comment'] : []);
@@ -316,10 +379,13 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     }
     withFsRetry(() => fs.rmSync(root(chat), { recursive: true, force: true }));
   }
-  return { capability, list, busy, snapshot, start, inspect, action, artifact, remove, get liveCount() { return children.size; },
+  return { capability, buildSandbox, list, busy, snapshot, start, inspect, action, artifact, remove, get liveCount() { return children.size; },
     async detect(project, body) { pipelineFields(body, []); const spec = await available(); const r = await execPipeline(spec, ['detect', '--source', project.workspace], { env }); if (r.code !== 0 || !r.value) throw fail(503, 'Pipeline detection failed'); return { git: r.value.git, languages: r.value.languages, ...Object.fromEntries(['checks', 'setup'].map((name) => [name, (r.value[name] ?? []).map(({ argv, ...v }) => ({ ...v, command: formatPipelineCommand(argv) }))])) }; },
     async close() {
       closing = true;
+      const buildClosing = buildEntry;
+      if (buildClosing) await killTree(buildClosing.child);
+      await buildClosing?.done;
       await Promise.all([...children.values()].map(async (entry) => {
         entry.child.stdin.end();
         const timer = setTimeout(() => { void killTree(entry.child); }, 5000);

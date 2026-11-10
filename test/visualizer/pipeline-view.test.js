@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPipelineView } from '../../visualizer/public/js/pipeline-view.js';
 import { FakeEl, installDom } from './fixtures/fake-dom.js';
+import { REAL_GROUNDING, REAL_EVIDENCE_DEMO, REAL_ABSENCE_REFUTED } from './fixtures/engine-grounding.js';
 
 const RUN = 'abc123def456';
 const BASE = `/api/projects/core/chats/c1/pipeline`;
@@ -44,6 +45,8 @@ function walk(node, pred, out = []) {
   return out;
 }
 const texts = (node) => walk(node, () => true).map((n) => n.textContent).filter(Boolean);
+// what the reader gets from a node built of strings and elements (the fake has no derived textContent)
+const lineText = (node) => (node.childNodes.length ? node.childNodes.map((c) => (c instanceof FakeEl ? lineText(c) : String(c))).join('') : node.textContent);
 
 // doc: what GET runs/:id answers (a function of the call count); artifacts: name -> content
 const LIST = { active: RUN, runs: [{ runId: RUN, status: 'awaiting_approval', phase: 'approve_plan', task: 'Fix', createdAt: '2026-11-09T10:00:00Z', updatedAt: '2026-11-09T10:01:00Z' }] };
@@ -369,4 +372,417 @@ test('a failed run shows its partial diff as changes up to the last passing step
   updated = '2026-11-09T10:02:00Z';
   await fire(h);
   assert.equal(diffGets(), 2, 'a changed run may have it now');
+});
+
+// ------------------------------------------------------------ sections 16 and 17
+
+const doc = (status, over = {}) => ({ status, live: false, events: [], lastSeq: 1, plan: PLAN, review: null, stderrTail: '', ...over });
+
+// guards `revised ? \`Revised plan (revision ${gate.revision}) waits for your approval\` : ...` and the `Why:` line in planSection
+test('revised plan gate: titled with its revision, says why, lists the replan flag, same Approve / Reject', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({
+    progress: { step_index: -1, step_count: 1, step_title: '', attempt: 0, review_round: 0, plan_revision: 1, replans_left: 0, steps_done: 1, lanes: [] },
+    pending: { gate: 'plan', digest: 'plan-digest-r1', risk_flags: ['replan'], revision: 1, replan_reason: 'step_blocked: the module does not exist', path: 'C:\\runs\\plan.json' },
+  })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const title = walk(h.$('pv-sections'), (n) => n.className === 'pv-gate-title')[0];
+  assert.equal(title.textContent, 'Revised plan (revision 1) waits for your approval');
+  const all = texts(h.$('pv-sections'));
+  assert.ok(all.includes('Why: step_blocked: the module does not exist'));
+  assert.ok(all.includes('replan'), 'the replan risk flag is shown');
+  assert.deepEqual(buttons(h).map((b) => b.dataset.decision), ['approve', 'reject']);
+  assert.match(lineText(h.$('pv-meta')), /plan revision 1 · 0 replans left/);
+  await buttons(h)[0].fire('click');
+  assert.deepEqual(h.requests.find((r) => r.method === 'POST').body, { gate: 'plan', decision: 'approve', digest: 'plan-digest-r1' });
+});
+
+// the real engine sends the reason as a string (above); an older fake sent an object, anything else degrades to no line
+test('revised plan gate: an object reason reads like the string, an unreadable one leaves the Why line out', async (t) => {
+  const gateWith = (reason) => harness({ doc: () => doc(runStatus({
+    progress: { step_index: -1, step_count: 1, plan_revision: 1, replans_left: 0, steps_done: 0, lanes: [] },
+    pending: { gate: 'plan', digest: 'd1', risk_flags: ['replan'], revision: 1, replan_reason: reason },
+  })) });
+  const old = gateWith({ code: 'step_blocked', message: 'no API', scope: 's1' });
+  done(t, old);
+  old.view.show({ project: 'core', chat: 'c1' });
+  await old.tick();
+  assert.ok(texts(old.$('pv-sections')).includes('Why: step_blocked: no API'));
+  for (const odd of [{ scope: 's1' }, ['a'], 7]) {
+    const h = gateWith(odd);
+    done(t, h);
+    h.view.show({ project: 'core', chat: 'c1' });
+    await h.tick();
+    const all = texts(h.$('pv-sections'));
+    assert.ok(!all.some((x) => x.startsWith('Why:')), JSON.stringify(odd));
+    assert.ok(!all.some((x) => /object Object/.test(x)), JSON.stringify(odd));
+    assert.equal(walk(h.$('pv-sections'), (n) => n.className === 'pv-gate-title')[0].textContent, 'Revised plan (revision 1) waits for your approval');
+  }
+});
+
+test('an original plan gate says nothing about revisions', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ progress: { step_index: -1, step_count: 2, plan_revision: 0, replans_left: 1, steps_done: 0, lanes: [] } })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  assert.equal(walk(h.$('pv-sections'), (n) => n.className === 'pv-gate-title')[0].textContent, 'The plan waits for your approval');
+  assert.doesNotMatch(lineText(h.$('pv-meta')), /revision|replan/);
+});
+
+// guards `if (s.progress.lanes.length) main.push(['lanes', ...])` in renderSections
+test('parallel lanes: one hairline list of the lanes replaces the step figure while a wave runs', async (t) => {
+  const lanes = [
+    { step_id: 's2', title: 'Parse empty input', state: 'running', attempt: 1 },
+    { step_id: 's3', title: `Docs ${EVIL}`, state: 'failed', attempt: 2 },
+    { step_id: 's4', title: 'Types', state: 'merged', attempt: 1 },
+  ];
+  const h = harness({ doc: () => doc(runStatus({ status: 'running', phase: 'implement', node: 'run_lane', pending: null,
+    progress: { step_index: 1, step_count: 4, step_title: 'Parse empty input', attempt: 1, review_round: 0, plan_revision: 0, replans_left: 1, steps_done: 1, lanes } }), { live: true }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const sec = walk(h.$('pv-sections'), (n) => n.dataset.section === 'lanes')[0];
+  assert.ok(sec, 'the lanes section is there');
+  assert.equal(h.$('pv-sections').childNodes[0], sec, 'first: it is what is happening now');
+  const rows = walk(sec, (n) => n.className === 'pv-lane');
+  assert.deepEqual(rows.map((r) => [r.dataset.state, r.dataset.loud]), [['running', 'false'], ['failed', 'true'], ['merged', 'false']]);
+  assert.deepEqual(rows.map((r) => r.childNodes.slice(2).map((c) => c.textContent)), [['running', 'attempt 1'], ['failed', 'attempt 2'], ['merged', 'attempt 1']]);
+  assert.ok(texts(sec).includes(`Docs ${EVIL}`), 'the title is text');
+  assert.equal(walk(sec, (n) => n.className === 'pv-lanes').length, 1, 'one list, no box per lane');
+  assert.match(lineText(h.$('pv-meta')), /1 of 4 steps done/);
+  assert.doesNotMatch(lineText(h.$('pv-meta')), /step 2\/4/);
+  assert.deepEqual(h.html, []);
+});
+
+test('no lanes: no lanes section, and the run line keeps step i/n', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ status: 'running', phase: 'implement', node: 'verify', pending: null,
+    progress: { step_index: 1, step_count: 4, step_title: 'Parse', attempt: 1, steps_done: 1, lanes: [] } }), { live: true }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  assert.equal(walk(h.$('pv-sections'), (n) => n.dataset.section === 'lanes').length, 0);
+  assert.match(lineText(h.$('pv-meta')), /step 2\/4 Parse/);
+});
+
+// guards `if (ev.lane) text.append(el('span', 'mono pv-ev-lane', ev.lane), ...)` in activitySection
+test('activity: wave and re-planning events read as words, lane events carry the lane as a quiet prefix, unknown ones still render', async (t) => {
+  const events = [
+    { seq: 1, ts: '2026-11-10T10:00:00Z', type: 'wave_started', node: 'select_step', data: { wave: 1, steps: ['s2', 's3'] } },
+    { seq: 2, ts: '2026-11-10T10:00:01Z', type: 'lane_started', node: 'run_lane', data: { lane: 's2' } },
+    { seq: 3, ts: '2026-11-10T10:00:09Z', type: 'lane_finished', node: 'run_lane', data: { lane: 's3', status: 'failed' } },
+    { seq: 4, ts: '2026-11-10T10:00:10Z', type: 'wave_merged', node: 'merge_wave', data: { wave: 1, merged: ['s2'], failed: ['s3'] } },
+    { seq: 5, ts: '2026-11-10T10:00:11Z', type: 'replan_requested', node: 'merge_wave', data: { code: 'lane_blocked', message: 'no such API', scope: 'step:s3' } },
+    { seq: 6, ts: '2026-11-10T10:00:12Z', type: 'replanned', node: 'replan', data: { revision: 1 } },
+    { seq: 7, ts: '2026-11-10T10:00:13Z', type: 'quantum_event', node: 'nowhere', data: { lane: 's9', anything: { deep: true } }, unknown_top: 1 },
+  ];
+  const h = harness({ doc: () => doc(runStatus({ status: 'running', phase: 'plan', node: 'replan', pending: null, future_field: [1, 2] }), { events, lastSeq: 7, live: true }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const rows = walk(h.$('pv-side'), (n) => n.className === 'pv-event');
+  assert.equal(rows.length, 7, 'every event has its row, unknown included');
+  const said = (li) => {
+    const cell = li.childNodes[2];
+    return cell.childNodes.length ? cell.childNodes.map((c) => c.textContent) : [cell.textContent];
+  };
+  assert.deepEqual(rows.map(said).reverse(), [
+    ['select_step · wave 1: s2, s3'],
+    ['s2', 'run_lane · started'],
+    ['s3', 'run_lane · failed'],
+    ['merge_wave · wave 1: merged s2 · not merged s3'],
+    ['merge_wave · lane_blocked: no such API'],
+    ['replan · plan revision 1'],
+    ['s9', 'nowhere'],
+  ]);
+  assert.equal(walk(h.$('pv-side'), (n) => n.className === 'mono pv-ev-lane').length, 3);
+  assert.equal(rows.find((r) => r.childNodes[1].textContent === 'replan requested').dataset.loud, 'true');
+});
+
+test('sandbox fragment of the run line comes from status.sandbox', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ sandbox: { mode: 'host', isolated: false } })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  assert.match(lineText(h.$('pv-meta')), /host, no OS isolation$/);
+  const d = harness({ doc: () => doc(runStatus()) });
+  done(t, d);
+  d.view.show({ project: 'core', chat: 'c1' });
+  await d.tick();
+  assert.match(lineText(d.$('pv-meta')), /Docker \(isolated, no network\)$/);
+  assert.equal(walk(d.$('pv-meta'), (n) => n.title).length, 0, 'an older engine: no sentence, no title');
+});
+
+// exactly what engine/src/scranton_pipeline/tools/sandbox.py sandbox_description sends
+const DOCKER_SENTENCE = 'Docker container with read-only root and no network for checks; shares the Docker VM kernel; workspace mounted read-write; setup commands with network can reach the internet and local services (including host.docker.internal).';
+const DOCKER_SANDBOX = { mode: 'docker', isolated: true, image: 'scranton-pipeline-sandbox:0.1.0', isolation: DOCKER_SENTENCE, setup_network: false };
+
+// guards `node.title = sb.full;` and `if (sb?.more) e.meta.append(el('span', 'hint pv-block', sb.full));` in renderMeta
+test('sandbox fragment: the first clause in the run line, the whole sentence as its title and once in a quiet line', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ sandbox: DOCKER_SANDBOX })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const meta = h.$('pv-meta');
+  const [frag] = walk(meta, (n) => n.title);
+  assert.equal(frag.textContent, 'Docker container with read-only root and no network for checks');
+  assert.equal(frag.title, DOCKER_SENTENCE);
+  const full = walk(meta, (n) => n.className === 'hint pv-block');
+  assert.deepEqual(full.map((n) => n.textContent), [DOCKER_SENTENCE], 'said once, quietly');
+  assert.equal(lineText(meta).split(DOCKER_SENTENCE).length - 1, 1);
+  assert.ok(lineText(meta).endsWith(` ${DOCKER_SENTENCE}`), 'apart from the run line in plain text too');
+  assert.doesNotMatch(lineText(meta), /Docker · Docker/);
+  assert.match(lineText(meta), /^Approval · 1 model call · .* · Docker container with read-only root and no network for checks/);
+  assert.deepEqual(h.html, [], 'textContent only');
+
+  const host = harness({ doc: () => doc(runStatus({ sandbox: { mode: 'host', isolated: false, image: null, isolation: 'No OS isolation.', setup_network: false } })) });
+  done(t, host);
+  host.view.show({ project: 'core', chat: 'c1' });
+  await host.tick();
+  assert.match(lineText(host.$('pv-meta')), /· host · No OS isolation$/);
+  assert.equal(walk(host.$('pv-meta'), (n) => n.title)[0].title, 'No OS isolation.');
+  assert.equal(walk(host.$('pv-meta'), (n) => n.className === 'hint pv-block').length, 0, 'nothing left out, no second line');
+});
+
+// guards `if (e.meta.dataset.key === key) return;` in renderMeta
+test('sandbox fragment: a poll that changes nothing keeps the titled node, so its tooltip stays up', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ sandbox: DOCKER_SANDBOX })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const before = walk(h.$('pv-meta'), (n) => n.title)[0];
+  await fire(h);
+  assert.ok(h.requests.filter((r) => r.url.includes('?after=')).length >= 2, 'polled again');
+  assert.equal(walk(h.$('pv-meta'), (n) => n.title)[0], before);
+});
+
+// guards `if (s.sandbox.setupNetwork) parts.push('setup had network access');` in runLine
+test('sandbox fragment: setup with network access is said once in the run line', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ sandbox: { ...DOCKER_SANDBOX, setup_network: true } })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const text = lineText(h.$('pv-meta'));
+  assert.equal(text.split('setup had network access').length - 1, 1);
+  assert.match(text, /no network for checks · setup had network access/);
+});
+
+// ------------------------------------------------------------ sections 21, 23 and 24: evidence grounding, guidance
+
+// exactly the status.grounding example of section 24
+const G24 = {
+  mode: 'enforce', answer: 1.0, trajectory: 0.875, unadjusted: 0.9375, violation_rate: 0.1667, adjusted: 0.651, tier: 'major', outputs: 6,
+  violations: { false_absence: 1 }, criteria: [{ id: 'c1', verified_by: 'checks', state: 'demonstrated', by: 'baseline', checks: ['unit'] }],
+  probe: { status: 'not_needed' },
+};
+const NO_JUNK = /object Object|NaN|undefined|null/;
+const section = (h, name) => walk(h.$('pv-sections'), (n) => n.dataset.section === name)[0];
+const REVIEWED = { verdict: 'approve', summary: 'Looks right', criteria: [{ id: 'c1', status: 'met', evidence: 'K-0123456789 unit passes' }], findings: [] };
+
+// guards `if (evidence) detail.push(evidenceBlock(evidence));` and `if (gate.riskFlags.length) detail.push(riskFlags(gate.riskFlags));`
+// in changesSection, the score lines of evidenceBlock and `if (r.criteria.length && !decided)` in reviewSection
+test('delivery gate: Evidence shows the decided criteria, the score and its parts, the violations and the new risk flags in words, once', async (t) => {
+  const delivery = runStatus({
+    phase: 'deliver', node: 'package', grounding: G24,
+    pending: { gate: 'delivery', digest: 'diff-digest-9', files: [{ path: 'src/parse.py', action: 'M', added: 1, removed: 1 }], path: 'C:\\runs\\candidate.diff',
+      risk_flags: ['criteria_not_demonstrated', 'grounding_violations'], grounding: G24 },
+    artifacts: { plan: 'p', diff: 'd', report_md: null, report_json: null },
+  });
+  const h = harness({ doc: () => doc(delivery, { review: REVIEWED }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  await h.tick();
+  const gate = walk(h.$('pv-sections'), (n) => n.className === 'pv-gate')[0];
+  const [ev] = walk(gate, (n) => n.className === 'pv-evidence');
+  assert.ok(ev, 'the evidence is in the gate, where the decision is made');
+  assert.equal(walk(ev, (n) => n.className === 'pv-gate' || n.className === 'pv-failure').length, 0, 'no box inside the box');
+  const said = texts(ev);
+  for (const s of ['Evidence', 'c1', 'Empty input returns []', 'shown by checks', ' · failed before the change, passes now · checks: unit',
+    'Evidence score 0.65 · major', 'answer 1.00 · trajectory 0.88 · 17% of outputs with a violation', 'Violations', '1', 'claimed something was missing that exists']) {
+    assert.ok(said.includes(s), s);
+  }
+  assert.ok(!said.some((x) => x.startsWith('Counterfactual probe')), 'probe not needed: no line');
+  assert.ok(!said.includes('observe only - nothing was rejected'));
+  assert.deepEqual(walk(gate, (n) => n.className === 'badge').map((b) => [b.textContent, b.dataset.tone]), [
+    ["A criterion's checks passed before the change too", 'loud'], ['Output that was not backed by evidence was accepted (observe only)', 'loud'],
+  ]);
+  assert.deepEqual(said.slice(said.indexOf('Violations'), said.indexOf('Violations') + 3), ['Violations', 'Rejected and repaired:', '1'], 'one lead-in, then the counts');
+  const all = texts(h.$('pv-sections'));
+  assert.equal(all.filter((x) => x === 'shown by checks').length, 1, 'the criterion state is said once');
+  assert.equal(all.filter((x) => x === 'Evidence').length, 1, 'one Evidence block');
+  assert.ok(!texts(section(h, 'review')).includes('Criteria'), 'the review leaves its criteria list to the evidence');
+  assert.ok(texts(section(h, 'review')).includes('Looks right'), 'the review summary stays');
+  assert.equal(section(h, 'result'), undefined);
+  assert.ok(!all.some((x) => NO_JUNK.test(x)));
+  assert.deepEqual(h.html, []);
+});
+
+// guards `if (evidence) root.append(evidenceBlock(evidence));` in resultSection, the observe and probe lines of evidenceBlock,
+// and `if (!g || (!g.outputs && !g.criteria.length)) return null;` in evidenceView
+test('finished run: the result carries the evidence once; observe mode says nothing was rejected; an older engine shows no Evidence', async (t) => {
+  const g = { ...G24, mode: 'observe', violations: {}, tier: 'clean', violation_rate: 0, adjusted: 0.9375,
+    criteria: [{ id: 'c1', verified_by: 'checks', state: 'demonstrated', by: 'probe', checks: ['unit'] }], probe: { status: 'demonstrated' } };
+  const finished = (grounding) => runStatus({ status: 'succeeded', phase: 'done', node: 'finalize', pending: null, ...(grounding ? { grounding } : {}) });
+  const h = harness({ doc: () => doc(finished(g), { review: REVIEWED }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const said = texts(section(h, 'result'));
+  for (const s of ['Evidence', 'Empty input returns []', ' · the new tests fail without the change · checks: unit', 'Evidence score 0.94 · clean',
+    'answer 1.00 · trajectory 0.88 · 0% of outputs with a violation', 'observe only - nothing was rejected', 'Counterfactual probe: the new tests fail without the change']) {
+    assert.ok(said.includes(s), s);
+  }
+  assert.ok(!said.includes('Violations'), 'no violations, no list');
+  assert.equal(texts(h.$('pv-sections')).filter((x) => x === 'Evidence').length, 1);
+
+  // guards `in ${nodeLabel(s.failure.node)}` in resultSection
+  const f = harness({ doc: () => doc(runStatus({ status: 'failed', phase: 'done', node: 'finalize', pending: null, grounding: G24,
+    failure: { failure_class: 'limits', code: 'max_active_seconds', message: 'time is up', node: 'ground' } })) });
+  done(t, f);
+  f.view.show({ project: 'core', chat: 'c1' });
+  await f.tick();
+  assert.ok(texts(section(f, 'result')).includes('in Check evidence'));
+  assert.ok(texts(section(f, 'result')).includes('Evidence score 0.65 · major'), 'a failed run keeps what was evaluated');
+
+  for (const [what, grounding] of [['an older engine', null], ['nothing evaluated yet', { ...G24, outputs: 0, criteria: [], violations: {} }]]) {
+    const o = harness({ doc: () => doc(finished(grounding), { review: REVIEWED }) });
+    done(t, o);
+    o.view.show({ project: 'core', chat: 'c1' });
+    await o.tick();
+    assert.equal(walk(o.$('pv-sections'), (n) => n.className === 'pv-evidence').length, 0, what);
+    assert.ok(!texts(o.$('pv-sections')).includes('Evidence'), what);
+    assert.ok(texts(section(o, 'review')).includes('Criteria'), `${what}: the review keeps its criteria`);
+  }
+});
+
+// guards `el('p', 'hint pv-text', v.violationsLead)` in evidenceBlock
+test('observe mode with violations: the counts are introduced as accepted, and the risk flag says it was accepted', async (t) => {
+  const g = { ...G24, mode: 'observe' };
+  const h = harness({ doc: () => doc(runStatus({ phase: 'deliver', node: 'package', grounding: g,
+    pending: { gate: 'delivery', digest: 'd', files: [], risk_flags: ['grounding_violations'], grounding: g } }), { review: REVIEWED }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const said = texts(walk(h.$('pv-sections'), (n) => n.className === 'pv-evidence')[0]);
+  assert.deepEqual(said.slice(said.indexOf('Violations'), said.indexOf('Violations') + 4),
+    ['Violations', 'Accepted without evidence:', '1', 'claimed something was missing that exists']);
+  assert.ok(!said.includes('Rejected and repaired:'));
+  const gate = walk(h.$('pv-sections'), (n) => n.className === 'pv-gate')[0];
+  assert.deepEqual(walk(gate, (n) => n.className === 'badge').map((b) => b.textContent), ['Output that was not backed by evidence was accepted (observe only)']);
+});
+
+// the engine's own status.grounding objects (fixtures/engine-grounding.js) in the result of a finished run
+test('finished run: the real engine objects render once, in words, without junk; a review criterion never says all required checks', async (t) => {
+  const review = { verdict: 'approve', summary: 'Adds sum', criteria: [{ id: 'sum', status: 'unclear', evidence: 'no test covers negative numbers' }], findings: [] };
+  const expected = [
+    ['shown by checks', ' · failed before the change, passes now · checks: test', 'Evidence score 0.52 · major', 'answer 1.00 · trajectory 0.83 · 25% of outputs with a violation',
+      'planned a change to a file it had not read'],
+    ['passes, but passed before the change too', ' · checks: test', 'Evidence score 0.38 · major', 'answer 1.00 · trajectory 0.33 · 25% of outputs with a violation',
+      'planned a change to a file it had not read'],
+    ['unclear', 'no test covers negative numbers', 'Evidence score 0.64 · major', 'answer 1.00 · trajectory 1.00 · 20% of outputs with a violation',
+      'criterion marked met without evidence'],
+  ];
+  for (const [i, grounding] of REAL_GROUNDING.entries()) {
+    const h = harness({ doc: () => doc(runStatus({ status: 'succeeded', phase: 'done', node: 'finalize', pending: null, grounding }), { review }) });
+    done(t, h);
+    h.view.show({ project: 'core', chat: 'c1' });
+    await h.tick();
+    const said = texts(section(h, 'result'));
+    for (const s of ['Evidence', 'sum', 'Violations', 'Rejected and repaired:', '1', ...expected[i]]) assert.ok(said.includes(s), `${i}: ${s}`);
+    assert.equal(said.filter((x) => x === expected[i][0]).length, 1, `${i}: the state once`);
+    assert.ok(!said.some((x) => x.includes('all required checks')), `${i}: named checks or a review criterion`);
+    assert.ok(!said.some((x) => x.startsWith('Counterfactual probe') || x.startsWith('observe only')), `${i}: probe not needed, enforce`);
+    assert.ok(!texts(h.$('pv-sections')).some((x) => NO_JUNK.test(x)), `${i}: no junk`);
+    assert.ok(!texts(section(h, 'review')).includes('Criteria'), `${i}: one state per criterion`);
+  }
+});
+
+// guards `if (v.rating) root.append(...)` and `if (v.observeNote)` in evidenceBlock (F10)
+test('delivery gate of the real evidence demo: one quiet line under the score says what the tier rates; observe says it once', async (t) => {
+  const gateOf = async (grounding) => {
+    const h = harness({ doc: () => doc(runStatus({ phase: 'deliver', node: 'package', grounding,
+      pending: { gate: 'delivery', digest: 'd', files: [], grounding } }), { review: REVIEWED }) });
+    done(t, h);
+    h.view.show({ project: 'core', chat: 'c1' });
+    await h.tick();
+    const ev = walk(h.$('pv-sections'), (n) => n.className === 'pv-evidence')[0];
+    return { said: texts(ev), hints: walk(ev, (n) => n.className === 'hint pv-text').map((n) => n.textContent) };
+  };
+  const rating = 'The score rates how the models worked, not the change itself: 2 of 5 outputs were rejected and repaired.';
+  const real = await gateOf(REAL_EVIDENCE_DEMO);
+  const at = real.said.indexOf('Evidence score 0.25 · failing');
+  assert.deepEqual(real.said.slice(at, at + 3), ['Evidence score 0.25 · failing', 'answer 1.00 · trajectory 0.39 · 40% of outputs with a violation', rating]);
+  assert.ok(real.hints.includes(rating), 'quiet, like the parts line');
+  assert.ok(!real.said.includes('observe only - nothing was rejected'));
+  assert.ok(!real.said.some((x) => NO_JUNK.test(x)));
+
+  const observed = await gateOf({ ...REAL_EVIDENCE_DEMO, mode: 'observe' });
+  assert.ok(observed.said.includes('The score rates how the models worked, not the change itself: 2 of 5 outputs were accepted without evidence.'));
+  assert.ok(!observed.said.includes('observe only - nothing was rejected'), 'said once, by the new line');
+  const uncounted = await gateOf({ ...REAL_EVIDENCE_DEMO, mode: 'observe', outputs: 0 });
+  assert.ok(uncounted.said.includes('The score rates how the models worked, not the change itself.'));
+  assert.ok(uncounted.said.includes('observe only - nothing was rejected'), 'without a count the note still says the mode');
+  const clean = await gateOf({ ...REAL_EVIDENCE_DEMO, tier: 'clean' });
+  assert.ok(!clean.said.some((x) => x.startsWith('The score rates')), 'clean needs no explanation');
+});
+
+// guards the absence_refuted entry of EVENT_TEXT through activitySection (F10)
+test('activity: the real absence_refuted event reads as a refutation with its place', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ status: 'running', phase: 'implement', node: 'implement', pending: null, grounding: REAL_EVIDENCE_DEMO }),
+    { events: [REAL_ABSENCE_REFUTED], lastSeq: 36, live: true }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const [row] = walk(h.$('pv-side'), (n) => n.className === 'pv-event');
+  assert.equal(row.childNodes[1].textContent, 'absence refuted');
+  assert.equal(row.childNodes[2].textContent, 'Refuted: add exists at calculator.py:1');
+  assert.equal(row.dataset.loud, undefined);
+});
+
+// guards `activityEvents(all)`, `eventLoud(ev, { observe })` and `nodeLabel(ev.node)` in activitySection
+test('activity: rejected outputs, verified absences, decided criteria and the probe in words; accepted outputs and procedure events get no row', async (t) => {
+  const events = [
+    { seq: 1, ts: '2026-11-10T10:00:00Z', type: 'grounding', node: 'plan', data: { role: 'planner', scope: 'plan', accepted: true, violations: [], cited: 0, shown: 4 } },
+    { seq: 2, ts: '2026-11-10T10:00:01Z', type: 'grounding', node: 'implement', data: { role: 'implementer', scope: 'step:s2', accepted: false, violations: ['unseen_edit'], cited: 0, shown: 3, lane: 's2' } },
+    { seq: 3, ts: '2026-11-10T10:00:02Z', type: 'procedure', node: 'implement', data: { role: 'implementer', scope: 'step:s2', situation: 'implement.repair', matched: true } },
+    { seq: 4, ts: '2026-11-10T10:00:03Z', type: 'absence_verified', node: 'implement', data: { kind: 'missing_file', subject: 'src/legacy.py', files_searched: 42 } },
+    { seq: 5, ts: '2026-11-10T10:00:04Z', type: 'criteria_decided', node: 'ground', data: { states: { demonstrated: 1, met_not_demonstrated: 1 } } },
+    { seq: 6, ts: '2026-11-10T10:00:05Z', type: 'probe_finished', node: 'ground', data: { status: 'not_demonstrated', checks: ['unit'] } },
+  ];
+  const said = (li) => {
+    const cell = li.childNodes[2];
+    return cell.childNodes.length ? cell.childNodes.map((c) => c.textContent) : [cell.textContent];
+  };
+  for (const mode of ['enforce', 'observe']) {
+    const h = harness({ doc: () => doc(runStatus({ status: 'running', phase: 'review', node: 'ground', pending: null, grounding: { ...G24, mode } }), { events, lastSeq: 6, live: true }) });
+    done(t, h);
+    h.view.show({ project: 'core', chat: 'c1' });
+    await h.tick();
+    const rows = walk(h.$('pv-side'), (n) => n.className === 'pv-event');
+    assert.deepEqual(rows.map(said).reverse(), [
+      ['s2', `implement · Implementer output ${mode === 'observe' ? 'recorded' : 'rejected'}: edited a file it had not been shown`],
+      ['implement · Verified: src/legacy.py was not found in the 42 files models may read'],
+      ['Check evidence · criteria decided: 1 shown by checks; 1 passes, but passed before the change too'],
+      ['Check evidence · counterfactual probe: the tests pass even without the change (unit)'],
+    ], mode);
+    assert.equal(rows.at(-1).dataset.loud, mode === 'observe' ? undefined : 'true', `${mode}: the rejection is loud only when it rejected`);
+    assert.ok(texts(section(h, 'activity') ?? h.$('pv-side')).includes('4 events, newest first'));
+  }
+});
+
+// guards `if (s.procedure.enabled && s.procedure.situation) parts.push(...)` in runLine, through the view
+test('run line: procedural guidance is one quiet fragment naming the situation', async (t) => {
+  const h = harness({ doc: () => doc(runStatus({ status: 'running', phase: 'implement', node: 'implement', pending: null,
+    procedure: { enabled: true, name: 'default', digest: 'ab12', situation: 'implement.repair' } }), { live: true }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  assert.equal(lineText(h.$('pv-meta')).split('guidance: implement.repair').length - 1, 1);
+  // a situation without guidance enabled is not guidance
+  const off = harness({ doc: () => doc(runStatus({ procedure: { enabled: false, name: null, digest: null, situation: 'plan.start' } })) });
+  done(t, off);
+  off.view.show({ project: 'core', chat: 'c1' });
+  await off.tick();
+  assert.doesNotMatch(lineText(off.$('pv-meta')), /guidance/);
 });

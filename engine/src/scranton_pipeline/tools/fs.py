@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -78,7 +79,18 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        first: PermissionError | None = None
+        for attempt in range(41):
+            try:
+                os.replace(name, path)
+                break
+            except PermissionError as exc:
+                if first is None:
+                    first = exc
+                if os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 40:
+                    raise first
+                # Windows readers may omit delete-sharing while polling status/artifacts.
+                time.sleep(0.05)
     finally:
         Path(name).unlink(missing_ok=True)
 

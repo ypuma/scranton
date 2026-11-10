@@ -19,7 +19,7 @@ const planner = {kind:'plan',plan:{summary:'Fix addition',acceptance_criteria:[{
 const implementer = {kind:'edits',summary:'Fixed',edits:[{path:'calculator.py',action:'modify',content:'def add(a, b):\\n    return a + b\\n'}]};
 const reviewer = {verdict:'approve',summary:'Correct',criteria:[{id:'sum',status:'met',evidence:'Tests pass'}]};
 const answer = system.includes('PlannerTurn') ? planner : system.includes('ImplementerTurn') ? implementer : reviewer;
-fs.appendFileSync(process.env.BRIDGE_CALLS, JSON.stringify({env:Object.keys(process.env),argv:args,cwd:process.cwd()})+'\\n');
+fs.appendFileSync(process.env.BRIDGE_CALLS, JSON.stringify({env:Object.keys(process.env),argv:args,system,cwd:process.cwd()})+'\\n');
 console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:JSON.stringify(answer)}],stopReason:'stop',usage:{input:20,output:30}}}));
 console.log(JSON.stringify({type:'agent_settled',aborted:false}));
 `);
@@ -88,10 +88,15 @@ test('real engine + fake pi over HTTP traverses both gates and applies verified 
   const delivery = await f.wait(id, 'awaiting_approval'); assert.equal(delivery.pending.gate, 'delivery');
   assert.equal((await f.decide(id, delivery)).code, 202);
   const done = await f.wait(id, 'succeeded'); assert.equal(done.delivery.applied, true);
+  t.diagnostic(JSON.stringify({ status: done.status, grounding: done.grounding }));
+  assert.deepEqual(done.grounding.criteria, [{ id: 'sum', verified_by: 'checks', state: 'demonstrated', by: 'baseline', checks: ['test'] }]);
   assert.match(fs.readFileSync(path.join(f.workspace, 'calculator.py'), 'utf8'), /return a \+ b/);
   assert.equal(f.credentialCalls(), 0);
   const calls = fs.readFileSync(path.join(f.dir, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls.map((call) => call.system.includes('PlannerTurn') ? 'planner' : call.system.includes('ImplementerTurn') ? 'implementer' : 'reviewer'), ['planner', 'planner', 'implementer', 'reviewer']);
+  assert.equal(done.grounding.mode, 'enforce');
+  assert.deepEqual(done.grounding.violations, { unseen_target: 1 });
   for (const call of calls) { assert.equal(call.env.some((k) => k.startsWith('SCRANTON_PIPELINE_KEY_')), false); assert.equal(fs.existsSync(call.cwd), false); }
 });
 
@@ -104,9 +109,14 @@ test('environment-only pi account reaches provider but not checks, including gat
   await f.decide(id, plan);
   const delivery = await f.wait(id, 'awaiting_approval');
   assert.equal(delivery.checks[0].status, 'passed');
-  await f.decide(id, delivery); await f.wait(id, 'succeeded');
+  await f.decide(id, delivery); const done = await f.wait(id, 'succeeded');
+  t.diagnostic(JSON.stringify({ status: done.status, grounding: done.grounding }));
   const calls = fs.readFileSync(path.join(f.dir, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls.map((call) => call.system.includes('PlannerTurn') ? 'planner' : call.system.includes('ImplementerTurn') ? 'implementer' : 'reviewer'), ['planner', 'planner', 'implementer', 'reviewer']);
+  assert.equal(done.grounding.mode, 'enforce');
+  assert.deepEqual(done.grounding.violations, { unseen_target: 1 });
+  assert.deepEqual(done.grounding.criteria, [{ id: 'sum', verified_by: 'checks', state: 'met_not_demonstrated', by: 'none', checks: ['test'] }]);
   for (const call of calls) {
     assert.equal(call.env.includes('ANTHROPIC_API_KEY'), true);
     assert.equal(call.env.includes('GEMINI_API_KEY'), false);

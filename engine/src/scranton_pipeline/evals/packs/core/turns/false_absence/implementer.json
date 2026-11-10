@@ -1,0 +1,28 @@
+[
+  {
+    "kind": "blocked",
+    "blocked_reason": "The function is missing",
+    "blocked_claim": {
+      "kind": "missing_symbol",
+      "subject": "add",
+      "paths": [
+        "calculator.py"
+      ]
+    }
+  },
+  {
+    "kind": "edits",
+    "edits": [
+      {
+        "path": "calculator.py",
+        "action": "modify",
+        "replacements": [
+          {
+            "search": "return a - b",
+            "replace": "return a + b"
+          }
+        ]
+      }
+    ]
+  }
+]

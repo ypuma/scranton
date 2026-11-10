@@ -12,7 +12,7 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from .errors import EngineError, FailureClass
 from .models import StrictModel
 
-DEFAULT_PROTECTED = (".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx",
+DEFAULT_PROTECTED = (".pipeline/**", ".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx",
                      "**/id_rsa*", "**/id_ed25519*", ".ssh/**", ".npmrc", ".pypirc",
                      "**/credentials.json", "**/auth.json")
 DEFAULT_WRITE_PROTECTED = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
@@ -24,6 +24,7 @@ class Limits(StrictModel):
     max_step_context_rounds: int = Field(default=2, ge=0, le=10)
     max_output_repairs: int = Field(default=2, ge=0, le=10)
     max_step_attempts: int = Field(default=3, ge=1, le=10)
+    max_replans: int = Field(default=1, ge=0, le=3)
     max_review_rounds: int = Field(default=2, ge=0, le=10)
     max_plan_steps: int = Field(default=8, ge=1, le=32)
     max_llm_calls: int = Field(default=40, ge=1, le=200)
@@ -102,10 +103,11 @@ class ModelConfig(StrictModel):
 
 
 class DockerConfig(StrictModel):
-    image: str = Field(default="scranton-sandbox:1.5.0", min_length=1, max_length=512, pattern=r"^[^\s-][^\s]*$")
+    image: str | None = Field(default=None, min_length=1, max_length=512, pattern=r"^[^\s-][^\s]*$")
     cpus: float = Field(default=2, gt=0, le=16, allow_inf_nan=False)
     memory_mb: int = Field(default=2048, ge=128, le=32768)
     pids: int = Field(default=256, ge=16, le=4096)
+    tmpfs_mb: int = Field(default=512, ge=64, le=4096)
 
 
 class SandboxConfig(StrictModel):
@@ -161,9 +163,42 @@ class ModelsConfig(StrictModel):
     planner: ModelConfig
     implementer: ModelConfig
     reviewer: ModelConfig
+    refiner: ModelConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class ExecutionConfig(StrictModel):
+    max_parallel_steps: int = Field(default=1, ge=1, le=4)
+    max_lane_workspace_bytes: int = Field(default=536870912, ge=1)
+
+
+class GroundingWeights(StrictModel):
+    answer: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
+    trajectory: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def normalized(self) -> Self:
+        if abs(self.answer + self.trajectory - 1) > 1e-9:
+            raise ValueError("grounding weights must sum to one")
+        return self
+
+
+class GroundingConfig(StrictModel):
+    mode: Literal["enforce", "observe"] = "enforce"
+    counterfactual: Literal["auto", "off"] = "auto"
+    test_globs: list[str] = Field(default_factory=lambda: ["tests/**", "test/**", "**/test_*.py", "**/*_test.*", "**/*.test.*", "**/*.spec.*"], max_length=100)
+    weights: GroundingWeights = Field(default_factory=GroundingWeights)
+
+
+class ProcedureConfig(StrictModel):
+    enabled: bool = False
+    graph: str | None = Field(default=None, min_length=1, max_length=4096)
+    hops: int = Field(default=2, ge=0, le=2)
+    max_bytes: int = Field(default=1500, ge=1, le=2000000)
 
 
 class EngineConfig(StrictModel):
+    procedure: ProcedureConfig = Field(default_factory=ProcedureConfig)
+    grounding: GroundingConfig = Field(default_factory=GroundingConfig)
     schema_version: Literal[1] = Field(default=1, alias="schema", serialization_alias="schema")
     models: ModelsConfig
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
@@ -174,6 +209,7 @@ class EngineConfig(StrictModel):
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     policy: Policy = Field(default_factory=Policy)
     limits: Limits = Field(default_factory=Limits)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     pricing: dict[str, Pricing] = Field(default_factory=dict)
 
     @model_validator(mode="after")

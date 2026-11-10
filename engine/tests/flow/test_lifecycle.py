@@ -85,6 +85,7 @@ def test_checks_repair(case):
 
 
 def test_checks_exhaustion(case):
+    case["cfg"]["limits"] = {"max_replans": 0}
     wrong = [{"kind": "edits", "edits": [{"path": "calculator.py", "action": "modify", "content": f"def add(a, b):\n    return {n}\n"}]} for n in (0, 1, 2)]
     script(case, "implementer", wrong)
     _, status = begin(case)

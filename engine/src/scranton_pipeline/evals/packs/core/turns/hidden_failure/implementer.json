@@ -1,0 +1,17 @@
+[
+  {
+    "kind": "edits",
+    "edits": [
+      {
+        "path": "calculator.py",
+        "action": "modify",
+        "replacements": [
+          {
+            "search": "return a - b",
+            "replace": "return abs(a) + abs(b)"
+          }
+        ]
+      }
+    ]
+  }
+]

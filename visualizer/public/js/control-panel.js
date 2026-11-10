@@ -1053,8 +1053,9 @@ export function createControlPanel({
     }
     if (!r.ok) {
       renderButtons();
-      // a 400 about one setup or check row is shown at that row
-      if (!(r.status === 400 && pipelineForm.markInvalid(pipelineForm.errorField(r.error), r.error, { fromServer: true }))) runError(startError(r));
+      // a 400 about one setup or check row is shown at that row, a 409 about the sandbox in the sandbox section
+      const shown = (r.status === 400 && pipelineForm.markInvalid(pipelineForm.errorField(r.error), r.error, { fromServer: true })) || pipelineForm.sandboxRefused?.(r);
+      if (!shown) runError(startError(r));
       return;
     }
     pipelineForm.started();

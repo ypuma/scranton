@@ -15,7 +15,7 @@ from scranton_pipeline.errors import EngineError, FailureClass, TransientError
 from scranton_pipeline.observability import UsageLedger
 from scranton_pipeline.tools.process import StopSignal
 
-Role = Literal["planner", "implementer", "reviewer"]
+Role = Literal["planner", "implementer", "reviewer", "refiner"]
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -31,7 +31,10 @@ class ScriptedChatModel(BaseChatModel):
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None,
                   run_manager: CallbackManagerForLLMRun | None = None, **kwargs: Any) -> ChatResult:
         script = json.loads(Path(self.script_path).read_text(encoding="utf-8"))
-        cursor = self.ledger.calls_for(self.role)
+        cursor = kwargs.get("pipeline_cursor", self.ledger.calls_for(self.role))
+        if isinstance(script, dict):
+            script = script.get(kwargs.get("pipeline_scope", ""), [])
+            cursor = kwargs.get("pipeline_scope_cursor", 0)
         if cursor >= len(script):
             raise EngineError(FailureClass.INFRASTRUCTURE, "script_exhausted", f"No scripted {self.role} response {cursor}")
         item = script[cursor]

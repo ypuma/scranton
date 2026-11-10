@@ -33,6 +33,16 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--run-id")
         command.add_argument("--delivery", choices=("patch", "apply"), default="patch")
         command.add_argument("--parent-guard", action="store_true")
+        if name == "demo":
+            command.add_argument("--sandbox", choices=("host", "docker"), default="host")
+            command.add_argument("--image")
+            command.add_argument("--scenario", choices=("basic", "replan", "parallel", "evidence"), default="basic")
+            command.add_argument("--grounding", choices=("enforce", "observe"), default="enforce")
+            command.add_argument("--guidance", choices=("true", "false"), default="false")
+    sandbox = sub.add_parser("sandbox")
+    actions = sandbox.add_subparsers(dest="sandbox_action", required=True)
+    for action in ("check", "build"):
+        actions.add_parser(action).add_argument("--image")
     run.add_argument("--trust-host", action="store_true")
     res = sub.add_parser("resume")
     res.add_argument("--run-dir", type=Path, required=True)
@@ -42,7 +52,7 @@ def parser() -> argparse.ArgumentParser:
     res.add_argument("--comment", default="")
     res.add_argument("--trust-host", action="store_true")
     res.add_argument("--parent-guard", action="store_true")
-    for name in ("status", "cancel"):
+    for name in ("status", "cancel", "score"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--run-dir", type=Path, required=True)
         if name == "cancel":
@@ -51,6 +61,21 @@ def parser() -> argparse.ArgumentParser:
     detect.add_argument("--source", type=Path, required=True)
     graph = sub.add_parser("graph")
     graph.add_argument("--format", choices=("mermaid",), default="mermaid")
+    for name in ("eval", "evolve"):
+        cmd = sub.add_parser(name)
+        cmd.add_argument("--pack", required=True)
+        cmd.add_argument("--config", type=Path)
+        cmd.add_argument("--graph", required=name == "evolve")
+        cmd.add_argument("--models", choices=("scripted", "config"), default="scripted")
+        cmd.add_argument("--real-calls", action="store_true")
+        cmd.add_argument("--trust-host", action="store_true")
+        cmd.add_argument("--out", type=Path, required=name == "evolve", default=Path("eval-output"))
+        if name == "eval":
+            cmd.add_argument("--tasks")
+            cmd.add_argument("--split", choices=("train", "val", "all"), default="all")
+        else:
+            cmd.add_argument("--rounds", type=int, default=3)
+            cmd.add_argument("--max-seconds", type=float, default=3600)
     sub.add_parser("version")
     return root
 
@@ -61,7 +86,7 @@ def graph_text() -> str:
 
     from scranton_pipeline.demo.fixture import config
     from scranton_pipeline.graph import build_graph
-    return str(build_graph(SimpleNamespace(cfg=config(Path.cwd()), checkpointer=None)).get_graph().draw_mermaid())  # type: ignore[arg-type]
+    return str(build_graph(SimpleNamespace(cfg=config(Path.cwd()), checkpointer=None)).get_graph(xray=True).draw_mermaid())  # type: ignore[arg-type]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,7 +95,42 @@ def main(argv: list[str] | None = None) -> int:
         args = parser().parse_args(argv)
         command = args.command
         result: Any
-        if command == "version":
+        if command in {"run", "resume", "demo"} or command == "sandbox" and args.sandbox_action == "check":
+            from scranton_pipeline.tools.sandbox import sweep_expired
+            sweep_expired()
+        if command in {"eval", "evolve"}:
+            from scranton_pipeline.evals.evaluate import (
+                base_config,
+                evaluate,
+                graph_option,
+                summary,
+            )
+            from scranton_pipeline.evals.pack import load_pack
+            pack = load_pack(args.pack)
+            cfg = base_config(pack, args.config, args.models, args.real_calls, refiner=command == "evolve")
+            graph = graph_option(args.graph)
+            if command == "eval":
+                result = evaluate(pack, args.out, cfg=cfg, graph=graph, tasks=args.tasks, split=args.split,
+                                  models=args.models, trust_host=args.trust_host)
+                print(json.dumps(summary(result)))
+                return 0 if all(t["expect_met"] for t in result["tasks"]) else 4
+            from scranton_pipeline.evals.evolve import run_evolution
+            assert graph is not None
+            result = run_evolution(pack, graph, args.out, cfg=cfg, models=args.models, rounds=args.rounds,
+                                   max_seconds=args.max_seconds, trust_host=args.trust_host)
+            print(json.dumps(result))
+            return 0
+        if command == "sandbox":
+            from scranton_pipeline.tools.sandbox import build_image, check_image
+            result = build_image(args.image) if args.sandbox_action == "build" else check_image(args.image)
+            print(json.dumps(result))
+            return 5 if args.sandbox_action == "build" and not result["built"] else 0
+        if command == "score":
+            from scranton_pipeline.grounding import recompute_summary
+            if not (args.run_dir / "run.json").is_file():
+                raise ValueError("Not a run directory")
+            result = recompute_summary(args.run_dir)
+        elif command == "version":
             result = {"version": "0.1.0", "python": platform.python_version(), "langgraph": importlib.metadata.version("langgraph")}
         elif command == "graph":
             print(graph_text())
@@ -88,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "demo":
             from scranton_pipeline.demo.fixture import run_demo
             result = run_demo(args.run_root, run_id=args.run_id, workspace_root=args.workspace_root,
-                              delivery=args.delivery, guarded=args.parent_guard)
+                              delivery=args.delivery, guarded=args.parent_guard, sandbox=args.sandbox, image=args.image, scenario=args.scenario, grounding=args.grounding, guidance=args.guidance == "true")
         elif command == "run":
             cfg = load_config(args.config)
             if args.task_file:

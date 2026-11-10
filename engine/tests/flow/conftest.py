@@ -27,6 +27,7 @@ def case(tmp_path):
     cfg = config(tmp_path).model_dump(mode="json", by_alias=True)
     for role, path in scripts.items():
         cfg["models"][role]["script_path"] = path
+    cfg["grounding"] = {"mode": "observe"}
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(cfg))
     return {"source": source, "config": cfg_path, "cfg": cfg, "root": tmp_path / "runs", "tmp": tmp_path}
@@ -46,6 +47,15 @@ def cli(*args, env=None, stdin=subprocess.DEVNULL):
 
 def begin(case, *, delivery="patch"):
     case["config"].write_text(json.dumps(case["cfg"]))
+    script_path = case["cfg"]["models"]["planner"].get("script_path")
+    if script_path:
+        path = Path(script_path)
+        turns = json.loads(path.read_text())
+        for turn in turns if isinstance(turns, list) else []:
+            if isinstance(turn, dict) and turn.get("plan"):
+                for criterion in turn["plan"]["acceptance_criteria"]:
+                    criterion["checks"] = [i for i in criterion.get("checks", []) if i in {c["id"] for c in case["cfg"].get("checks", [])}]
+        path.write_text(json.dumps(turns))
     return cli("run", "--source", case["source"], "--task", "Fix addition", "--config", case["config"],
                "--run-root", case["root"], "--run-id", "test0001", "--delivery", delivery, "--trust-host")
 

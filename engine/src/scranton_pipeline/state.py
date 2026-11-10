@@ -20,7 +20,16 @@ def keep_first[T](left: T, right: T) -> T:
     return left if left else right
 
 
+def merge_lanes(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    return {**left, **right} if right else {}
+
+
 class PipelineState(TypedDict, total=False):
+    wave: dict[str, Any]
+    serial_steps: list[str]
+    waves: list[dict[str, Any]]
+    lanes: Annotated[dict[str, Any], merge_lanes]
+    lane: dict[str, Any]
     run_id: str
     task: str
     source_dir: str
@@ -28,6 +37,11 @@ class PipelineState(TypedDict, total=False):
     workspace: dict[str, Any]
     repo: dict[str, Any]
     baseline: list[dict[str, Any]]
+    plan_revision: int
+    plan_revisions: list[dict[str, Any]]
+    previous_plan: dict[str, Any] | None
+    replan_request: dict[str, Any] | None
+    replan_brief: dict[str, Any] | None
     plan_evidence: list[dict[str, Any]]
     plan_requests: list[dict[str, Any]]
     plan: dict[str, Any] | None
@@ -64,6 +78,10 @@ def current_step(state: PipelineState) -> PlanStep | None:
     plan = get_plan(state)
     index = state.get("step_index", -1)
     return plan.steps[index] if plan is not None and 0 <= index < len(plan.steps) else None
+
+
+def done_ids(state: PipelineState) -> set[str]:
+    return {s["step_id"][5:] for s in state.get("steps_done", []) if s["step_id"].startswith("step:")}
 
 
 def counter(state: PipelineState, key: str) -> int:

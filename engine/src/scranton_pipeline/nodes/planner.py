@@ -6,7 +6,8 @@ from typing import Any
 from scranton_pipeline.agents.prompts import build_planner_prompt
 from scranton_pipeline.errors import EngineError, FailureClass
 from scranton_pipeline.models import Plan, PlannerTurn
-from scranton_pipeline.nodes.common import Dependencies
+from scranton_pipeline.nodes.common import Dependencies, planning_key
+from scranton_pipeline.nodes.grounding import evaluate, repair_evidence
 from scranton_pipeline.state import PipelineState, counter
 from scranton_pipeline.tools.fs import is_dependency_manifest, write_bytes_atomic
 
@@ -16,9 +17,14 @@ def validate_plan(plan: Plan, deps: Dependencies) -> None:
         raise ValueError("Too many plan steps")
     if len({s.id for s in plan.steps}) != len(plan.steps):
         raise ValueError("Duplicate step IDs")
+    from scranton_pipeline.waves import dependencies
+    dependencies(plan.steps)
     criteria = {c.id for c in plan.acceptance_criteria}
     if len(criteria) != len(plan.acceptance_criteria):
         raise ValueError("Duplicate criteria IDs")
+    for criterion in plan.acceptance_criteria:
+        if not set(criterion.checks) <= {c.id for c in deps.cfg.checks}:
+            raise ValueError("Unknown configured check in criterion")
     files: set[str] = set()
     policy = deps.policy()
     for step in plan.steps:
@@ -49,19 +55,42 @@ def invalid(state: PipelineState, deps: Dependencies, node: str, key: str, error
 
 def plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     try:
-        system, user = build_planner_prompt(state, deps.cfg)
-        turn = deps.gateway.complete("planner", system=system, user=user, schema=PlannerTurn).parsed
+        prompt = build_planner_prompt(state, deps.cfg, graph=deps.procedure)
+        system, user = prompt
+        deps.procedure_event("planner", state)
+        turn = deps.gateway.complete("planner", system=system, user=user, schema=PlannerTurn, guidance_bytes=prompt.guidance_bytes).parsed
+        evaluation = evaluate(state, deps, "planner", prompt, turn.model_dump(mode="json"))
+        if evaluation.reject(deps):
+            return {**invalid(state, deps, "plan", planning_key(state, "repairs"), str(evaluation.violations) + " Valid IDs: " + str(prompt.shown)),
+                "plan_evidence": repair_evidence(state, deps, evaluation, "plan_evidence")}
         if turn.kind == "need_context":
-            if counter(state, "plan_context") >= deps.cfg.limits.max_plan_context_rounds:
+            if counter(state, planning_key(state, "context")) >= deps.cfg.limits.max_plan_context_rounds:
                 raise ValueError("No planner context rounds remain")
             return {"plan_requests": [r.model_dump(mode="json") for r in turn.context_requests], "feedback": None}
         assert turn.plan is not None
         validate_plan(turn.plan, deps)
         raw = turn.plan.model_dump(mode="json")
+        revision = state.get("plan_revision", 0)
+        revisions = list(state.get("plan_revisions", []))
+        if revision:
+            used = {s["id"] for entry in revisions for s in entry["plan"]["steps"]}
+            renamed = {}
+            for index, step in enumerate(raw["steps"]):
+                candidate = f"r{revision}:s{index + 1}"
+                while candidate in used:
+                    candidate += "_"
+                renamed[step["id"]] = candidate
+                step["id"] = candidate
+                used.add(candidate)
+            for step in raw["steps"]:
+                if step["depends_on"] is not None:
+                    step["depends_on"] = [renamed[s] for s in step["depends_on"]]
         encoded = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
         write_bytes_atomic(deps.run_dir / "artifacts" / "plan.json", encoded)
+        write_bytes_atomic(deps.run_dir / "artifacts" / f"plan-r{revision}.json", encoded)
+        revisions.append({"revision": revision, "plan": raw, "replaced_reason": None})
         paths = {f.path for s in turn.plan.steps for f in s.files}
-        flags = []
+        flags = ["replan"] if revision else []
         if any(is_dependency_manifest(deps.policy().resolve(p)) for p in paths):
             flags.append("dependency_manifest_change")
         if any(f.action == "delete" for s in turn.plan.steps for f in s.files):
@@ -72,11 +101,11 @@ def plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
             flags.append("ci_or_build_config")
         if any(c["required"] and c["status"] != "passed" for c in state.get("baseline", [])):
             flags.append("baseline_red")
-        return {"plan": raw, "plan_digest": hashlib.sha256(encoded).hexdigest(), "risk_flags": flags,
+        return {"plan": raw, "plan_revisions": revisions, "plan_digest": hashlib.sha256(encoded).hexdigest(), "risk_flags": flags,
                 "plan_requests": [], "feedback": None}
     except ValueError as exc:
-        return invalid(state, deps, "plan", "plan_repairs", str(exc))
+        return invalid(state, deps, "plan", planning_key(state, "repairs"), str(exc))
     except EngineError as exc:
         if exc.failure_class != FailureClass.LLM_OUTPUT:
             raise
-        return invalid(state, deps, "plan", "plan_repairs", exc.detail or exc.message)
+        return invalid(state, deps, "plan", planning_key(state, "repairs"), exc.detail or exc.message)

@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar
 
@@ -18,6 +19,7 @@ from scranton_pipeline.models import Usage
 from scranton_pipeline.observability import EventLog, UsageLedger
 
 T = TypeVar("T", bound=BaseModel)
+call_context: ContextVar[tuple[str, str | None]] = ContextVar("pipeline_call", default=("", None))
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,7 @@ class Completion(Generic[T]):  # noqa: UP046
 
 
 class ModelGateway(Protocol):
-    def complete(self, role: Role, *, system: str, user: str, schema: type[T]) -> Completion[T]: ...
+    def complete(self, role: Role, *, system: str, user: str, schema: type[T], guidance_bytes: int = 0) -> Completion[T]: ...
 
 
 def first_object(text: str) -> Any:
@@ -72,11 +74,7 @@ class ChatModelGateway:
                  ledger: UsageLedger, events: EventLog) -> None:
         self.models, self.cfg, self.ledger, self.events = models, cfg, ledger, events
 
-    def complete(self, role: Role, *, system: str, user: str, schema: type[T]) -> Completion[T]:
-        totals = self.ledger.totals()
-        if (totals.calls >= self.cfg.limits.max_llm_calls or
-                totals.input_tokens + totals.output_tokens >= self.cfg.limits.max_total_tokens):
-            raise EngineError(FailureClass.LIMIT, "llm_budget_exhausted", "Model call/token budget exhausted")
+    def complete(self, role: Role, *, system: str, user: str, schema: type[T], guidance_bytes: int = 0) -> Completion[T]:
         cfg = getattr(self.cfg.models, role)
         model = self.models[role]
         if cfg.structured_output == "json_text":
@@ -84,18 +82,24 @@ class ChatModelGateway:
         cap = self.cfg.limits.max_prompt_bytes - len(system.encode())
         if cap < 0:
             raise EngineError(FailureClass.LIMIT, "prompt_budget_exhausted", "System/schema exceeds prompt budget")
-        user = user.encode()[:cap].decode("utf-8", errors="ignore")
+        allowance = min(max(0, guidance_bytes), self.cfg.procedure.max_bytes) if self.cfg.procedure.enabled else 0
+        user = user.encode()[:cap + allowance].decode("utf-8", errors="ignore")
         started = time.monotonic()
         raw: AIMessage | None = None
         ok = False
         estimated = True
         input_tokens = max(1, (len(system.encode()) + len(user.encode())) // 4)
         output_tokens = cfg.max_output_tokens
+        scope, lane = call_context.get()
+        reservation, role_cursor, scope_cursor = self.ledger.reserve(role=role, model=cfg.model, scope=scope,
+            input_tokens=input_tokens, output_tokens=output_tokens, max_calls=self.cfg.limits.max_llm_calls,
+            max_tokens=self.cfg.limits.max_total_tokens)
         try:
             messages = [SystemMessage(content=system), HumanMessage(content=user)]
             if cfg.structured_output == "json_text":
                 # Command calls own the deadline and must finish tree cleanup before retry.
-                raw = model.invoke(messages) if cfg.provider == "command" else deadline_call(lambda: model.invoke(messages), cfg.timeout_s)
+                options: dict[str, Any] = {"pipeline_cursor": role_cursor, "pipeline_scope_cursor": scope_cursor, "pipeline_scope": scope} if cfg.provider == "scripted" else {}
+                raw = model.invoke(messages) if cfg.provider == "command" else deadline_call(lambda: model.invoke(messages, **options), cfg.timeout_s)
                 assert raw is not None
                 text = raw.content if isinstance(raw.content, str) else json.dumps(raw.content)
                 output_tokens = max(1, len(text.encode()) // 4)
@@ -128,7 +132,6 @@ class ChatModelGateway:
                 output_tokens = raw.usage_metadata["output_tokens"]
                 estimated = False
             duration = time.monotonic() - started
-            self.ledger.record(role=role, model=cfg.model, input_tokens=input_tokens,
-                               output_tokens=output_tokens, ok=ok, duration_s=duration)
+            self.ledger.finish(reservation, input_tokens=input_tokens, output_tokens=output_tokens, ok=ok, duration_s=duration)
             self.events.emit("llm_call", role=role, model=cfg.model, ok=ok, input_tokens=input_tokens,
-                             output_tokens=output_tokens, duration_s=duration, estimated=estimated)
+                             output_tokens=output_tokens, duration_s=duration, estimated=estimated, **({"lane": lane} if lane else {}))

@@ -28,6 +28,8 @@ def run_checks(checks: Sequence[CheckConfig], *, sandbox: Sandbox, log_dir: Path
                                  duration_s=result.duration_s, output_tail=result.output_tail,
                                  log_path=str(path), required=check.required)
         except EngineError as exc:
+            if exc.code == "docker_failed":
+                raise
             record = CheckResult(id=check.id, kind=check.kind, status="error", exit_code=None,
                                  duration_s=0, output_tail=Redactor().redact(str(exc)),
                                  log_path=str(path), required=check.required)

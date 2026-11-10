@@ -924,3 +924,441 @@ p. `report.md` is a readable Markdown document (outcome, task, plan + acceptance
    a JSON dump. `report.json` stays the machine-readable form.
 q. `RunStatus` text fields are truncated AFTER redaction; `progress` is correct in every state (never
    `step_index == step_count` with `attempt 0` while a run is unfinished; a finished run reports the last step).
+
+---------------------------------------------------------------------------------------------------
+## 16. Re-planning (2026-11-10) - bounded, deterministic, human-gated
+
+Why: a plan can turn out wrong (step blocked, edits never apply, checks never pass). Until now that ended the
+run. Re-planning lets the planner revise the REMAINING work once the evidence exists, without giving the model
+any control over when that happens.
+
+- New limit `limits.max_replans` (default 1, hard ceiling 3; 0 = off, exactly the old behaviour).
+- Triggers (Python decides, in the node that exhausts the bound): implementer returns `blocked`; edit attempts of
+  a step exhausted (`apply_edits`); required checks still failing when the step's attempts are exhausted
+  (`verify`); a parallel lane ending in one of these (section 17); integration repair exhausted (section 17).
+  NOT replannable (stay terminal): `security`, `limit`, `infrastructure`, `llm_output` exhaustion, review rounds
+  exhausted, cancel, reject.
+- Mechanism: when a trigger fires and `counter(state, "replans") < max_replans`, the node sets
+  `replan_request = {code, message, scope, node}` instead of `failure`. Routing sends `replan_request` to the
+  new Python node `replan` (17th node). `replan`: resets the workspace to `green_commit` (the failed attempt is
+  discarded, completed steps are kept), adds 1 to `replans`, increments `plan_revision`, stores
+  `replan_brief = {reason code + message, failed step, completed step ids, changed files so far}`, clears
+  `plan`, `plan_requests`, `plan_evidence`, `plan_approval`, the step/wave cursor, `feedback`, `pending_edits`,
+  `replan_request`, and emits `replanned`. Edge `replan -> plan`.
+- `plan` in a revision > 0: the prompt carries the brief, the previous plan, the completed steps and the current
+  diff summary; the model returns a full `Plan` for the REMAINING work only (same schema, same semantic
+  validation against the current workspace). Context-round and repair counters are per revision
+  (`plan_context:r<rev>`, `plan_repairs:r<rev>`). Step ids must be unique across revisions - Python guarantees it
+  (deterministic renaming at acceptance, never by asking the model), so counters and `steps_done` can not collide.
+  `artifacts/plan.json` is always the current plan; every accepted revision is also kept as
+  `artifacts/plan-r<rev>.json`.
+- Gate: a revised plan ALWAYS adds the risk flag `replan`, so `auto_low_risk` cannot auto-approve it. The gate
+  payload gains `revision` and `replan_reason`. Rejecting it ends the run `rejected` with the last green state
+  as partial diff.
+- Bounds: `recursion_limit` must stay a true upper bound including replans (property test). The global model
+  budgets are unchanged, so re-planning can never spend more than the run was allowed.
+- Wire (additive): `RunStatus.progress.plan_revision` (0 = original), `progress.replans_left`;
+  `pending` of the plan gate gains `revision`, `replan_reason`; events `replan_requested {code, message, scope}`,
+  `replanned {revision}`; route reasons `replan_requested`, `replanned`. The report lists every plan revision
+  with the reason for the next one.
+
+---------------------------------------------------------------------------------------------------
+## 17. Parallel step execution (2026-11-10) - parallel lanes, single merger
+
+Principle kept: the main workspace still has ONE writer. Parallel steps run in private lane workspaces; a
+deterministic Python node merges their results one after another.
+
+- Plan schema: `PlanStep.depends_on: list[str] | None = None`. `None` = depends on every earlier step (today's
+  sequential behaviour); `[]` = independent. Python validates ids and acyclicity (violation = invalid output).
+- Config: new section `execution: { "max_parallel_steps": 1, "max_lane_workspace_bytes": 536870912 }`
+  (1..4; 1 = off = exactly the old behaviour).
+- Waves (pure function, table-tested): ready = not-done steps whose dependencies are all done, in plan order;
+  the wave takes ready steps greedily while their declared file sets stay pairwise DISJOINT and the size stays
+  <= `max_parallel_steps`. A wave of one step uses the existing sequential path unchanged (no copy).
+- Lane (wave of >= 2): a full copy of the main workspace directory (tracked, untracked and ignored files, so
+  installed dependencies come along; refused -> sequential fallback with a `warning` when the workspace exceeds
+  `max_lane_workspace_bytes`) with its OWN external git directory under `<run-dir>/lanes/<wave>-<n>/git`. Lane
+  workspaces live next to the main workspace with short names. Each lane runs the SAME explicit loop as the
+  sequential path (implement <-> implement_context, apply_edits, verify) as a compiled lane graph, with its own
+  sandbox bound to the lane directory, `step`-scope checks only, scope policy forced to `strict` (only the
+  step's declared files), its own per-step counters and the shared gateway, ledger, event log, stop signal.
+  Lanes never touch the main workspace, the main git directory or the source.
+- Graph: `select_step` computes the wave. One step -> `implement` (as today). Several -> fan-out with `Send` to
+  the node `run_lane` (bounded by `max_parallel_steps`), then the Python node `merge_wave`, then `verify` in
+  mode `integration`. The fan-out target and its path_map are static; only the payloads are data.
+- Lane graph (proven variant 7(a) of FACTS-2): ONE statically compiled subgraph, added to the main graph as the
+  node `run_lane` and targeted by `Send`. Its nodes are explicit: `lane_prepare` (Python: create the lane copy
+  and its git dir; replay-safe - an incomplete copy is rebuilt) -> `implement` <-> `implement_context` ->
+  `apply_edits` -> `verify` -> (bounded loop, same routing functions with a lane path_map) -> `lane_finish`
+  (Python: build the lane result). The lane state uses the same key names as `PipelineState` for everything the
+  shared node functions read and write, so the functions are reused unchanged; lane-specific `Dependencies`
+  (workspace, git dir, sandbox name suffix) are derived per call from the lane state. ONLY these keys may flow
+  back to the parent: `lanes` (dict keyed by step id, merging reducer), `counters`, `active_seconds`, `history`
+  - restrict the subgraph's output accordingly and PROVE with a script that nothing else (in particular
+  `workspace`, `failure`, `feedback`, `step_index`) reaches the parent before relying on it.
+  Inner steps are checkpointed by LangGraph under the lane's namespace: after a crash the lane resumes at the
+  inner node that was running, and lanes that already finished are NOT re-run (their writes are kept as
+  pending writes) - both proven; `max_concurrency` (top-level config key) bounds the lanes running at once;
+  the join `run_lane -> merge_wave` runs once per wave; the parent's `recursion_limit` counts inner supersteps.
+- `merge_wave` (the single writer): in plan order, for every lane that passed: copy exactly the files the lane
+  changed (bytes as committed in the lane) into the main workspace and commit them; append the `StepRecord`.
+  If two lanes changed the same path despite the disjointness rule, the later one is NOT merged and its step
+  simply stays not-done (it runs again later, sequentially). Lane directories are removed after the merge.
+  Lane outcomes: `security` in any lane -> terminal failure; cancelled -> `cancelled`; blocked / attempts
+  exhausted -> `replan_request` (section 16) when replans are left, else failure - passed lanes are merged first.
+- Integration: after a merge of >= 2 lanes, `verify` runs on the merged tree (scope id `int:<wave>`, plus
+  `final`-scope checks when nothing is left). Failure -> one bounded repair loop in the main workspace (mode
+  `integration`, declared files = union of the merged steps' files, `max_step_attempts`), then
+  `replan_request` / failure.
+- Shared resources under concurrency: the usage ledger checks and reserves a call atomically (no overshoot by
+  racing lanes); the scripted model picks its next answer by (role, scope) so parallel runs and restarts are
+  deterministic; Docker container names include the lane; events from lanes carry `lane: <step id>`.
+- Wire (additive): `RunStatus.progress.lanes: [ { step_id, title, state: "running"|"passed"|"failed"|"merged",
+  attempt } ]` (empty outside a parallel wave), `progress.steps_done`; events `wave_started {wave, steps}`,
+  `lane_started {lane}`, `lane_finished {lane, status}`, `wave_merged {wave, merged, failed}`; route reasons
+  `parallel_wave`, `wave_merged`, `integration_failed`.
+- LangGraph mechanics (`Send` only from a conditional edge with a `path_map`, payload-only input, concurrency
+  limit, joins, failure and resume semantics of a fan-out, subgraph variants) are proven in
+  `.scratch/pipeline/api-spike2/FACTS-2.md` - use what is proven there, never an assumption. Do NOT use the
+  wrapper-node variant with `checkpointer=False` (it needs an internal config key). The documented diagram is
+  `get_graph(xray=True).draw_mermaid()` so the lane loop is visible.
+
+---------------------------------------------------------------------------------------------------
+## 18. Docker sandboxing (2026-11-10) - from "adapter exists" to a usable, hardened default
+
+State before: `tools/sandbox.py: DockerSandbox` runs each command in an ephemeral container (`--network none`,
+cap-drop, limits), one opt-in live test passed; but there is no suitable image, no hardening of the root
+filesystem/user, no way to see or fix "Docker/image missing" from the app, and it was never run end to end.
+
+- Image: `scranton-pipeline-sandbox:<engine version>`, defined by a Dockerfile shipped INSIDE the Python package
+  (`engine/src/scranton_pipeline/sandbox_image/Dockerfile`, so it is staged with the app automatically):
+  Debian slim base with CPython 3 (+ pip, venv, pytest), Node.js LTS + npm, git, a non-root user `sandbox`
+  (uid/gid 10001), `WORKDIR /workspace`, no ENTRYPOINT. Any other local image can be named in the config/UI.
+- Container per command (kept: ephemeral, `--rm`, `--pull never`, killed by name on timeout/stop), hardened:
+  `--read-only` root filesystem, `--tmpfs /tmp` (size-limited, exec allowed), `--user 10001:10001`,
+  `--cap-drop ALL`, `--security-opt no-new-privileges`, `--network none` (bridge only for `setup` commands that
+  opt in), cpu / memory (+ swap = memory) / pids limits, label `scranton.pipeline.run=<run-id>`, only the
+  workspace mounted (`/workspace`), no Docker socket, no host environment. A fixed environment makes installs
+  land where the next container can see them: HOME and caches on the tmpfs, user-level Python installs and
+  npm installs inside the workspace under an engine-owned, git-excluded directory (`.pipeline/`), `PATH`
+  including the workspace-local bin directories. `sandbox.docker` gains `tmpfs_mb` (default 512).
+- Lifecycle: `preflight` distinguishes `docker_unavailable` (CLI/daemon) from `image_missing` (with the build
+  hint) and runs before anything else in `prepare_workspace`; containers of this run that are still alive
+  (label filter) are killed at run start, on resume and in `finalize`. Never touch a container or image
+  without that label / name prefix.
+- CLI: `python -m scranton_pipeline sandbox check [--image NAME]` -> `{"docker": {"available", "version",
+  "reason"}, "image": {"name", "present"}, "default_image": "..."}` (exit 0 whenever it can answer);
+  `sandbox build [--image NAME]` builds the packaged Dockerfile (build output on stderr, one JSON line
+  `{"built": bool, "image", "reason"}` on stdout, exit 0 or 5); `demo` gains `--sandbox host|docker [--image NAME]`.
+- Node/UI: `GET /api/pipeline` `sandbox` becomes `{ dockerImage: <default image name>, docker: { available,
+  version, reason }, image: { name, present }, build: { state: "idle"|"running"|"succeeded"|"failed",
+  startedAt, finishedAt, tail } }` (probe cached for a few seconds). `POST /api/pipeline/sandbox/build` (body
+  `{}`) starts ONE background build through the engine CLI (202; 409 while one runs; 503 without Docker). The
+  run form preselects Docker when Docker is available and the image is present; otherwise it says exactly what
+  is missing and offers "Build sandbox image" (with live tail) or Trusted host with the acknowledgement.
+- Run request additions (section 9 API, all optional): `replans: 0..3` (default 1), `parallelSteps: 1..4`
+  (default 1 on the server; the form defaults to 2).
+- Verification required: unit tests pin the exact argv; opt-in live tests (`SCRANTON_PIPELINE_DOCKER_TEST=1`,
+  rules of section 8, plus: the lane may build `scranton-pipeline-sandbox:<version>` ONCE from the packaged
+  Dockerfile, which pulls its base image) prove: root filesystem read-only, non-root uid, no network, workspace
+  writable, a workspace-local Python install made by a setup command is visible to a later check, timeout kill,
+  orphan cleanup by label, and one full `demo --sandbox docker` run through both gates.
+
+---------------------------------------------------------------------------------------------------
+## 19. Demo scenarios through the app (2026-11-10) - live verification without model calls
+
+- Engine: `demo --scenario basic|replan|parallel` (default `basic`), combinable with `--sandbox host|docker
+  [--image NAME]`. `replan`: the first plan's step is blocked, the revised plan succeeds. `parallel`: two
+  independent bugs in two files, two `depends_on: []` steps, `max_parallel_steps = 2`.
+- Run request (section 9): `demoScenario?: "basic" | "replan" | "parallel"` - accepted only together with
+  `demo: true` (400 otherwise), default `basic`. A demo run now also honours `sandbox.mode` / `sandbox.image`
+  (in addition to `delivery`): `host` needs no `trustHost` for the bundled fixture; `docker` is refused with the
+  usual 409 when Docker or the image is missing. Node passes `--scenario`, `--sandbox`, `--image` to `demo`.
+- UI: while "Demo run" is checked a "Scenario" select (Basic fix / Re-planning / Parallel steps) is shown and
+  the sandbox choice stays operable; all other pipeline fields stay disabled.
+- Fake engine: `demo --scenario replan|parallel` select its re-planning / parallel scenarios.
+
+---------------------------------------------------------------------------------------------------
+## 20. Amendments after the second-round review (2026-11-10) - binding over sections 17/18 where they differ
+
+- Sandbox state directory: NOT inside the workspace. One engine-created directory per run under the run directory
+  is the only thing mounted at `/workspace/.pipeline` - read-write for `setup` commands, read-only for checks;
+  lanes mount the same run-level directory read-only. The mount-point directory inside the workspace stays
+  protected, git-excluded and out of every diff and snapshot. (A nested read-only mount over a directory that
+  lives inside the writable workspace mount can be bypassed through another spelling of the path on a
+  case-insensitive share.)
+- File lists never go on a git command line (Windows limit 32,767 characters): pathspecs are passed through
+  `--pathspec-from-file` / stdin.
+- Checks only ever run on the tree at `head_commit`; a replay after a crash must re-establish that before checking.
+- Container removal after a killed Docker CLI observes a bounded window for a late-created container; `docker rm -f`
+  exiting 0 is not proof the container existed.
+- Environment values are registered for redaction only when they can be secrets (minimum length, not a
+  boolean/number/common word/existing path); variables named by the configuration are always registered.
+
+---------------------------------------------------------------------------------------------------
+## 21. Evidence grounding (iteration 3, 2026-11-10; source: GroundEval, arXiv 2606.22737)
+
+Idea taken from the paper: an output can be plausible, even correct, and still be *state-invalid* - it rests on
+something the model was never shown, on something that is no longer true of the workspace, or on an absence
+nobody checked. A judge model reading prose cannot see that; the recorded trace can. So: Python records what
+every model was shown, decides deterministically whatever can be decided without a model, makes the models
+point at evidence where a judgement remains, and scores the run from the trace. All standing rules of sections
+2, 3, 7 hold: no new model-chosen route, no new unbounded loop, state stays JSON primitives.
+
+21.1 Evidence IDs. Every unit of project state shown to a model has an ID visible next to it in the prompt:
+`E-<10 hex>` context item (read / search / list result), `K-<10 hex>` check result (one check, one stage, one
+commit), `H-<10 hex>` one hunk of the candidate diff. Pattern `^[EKH]-[0-9a-f]{10}$`. An ID is a pure function
+of the item (kind, locator, content hash, for K also check id + stage + commit + status + exit code): same item
+-> same ID, no clocks, no counters. `ContextItem` carries `evidence_id`; check result dicts shown to a model
+carry `evidence_id`; the reviewer's diff is shown as individually addressable hunks.
+Registry `<run-dir>/evidence.jsonl` (append-only, same lock discipline as `usage.jsonl`), one row per ID first
+seen: `{"id","kind","path","start_line","end_line","query","check_id","stage","commit","sha256","bytes",
+"truncated","ok"}`. No content is stored (it is in the workspace history at `commit`).
+"Shown" means: present in the final prompt text AFTER truncation. The prompt builder returns the kept IDs.
+An item whose file content no longer equals its `sha256` is stale: Python refreshes or drops stale items when
+it builds a prompt, so a model is never shown a stale item as current.
+
+21.2 Rules Python decides without any citation (preferred - a rule that needs no citation cannot be gamed):
+- P1 seen-before-plan: every `FileIntent` with action `modify` or `delete` names a file that was shown to the
+  planner (a successful `read` of that path, any range) in this plan revision. Violation `unseen_target`.
+- I1 seen-before-edit: an edit that overwrites (`modify` with `content`) or deletes an existing file needs that
+  file shown in full, untruncated and current, in the prompt that produced the edit; a `modify` with
+  `replacements` needs the file shown (any range, current). Violation `unseen_edit`.
+- C1 criteria decided by checks: `Criterion` gains `checks: list[Short] = []`. With `verified_by: "checks"` the
+  listed ids must be configured check ids; an empty list means "all required checks". The planner prompt lists
+  the configured checks (id, kind, required, baseline status). Python - not the reviewer - decides these
+  criteria from the check results on `head_commit`: met iff every named check passed. The reviewer assesses
+  exactly the `verified_by: "review"` criteria; assessments it returns for check-decided criteria are ignored
+  (recorded, no effect). `approve` is refused by Python while a check-decided criterion is not met.
+- C2 demonstration (the paper's counterfactual track: a join condition instead of "it is green now"): a met
+  check-decided criterion is `demonstrated` iff one of its checks failed (or could not run) at baseline and
+  passes now. Otherwise it is `met_not_demonstrated`: the check passed before the change too, so it is no
+  evidence that the change achieved anything.
+- C3 counterfactual probe (`grounding.counterfactual: "auto" | "off"`, default "auto"): runs when some
+  criterion is `met_not_demonstrated`, the change contains test files (`grounding.test_globs`, default
+  `tests/**`, `test/**`, `**/test_*.py`, `**/*_test.*`, `**/*.test.*`, `**/*.spec.*`) AND non-test files. In a
+  private copy (the lane copy mechanism, own sandbox, state mounted read-only) Python restores every changed
+  non-test file to its `base_commit` state, keeps the changed test files, and runs the named checks of kind
+  `test`. Check fails -> the criterion becomes `demonstrated` (by `probe`: the new tests fail without the
+  change). Check passes -> stays `met_not_demonstrated`. Timeout / error / copy unavailable -> probe
+  `inconclusive`, never a run failure. At most one probe per approved review; its time counts against
+  `max_active_seconds`.
+
+21.3 Claims that need pointing (schema additions; the JSON schema shown to models updates by itself):
+- `CriterionAssessment.citations: list[EvidenceId] = []` - a `met` assessment needs >= 1 citation of an H- or
+  K- item shown in that review prompt. Violation `unsupported_assessment`.
+- `Finding.citations: list[EvidenceId] = []` - a `blocking` or `major` finding needs >= 1 such citation; a
+  finding's `path` must be a changed file. Violation `unsupported_finding`.
+- Any cited ID that was not shown in that very prompt: violation `unknown_citation`.
+- Silence (absence must be verified, not asserted): `AbsenceClaim {kind: "missing_file" | "missing_symbol",
+  subject: Short, paths: list[PathText] = []}`. `ImplementerTurn.blocked_claim: AbsenceClaim | None` (with
+  kind `blocked`, next to `blocked_reason`), `Plan.absent: list[AbsenceClaim] = []` (things the plan relies on
+  NOT existing). Python searches the declared space itself - every workspace file the policy lets models read,
+  narrowed by `paths` globs: `missing_file` = no file with that path or basename (case-insensitive);
+  `missing_symbol` = no literal whole-word, case-sensitive occurrence. Absent -> event `absence_verified`
+  (files searched), and a re-plan brief carries `verified_absence` so the planner treats it as a fact.
+  Present -> violation `false_absence`; the hits (path:line, bounded) are returned as feedback and added to the
+  evidence. A `blocked` turn without a claim is `unverifiable` (recorded, no violation, behaves as before).
+  A refuted block is rejected once per step scope; if the model blocks again the old path (re-plan / failure)
+  runs and its brief carries the refutation (`absence_refuted` with the hits).
+
+21.4 Enforcement. `grounding.mode: "enforce" | "observe"` (default "enforce"). enforce: an output with a
+violation is invalid and goes through the EXISTING bounded output-repair path of its role (same counters, same
+limit, feedback names the violation and lists the valid IDs / the missing files; for `unseen_target` and
+`unseen_edit` Python adds the missing reads to the next prompt itself). observe: nothing is rejected, everything
+is recorded and scored. C1-C3 are facts and apply in both modes.
+
+21.5 Trace `<run-dir>/grounding.jsonl` (append-only, locked): one row per model output Python evaluated -
+`{"seq","ts","type":"output","role","scope","node","lane","shown":[ids],"cited":[ids],
+"violations":[{"kind","detail"}],"absence":{"verified":n,"refuted":n,"unverifiable":n},
+"targets":{"total":n,"seen":n},"accepted":bool}` - and one row `{"type":"criteria","criteria":[...],
+"probe":{...}}` each time the criteria are decided (the last one counts). The first row of the file is
+`{"type":"settings","mode":"enforce"|"observe","weights":{...}}`, written once when the run is created (never
+on resume): the trace describes itself, so `score` reproduces a run's numbers without its config.
+Violation kinds (closed): `unknown_citation`, `unsupported_assessment`, `unsupported_finding`, `unseen_target`,
+`unseen_edit`, `false_absence`, `protected_request` (a context request for a protected or outside path),
+`out_of_scope_edit` (an edit outside the step's declared files, where the engine already rejects that).
+
+21.6 Scores - one pure function of the trace (`grounding.py`), 4 decimals, no clocks:
+- `violation_rate` v = outputs with >= 1 violation / outputs evaluated (0 when none).
+- `answer` = criteria met / criteria (0 while undecided). In `eval` (section 22) it is replaced by hidden ground truth.
+- `trajectory` = mean of the applicable components: `citations` (valid cited IDs / cited IDs), `targets`
+  (seen / total, planner targets and implementer edits), `absence` (verified / (verified + refuted +
+  unverifiable)), `proof` ((demonstrated + review-met with a valid citation) / criteria met). A component with
+  an empty denominator is not applicable; no applicable component -> 1.0.
+- `unadjusted` = w_a * answer + w_t * trajectory; `adjusted` = unadjusted * (1 - v)^2 (the paper's
+  compliance-adjusted score; default weights 0.5 / 0.5, `grounding.weights`).
+- `tier` (our thresholds - the paper names none): `clean` v = 0, `minor` v <= 0.10, `major` v <= 0.25, else `failing`.
+Criterion states: `demonstrated`, `met_not_demonstrated`, `attested` (review, met, valid citation), `not_met`,
+`unclear`, `undecided`.
+
+21.7 Graph. One new node `ground` on the edge `review -> package` (review approves -> `ground` -> `package`;
+static edge out; phase `review`): decides the criteria (C1-C3), computes the scores, writes
+`artifacts/grounding.json`, emits `criteria_decided` and `probe_finished`. It can only fail the run through
+the standing limits (time, cancel). `limits.recursion_limit`, `docs/graph.mmd` and their pin tests follow.
+Risk flags on the delivery gate (in the digest): `criteria_not_demonstrated`; `grounding_violations` iff an
+ACCEPTED output carried a violation (amended 2026-11-10 07:00: in `enforce` every violation was rejected and
+repaired, so nothing ungrounded is being delivered and the flag stays off - the counts are still shown and
+still lower the score; in `observe` such output was accepted, and that is the risk the flag names). `report.md` / `report.json` get a Grounding section (scores, violations by kind,
+criteria with state and how it was decided, probe).
+CLI `score --run-dir <dir>`: recomputes the summary from `grounding.jsonl` alone and prints it (one JSON
+line, exit 0; exit 2 when the directory is not a run). It must equal `status.grounding` for every finished
+run - that is the determinism property (re-scoring an identical trace gives an identical score).
+
+---------------------------------------------------------------------------------------------------
+## 22. Judge-free evaluation suite (regression gate; GroundEval sections 3, 4, 6)
+
+`eval --pack <dir | builtin name> [--config <file>] [--graph <file>] [--tasks a,b] [--split train|val|all]
+[--models scripted|config] [--out <dir>]`. No model judges anything: a task's answer score is hidden ground
+truth, its trajectory score is section 21, the result is the adjusted score.
+Pack: `pack.json` `{"schema":1,"name","tasks":[{"id","track":"baseline|silence|perspective|counterfactual",
+"split":"train|val","fixture":"<dir with the project files>","task":"<text>","checks":[CheckConfig],
+"acceptance":{"checks":[CheckConfig],"paths":[globs the change may touch]},"scripts":{"planner":file,
+"implementer":file,"reviewer":file},"expect":{"status","violations":{kind:n},"adjusted":number,
+"min_adjusted":number,"criteria":{id:state}}}]}`.
+Per task: materialize the fixture as a fresh git repo, run the engine in-process with delivery `patch`, gates
+decided by the harness (`by: "eval"`, always approve), then on the delivered tree run the `acceptance` checks,
+which no model ever saw. `answer` = 1 if the run succeeded, every acceptance check passed and every changed
+path matches `paths`, else 0. `adjusted` per 21.6 with that answer. Output `<out>/eval.json`
+(`{"schema":1,"pack","graph_digest","tasks":[{id, status, answer, trajectory, violation_rate, adjusted, tier,
+violations, criteria, expect_met}],"mean_adjusted"}`; timings live outside the scored part) and one JSON line
+on stdout. Exit 0 when every task meets its `expect`, 4 when one does not, 2 for an invalid pack.
+`--models scripted` (default) uses the pack's scripts and is fully deterministic: two runs give byte-identical
+scored output. `--models config` uses the models of the config (real calls; never started by tests or tools).
+Built-in pack `core` (package data, scripted): a clean baseline task; one task per violation kind that a
+scripted model can provoke (false absence, unseen overwrite, unknown citation, unsupported assessment, unseen
+plan target); one where the criterion's check was already green (stays `met_not_demonstrated`); one where the
+probe demonstrates new tests. Each pins its exact expected scores - the suite is the regression gate for the
+harness itself.
+
+---------------------------------------------------------------------------------------------------
+## 23. Procedural guidance graph (source: Procedural Graphs, arXiv 2609.09153)
+
+What is taken over: procedural knowledge as data - (procedure, relation, procedure) triplets with edge
+attributes `condition`, `guidance`, `pitfalls`; exact-match localization of the active node; guidance from the
+local neighbourhood only (the paper's ablation: injecting the whole graph hurts some task types); offline
+self-evolution with a validation gate ("preserve or improve", ties accepted) and a memory of rejected edits.
+What is deliberately different: (1) the EXECUTING graph, routing, permissions, tools and bounds never change -
+the procedural graph only produces advisory prompt text; (2) guidance is rendered deterministically, without
+the paper's per-step guidance model (reported token overhead +33 % to +85 %, and a model-written instruction
+layer between Python and the roles is what this harness avoids); (3) it is OFF by default: the paper reports a
+hand-written prior that dropped one benchmark from 87.5 % to 58.9 %, and the graph shipped here is such an
+unvalidated prior until `evolve` / `eval` have run with real models.
+
+23.1 Data. `{"schema":1,"name","nodes":[{"id","type":"SITUATION"|"TERMINAL","description"}],
+"edges":[{"from","relation":"LEADS_TO"|"TRIGGERS"|"PROVIDES_INPUT_FOR"|"CONVERGES_TO","to","condition",
+"guidance","pitfalls"}]}`. Valid iff: unique node ids; edge endpoints exist; no duplicate (from, relation, to);
+every node reaches a TERMINAL node; SITUATION ids come from the vocabulary below; <= 64 nodes, <= 160 edges,
+every text <= 400 characters without control characters and without the prompt delimiters (`<<<`, `>>>`).
+Cycles are allowed (the workflow has repair loops). Digest = sha256 of the canonical JSON.
+Vocabulary (closed): planner `plan.start`, `plan.context`, `plan.repair`, `plan.replan`; implementer
+`implement.start`, `implement.context`, `implement.repair`, `implement.edits_rejected`,
+`implement.checks_failed`, `implement.review_changes`, `implement.integration`; reviewer `review.start`,
+`review.repair`, `review.recheck`; terminals `done`, `blocked`.
+23.2 Localization. `situation(role, state) -> id`: pure, total, derived from state only (role, mode, feedback
+kind, counters) - the equivalent of the paper's `Match(a_{t-1}, V)`. A situation the graph has no node for
+gets no guidance (the paper falls back to the whole graph; see the ablation above).
+23.3 Rendering. Active node plus outgoing edges up to `procedure.hops` (default 2, the paper's default),
+deterministic order, capped at `procedure.max_bytes` (default 1500, whole edges only). It is placed as control
+data under the key `guidance`, introduced as "Procedural guidance (advisory - the rules and the schema always
+win)". Nothing in Python reads how the model reacted to it.
+23.4 Config and identity. `procedure: {"enabled": false, "graph": null | "<file>", "hops": 2, "max_bytes":
+1500}`; `graph: null` = the packaged default. The graph is validated at start (invalid -> exit 2), copied to
+`<run-dir>/artifacts/procedure.json`, and its digest is pinned in `run.json`; a resume uses the copy. Event
+`procedure {role, scope, situation, matched}` once per model call; `status.procedure = {"enabled","name",
+"digest","situation"}`.
+23.5 Evolution (offline operator command, never part of a run): `evolve --pack <pack> --graph <file |
+"skeleton" | "default"> --out <dir> [--rounds K<=20] [--config <file>] [--models scripted|config]
+[--max-seconds N]`. Per round: roll out the train split with the current graph; give the refiner model
+(config `models.refiner`; scripted in tests) the current graph, the vocabulary, failed versus successful traces
+(situation paths, outcomes, failure codes, grounding summaries; tail-trimmed to a byte cap) and the rejection
+history; it returns one schema-validated edit set `{"add_nodes","delete_nodes","add_edges","delete_edges",
+"rationale"}` (an attribute change = delete + add, as in the paper). `prepare_candidate` (pure) applies and
+validates it (23.1); an invalid candidate is rejected without a rollout. A valid candidate is scored on the
+val split (mean adjusted score, section 22) and accepted iff `S_val(candidate) >= S_val(current)`; otherwise
+it goes to the rejection history with its diagnostics, which the next round's refiner is shown. Output:
+`graph-r<k>.json` per accepted round, `best.json`, `evolution.jsonl`, `rejected.jsonl`. One refiner call per
+round, bounded output repairs, usage in the ledger. `evolve` never writes into the package or a config - a
+graph becomes active only when an operator points `procedure.graph` at it. "skeleton" = `plan.start -> done`.
+
+---------------------------------------------------------------------------------------------------
+## 24. Wire additions for sections 21-23 (binding for engine, fake engine, Node and UI)
+
+Request (HTTP `POST .../pipeline/runs`, both optional): `grounding: "enforce" | "observe"`, `guidance:
+boolean`. Node writes them to the engine config as `grounding.mode` and `procedure.enabled`; other values -> 400.
+Status (additive, `schema` stays 1):
+`"grounding": {"mode":"enforce","answer":1.0,"trajectory":0.875,"unadjusted":0.9375,"violation_rate":0.1667,
+"adjusted":0.651,"tier":"major","outputs":6,"violations":{"false_absence":1},
+"criteria":[{"id":"c1","verified_by":"checks","state":"demonstrated","by":"baseline","checks":["unit"]}],
+"probe":{"status":"not_needed"}}` - `criteria[].by` is one of `baseline`, `probe`, `review`, `none`;
+`probe.status` one of `not_needed`, `demonstrated`, `not_demonstrated`, `inconclusive`, `off`; before the first
+evaluated output the object is present with zero counts and `criteria: []`.
+`"procedure": {"enabled":false,"name":null,"digest":null,"situation":null}`.
+Delivery gate: `pending.grounding` = the same object; `pending.risk_flags` may contain
+`criteria_not_demonstrated`, `grounding_violations` (the latter only when an accepted output carried a
+violation, i.e. in `observe` mode - see 21.7).
+Events: `grounding {role, scope, accepted, violations:[kind], cited:n, shown:n, lane?}`,
+`absence_verified {kind, subject, files_searched}`, `criteria_decided {states:{state:n}}`,
+`probe_finished {status, checks:[id]}`, `procedure {role, scope, situation, matched}`.
+New node name in events and `status.node`: `ground` (phase `review`).
+
+---------------------------------------------------------------------------------------------------
+## 25. Amendments after the review of sections 21-24 (2026-11-10) - binding where they differ
+
+- 21.1 refresh: a stored evidence item is re-read only when its file's hash changed, each on its own item
+  budget. Refreshing never makes an item unavailable because other items used up a shared budget.
+- 21.2 Python's own reads: whatever Python is supposed to put in front of a model (the repair reads for P1 / I1,
+  the step's files when a step is revised after a review) is Python's job. An edit or plan is never a model
+  violation because Python failed to supply a read; if Python cannot supply it (budget, unreadable file), the
+  output is not rejected for that rule and the trace row says `unverifiable_target`.
+- 21.2 C1: the reviewer prompt shows the Python-decided criteria as decided facts (id, state, checks, K- IDs).
+  An approving review while a check-decided criterion is not met is turned by Python into `request_changes`
+  with a Python-written finding naming the criterion, the failing check and its output tail - the normal
+  revision path, bounded by `max_review_rounds`. It is not an invalid output.
+- 21.2 C3: the probe needs a control. In the same private copy the named test checks must PASS with the change
+  and then FAIL with the non-test files restored. Control fails -> `inconclusive`. Stated limit: "fails without
+  the change" includes tests that cannot even import the code the change added.
+- 21.3 absence: `paths` globs and `missing_file` subjects are normalised like the path policy (separators,
+  leading `./`, case-insensitive match); what cannot be normalised is an invalid output through the normal
+  repair path - never a verified absence, never a run failure. Files that are not text are not part of the
+  search space (models cannot read them either). The claim that is verified is "not found in the files models
+  may read" - protected files are outside it, and every wording says so.
+- 21.5 scope: trace rows and the `grounding` / `procedure` events use `plan:r<revision>` for the planner,
+  `review:<round>` for the reviewer, the step / integration scope for the implementer.
+- 23.3 budget: guidance has its own allowance (`procedure.max_bytes`) ON TOP of `limits.max_prompt_bytes`.
+  Enabling guidance never changes which evidence is shown, so it cannot change a P1 / I1 verdict.
+- 23.5: a rejection-history row is bounded (edit, reason, scores; at most 2 KB) so the history never empties
+  because one row is large.
+Stated limits (accepted, documented, not fixed): a citation is valid when its ID was shown - that proves the
+item was available, not that it supports the claim; `attested` counts like `demonstrated` in the `proof`
+component although it is a model's judgement; the refiner sees the validation scores of rejected candidates
+(over many rounds that can overfit the val split); with scripted models every valid candidate ties and is
+accepted, so scripted evolution demonstrates the mechanism, not an improvement.
+
+### 25b. After the second review round (2026-11-10 09:00) - binding, supersedes 25 where they differ
+
+- I1 and `unverifiable_target`: the waiver for reads Python could not supply covers ONLY `modify` with
+  `replacements` and `delete`, and only when the file was shown at least in part and current. A full overwrite
+  (`modify` with `content`) always needs the file shown in full, untruncated and current - if that is
+  impossible (file larger than the item budget) the edit is `unseen_edit` and the feedback says to use
+  `replacements`. Reads that Python supplies are never evicted from a prompt before the model's own reads.
+- Review: an `approve` that contradicts the reviewer's own assessments (`not_met`) or its own `blocking`
+  findings is an invalid output, as before iteration 3. Only the case "review criteria fine, a check-decided
+  criterion not met" is turned into `request_changes` by Python.
+- Absence: `missing_file` compares names only (no file is read); a subject naming an existing directory is
+  present; a search that covered zero files (e.g. a `paths` glob matching nothing) is `unverifiable`, never
+  `verified`.
+- Guidance allowance: the model gateway's final cap is `limits.max_prompt_bytes` + the rendered guidance, the
+  same allowance the prompt builder uses - guidance is never cut and never costs a delimiter.
+- `evolve`: `rejected.jsonl` and `evolution.jsonl` keep every rejected round in full (edit, candidate digest,
+  reason, scores); only the copy placed in the refiner prompt is compacted to the 2 KB row bound.
+- Atomic file replacement (status, artifacts) retries a bounded time on a sharing violation: another process
+  reading the file (the app server polls `status.json`) must not suspend a run.
+- Event `absence_refuted {kind, subject, hits:[{path, line}]}` (added with the fix pass): emitted when Python
+  finds what a model claimed to be missing; the counterpart of `absence_verified`.
+- Demo scenario `evidence` (`demo --scenario evidence`, HTTP `demoScenario: "evidence"`): a scripted run that
+  shows enforcement - the planner plans blind (`unseen_target`, rejected, Python supplies the read), the
+  implementer claims a symbol is missing that exists (`false_absence`, refuted with the hits), one criterion
+  is demonstrated by a check that failed at baseline, one criterion's check was already green
+  (`met_not_demonstrated`, risk flag `criteria_not_demonstrated`); the run succeeds after both gates. It needs
+  `grounding.mode: "enforce"`: `--grounding observe` with this scenario exits 2, the HTTP API answers 400.

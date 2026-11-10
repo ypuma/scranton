@@ -1,0 +1,41 @@
+[
+  {
+    "kind": "need_context",
+    "context_requests": [
+      {
+        "kind": "read",
+        "path": "calculator.py"
+      }
+    ]
+  },
+  {
+    "kind": "plan",
+    "plan": {
+      "summary": "Fix addition",
+      "acceptance_criteria": [
+        {
+          "id": "sum",
+          "text": "Addition is correct",
+          "verified_by": "review",
+          "checks": []
+        }
+      ],
+      "steps": [
+        {
+          "id": "fix",
+          "title": "Fix addition",
+          "description": "Use addition",
+          "files": [
+            {
+              "path": "calculator.py",
+              "action": "modify"
+            }
+          ],
+          "criteria": [
+            "sum"
+          ]
+        }
+      ]
+    }
+  }
+]

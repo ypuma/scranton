@@ -1,0 +1,22 @@
+[
+  {
+    "verdict": "approve",
+    "summary": "Verified by configured checks",
+    "criteria": [
+      {
+        "id": "sum",
+        "status": "met",
+        "citations": [
+          "K-0000000000"
+        ]
+      }
+    ],
+    "findings": []
+  },
+  {
+    "verdict": "approve",
+    "summary": "Verified by configured checks",
+    "criteria": [],
+    "findings": []
+  }
+]

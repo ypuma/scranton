@@ -8,10 +8,13 @@ from langgraph.types import interrupt
 
 from scranton_pipeline.agents.prompts import build_implementer_prompt, build_reviewer_prompt
 from scranton_pipeline.errors import EngineError, FailureClass, SuspendRequested
+from scranton_pipeline.grounding import check_id, digest, recompute_summary, register, registry_row
 from scranton_pipeline.models import ContextRequest, ImplementerTurn, Review
-from scranton_pipeline.nodes.common import Dependencies, scope_id
+from scranton_pipeline.nodes.common import Dependencies, planning_key, scope_id
+from scranton_pipeline.nodes.grounding import decide_criteria, evaluate, repair_evidence
 from scranton_pipeline.nodes.planner import invalid
-from scranton_pipeline.state import PipelineState, counter, current_step, get_plan
+from scranton_pipeline.observability import _rows
+from scranton_pipeline.state import PipelineState, counter, current_step, done_ids, get_plan
 from scranton_pipeline.tools.checks import run_checks
 from scranton_pipeline.tools.context import fulfil
 from scranton_pipeline.tools.fs import PathPolicy, write_bytes_atomic
@@ -28,10 +31,12 @@ def json_write(path: Path, value: Any) -> None:
 
 
 def sandbox(deps: Dependencies) -> Any:
-    return build_sandbox(deps.cfg.sandbox, workspace=deps.workspace, run_id=deps.run_dir.name, trust_host=deps.trust_host)
+    return build_sandbox(deps.cfg.sandbox, workspace=deps.workspace, run_id=deps.run_dir.name, trust_host=deps.trust_host, name_suffix=deps.lane_suffix, state_dir=deps.run_dir / "sandbox-state")
 
 
 def prepare_workspace(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
+    box = sandbox(deps)
+    box.preflight()
     manifest = deps.run_dir / "artifacts" / "source_manifest.json"
     # No checkpoint can refer to a partially prepared snapshot: rebuild it on replay.
     if deps.workspace.exists():
@@ -41,10 +46,8 @@ def prepare_workspace(state: PipelineState, deps: Dependencies) -> dict[str, Any
                                limits=deps.cfg.limits, manifest_path=manifest)
     repo = WorkspaceRepo.init(deps.workspace, deps.run_dir / "git", timeout_s=deps.cfg.limits.git_timeout_s)
     base = repo.commit_all("Pipeline snapshot")
-    box = sandbox(deps)
-    box.preflight()
     for command in deps.cfg.setup:
-        result = box.run(command.argv, timeout_s=command.timeout_s, network=command.network,
+        result = box.run(command.argv, timeout_s=command.timeout_s, network=command.network, writable_state=True,
                          log_path=deps.run_dir / "artifacts" / "logs" / f"setup-{command.id}.log", stop=deps.stop,
                          tail_bytes=deps.cfg.limits.max_output_tail_bytes, max_log_bytes=deps.cfg.limits.max_log_bytes)
         if result.stopped:
@@ -70,11 +73,18 @@ def index_repo(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
 
 
 def checked(state: PipelineState, deps: Dependencies, *, baseline: bool = False) -> list[dict[str, Any]]:
+    deps.repo()._run(["reset", "--hard", state["workspace"]["head_commit"]])
     plan = get_plan(state)
-    final = plan is not None and (state.get("mode") == "revision" or state.get("step_index", -1) >= len(plan.steps) - 1)
+    completed = done_ids(state)
+    if state.get("mode") == "integration":
+        completed.update(r["step_id"][5:] for r in state.get("wave", {}).get("records", []))
+    step = current_step(state)
+    if step and state.get("mode") == "step":
+        completed.add(step.id)
+    final = not state.get("lane") and plan is not None and (state.get("mode") == "revision" or all(s.id in completed for s in plan.steps))
     checks = [c for c in deps.cfg.checks if baseline or c.scope == "step" or final]
     results = run_checks(checks, sandbox=sandbox(deps), log_dir=deps.run_dir / "artifacts" / "logs",
-                         label="baseline" if baseline else f"step-{state.get('step_index', 0)}-R{state.get('review_round', 0)}-{counter(state, 'attempts:' + scope_id(state))}",
+                         label="baseline" if baseline else f"{deps.lane_suffix or ('int-' + str(state.get('wave', {}).get('number', 0)) if state.get('mode') == 'integration' else 'main')}-r{state.get('plan_revision', 0)}-step-{state.get('step_index', 0)}-R{state.get('review_round', 0)}-{counter(state, 'attempts:' + scope_id(state))}",
                          stop=deps.stop, fail_fast=not baseline, tail_bytes=deps.cfg.limits.max_output_tail_bytes,
                          max_log_bytes=deps.cfg.limits.max_log_bytes)
     restored = deps.repo().restore_tracked()
@@ -84,7 +94,11 @@ def checked(state: PipelineState, deps: Dependencies, *, baseline: bool = False)
         raise SuspendRequested()
     for result in results:
         deps.events.emit("check_finished", id=result.id, status=result.status, duration_s=result.duration_s)
-    return [r.model_dump(mode="json") for r in results]
+    stage = "baseline" if baseline else "verify"
+    commit = state["workspace"]["head_commit"]
+    rows = [{**r.model_dump(mode="json"), "evidence_id": check_id(r.model_dump(mode="json"), stage, commit), "commit": commit, "stage": stage} for r in results]
+    register(deps.run_dir, [registry_row(r, kind="check", stage=stage, commit=commit) for r in rows])
+    return rows
 
 
 def baseline_checks(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
@@ -96,13 +110,13 @@ def baseline_checks(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
 
 def context(state: PipelineState, deps: Dependencies, *, planner: bool) -> dict[str, Any]:
     prefix = "plan" if planner else "step"
-    key = "plan_context" if planner else f"context:{scope_id(state)}"
+    key = planning_key(state, "context") if planner else f"context:{scope_id(state)}"
     requests = [ContextRequest.model_validate(r) for r in (state.get("plan_requests", []) if planner else state.get("step_requests", []))]
     items = fulfil(requests, workspace=deps.workspace, policy=deps.policy(),
                    files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)
     evidence = [*(state.get("plan_evidence", []) if planner else state.get("step_evidence", [])), *[i.model_dump(mode="json") for i in items]]
     while len(json.dumps(evidence).encode()) > deps.cfg.limits.max_prompt_bytes and evidence:
-        evidence.pop(0)
+        evidence.pop(next((n for n, i in enumerate(evidence) if not i.get("python_read")), 0))
     deps.events.emit("context", requests=len(requests), fulfilled=sum(i.ok for i in items))
     return {f"{prefix}_evidence": evidence, f"{prefix}_requests": [], "counters": {key: 1}}
 
@@ -112,37 +126,65 @@ def approve_plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         decision = {"decision": "approve", "by": "auto", "comment": ""}
     else:
         decision = interrupt({"gate": "plan", "digest": state["plan_digest"], "risk_flags": state["risk_flags"],
-                              "plan_path": str(deps.run_dir / "artifacts" / "plan.json")})
-        decision = {**decision, "by": "human"}
+                              "plan_path": str(deps.run_dir / "artifacts" / "plan.json"),
+                              "revision": state.get("plan_revision", 0),
+                              "replan_reason": (state.get("replan_brief") or {}).get("reason")})
+        decision = {**decision, "by": decision.get("by", "human")}
     deps.events.emit("gate_decided", gate="plan", decision=decision["decision"], by=decision["by"])
     return {"plan_approval": decision, **({"outcome": "rejected"} if decision["decision"] == "reject" else {})}
 
 
 def select_step(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
-    index = state.get("step_index", -1) + 1
+    from scranton_pipeline.nodes.parallel import parallel_available
+    from scranton_pipeline.waves import wave
     plan = get_plan(state)
     assert plan is not None
+    indices = wave(plan.steps, done_ids(state), deps.cfg.execution.max_parallel_steps)
+    serial = [i for i in indices if plan.steps[i].id in state.get("serial_steps", [])]
+    if serial:
+        indices = serial[:1]
+    if len(indices) > 1 and parallel_available(deps):
+        number = counter(state, "waves") + 1
+        deps.events.emit("wave_started", wave=number, steps=[plan.steps[i].id for i in indices])
+        return {"wave": {"number": number, "indices": indices}, "lanes": {},
+                "counters": {"waves": 1}, "mode": "step", "step_index": indices[0],
+                "feedback": None, "pending_edits": None}
+    index = indices[0] if indices else len(plan.steps)
     evidence = []
     if index < len(plan.steps):
         step = plan.steps[index]
         requests = [ContextRequest(kind="read", path=p) for p in dict.fromkeys([f.path for f in step.files if f.action != "create"] + step.context_files)]
         evidence = [i.model_dump(mode="json") for i in fulfil(requests, workspace=deps.workspace, policy=deps.policy(),
                     files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)]
-    return {"step_index": index, "step_evidence": evidence, "step_requests": [], "feedback": None, "pending_edits": None}
+    return {"step_index": index, "step_evidence": evidence, "step_requests": [], "feedback": None, "pending_edits": None,
+            "mode": "step", "wave": {}, "lanes": {}}
 
 
 def implement(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     key = f"repairs:{scope_id(state)}"
     try:
         step = current_step(state)
-        if step and state.get("mode") != "revision":
-            requests = [ContextRequest(kind="read", path=p) for p in dict.fromkeys([f.path for f in step.files] + step.context_files)]
-            fresh = [i.model_dump(mode="json") for i in fulfil(requests, workspace=deps.workspace, policy=deps.policy(), files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)]
+        plan = get_plan(state)
+        selected = plan.steps if plan and state.get("mode") == "revision" else [step] if step and state.get("mode") != "integration" else []
+        if selected:
+            requests = [ContextRequest(kind="read", path=p) for p in dict.fromkeys([f.path for s in selected for f in s.files if f.action != "create"] + [p for s in selected for p in s.context_files])]
+            fresh = [{**i.model_dump(mode="json"), "python_read": True} for request in requests for i in fulfil([request], workspace=deps.workspace, policy=deps.policy(), files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)]
             state = {**state, "step_evidence": [*state.get("step_evidence", []), *fresh]}
-        system, user = build_implementer_prompt(state, deps.cfg)
-        turn = deps.gateway.complete("implementer", system=system, user=user, schema=ImplementerTurn).parsed
+        prompt = build_implementer_prompt(state, deps.cfg, graph=deps.procedure)
+        system, user = prompt
+        deps.procedure_event("implementer", state)
+        turn = deps.gateway.complete("implementer", system=system, user=user, schema=ImplementerTurn, guidance_bytes=prompt.guidance_bytes).parsed
+        evaluation = evaluate(state, deps, "implementer", prompt, turn.model_dump(mode="json"))
+        if evaluation.reject(deps) and (turn.kind != "blocked" or evaluation.retry_block):
+            return {**invalid(state, deps, "implement", key, str(evaluation.violations) + " Valid IDs: " + str(prompt.shown)),
+                "step_evidence": repair_evidence(state, deps, evaluation, "step_evidence")}
         if turn.kind == "blocked":
-            raise EngineError(FailureClass.IMPLEMENTATION, "step_blocked", turn.blocked_reason)
+            update = request_replan(state, deps, EngineError(FailureClass.IMPLEMENTATION, "step_blocked", turn.blocked_reason), "implement")
+            if update.get("replan_request"):
+                prior = [r for r in _rows(deps.run_dir / "grounding.jsonl") if r.get("scope") == scope_id(state) and r.get("lane") == state.get("lane", {}).get("step_id")]
+                hits = [v["detail"] for r in prior for v in r.get("violations", []) if v["kind"] == "false_absence"]
+                update["replan_request"].update(verified_absence=[a for a in evaluation.absences if a["status"] == "verified"], absence_refuted=hits)
+            return update
         if turn.kind == "need_context":
             if counter(state, f"context:{scope_id(state)}") >= deps.cfg.limits.max_step_context_rounds:
                 raise ValueError("No step context rounds remain")
@@ -159,22 +201,23 @@ def implement(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
 def apply_edits(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     key = f"attempts:{scope_id(state)}"
     if counter(state, key) >= deps.cfg.limits.max_step_attempts:
-        raise EngineError(FailureClass.IMPLEMENTATION, "attempts_exhausted", "Edit attempt budget exhausted")
+        return request_replan(state, deps, EngineError(FailureClass.IMPLEMENTATION, "attempts_exhausted", "Edit attempt budget exhausted"), "apply_edits")
     repo = deps.repo()
     repo.reset_hard(state["workspace"]["head_commit"])
     turn = ImplementerTurn.model_validate(state["pending_edits"])
     plan = get_plan(state)
     assert plan is not None
     step = current_step(state)
-    declared = {f.path for s in plan.steps for f in s.files} if state.get("mode") == "revision" else {f.path for f in step.files} if step else set()
+    selected = [plan.steps[i] for i in state["wave"]["indices"] if state["lanes"].get(plan.steps[i].id, {}).get("state") == "merged"] if state.get("mode") == "integration" else plan.steps if state.get("mode") == "revision" else [step] if step else []
+    declared = {f.path for s in selected for f in s.files}
     result = validate_and_apply(turn.edits, workspace=deps.workspace, policy=deps.policy(), declared=declared,
-                                scope=deps.cfg.policy.scope, undeclared_budget=deps.cfg.policy.max_undeclared_files,
+                                scope="strict" if state.get("mode") == "integration" else deps.cfg.policy.scope, undeclared_budget=deps.cfg.policy.max_undeclared_files,
                                 limits=deps.cfg.limits)
     update: dict[str, Any] = {"counters": {key: 1}, "pending_edits": None}
     if not result.ok:
         deps.events.emit("edits_rejected", count=len(result.rejected))
         if counter(state, key) + 1 >= deps.cfg.limits.max_step_attempts:
-            update["failure"] = EngineError(FailureClass.IMPLEMENTATION, "edits_rejected", "Edit attempts exhausted").to_failure("apply_edits")
+            update.update(request_replan(state, deps, EngineError(FailureClass.IMPLEMENTATION, "edits_rejected", "Edit attempts exhausted"), "apply_edits"))
         else:
             update["feedback"] = {"kind": "edits_rejected", "message": "Edits rejected", "details": result.rejected}
         return update
@@ -195,10 +238,14 @@ def verify(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
             return {"checks": results, "failure": EngineError(FailureClass.INFRASTRUCTURE, "check_error",
                 "Check could not execute: " + "; ".join(r["output_tail"] for r in failed if r["status"] == "error")).to_failure("verify")}
         if counter(state, f"attempts:{scope_id(state)}") >= deps.cfg.limits.max_step_attempts:
-            return {"checks": results, "failure": EngineError(FailureClass.CHECKS_FAILED, "checks_exhausted", "Required checks failed").to_failure("verify")}
+            return {"checks": results, **request_replan({**state, "checks": results}, deps, EngineError(FailureClass.CHECKS_FAILED, "checks_exhausted", "Required checks failed"), "verify")}
         return {"checks": results, "feedback": {"kind": "checks_failed", "message": "Required checks failed",
                                                  "details": [r["id"] + ": " + r["output_tail"] for r in failed]}}
     head = state["workspace"]["head_commit"]
+    if state.get("mode") == "integration":
+        from scranton_pipeline.nodes.parallel import finish_integration
+        return {"checks": results, "feedback": None, "workspace": {**state["workspace"], "green_commit": head},
+                **finish_integration(state)}
     return {"checks": results, "feedback": None, "workspace": {**state["workspace"], "green_commit": head},
             "steps_done": [{"step_id": scope_id(state), "attempts": counter(state, f"attempts:{scope_id(state)}"),
                             "commit": head, "changed_files": [p for _, p in deps.repo().changed_files(state["workspace"]["base_commit"], head)]}]}
@@ -221,23 +268,42 @@ def review(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     key = f"review_repairs:{state.get('review_round', 0)}"
     try:
         diff, files = diff_info(state, deps)
-        prompt_state: PipelineState = {**state, "delivery": {"review_diff": deps.redactor.redact(diff), "files": files}}
-        system, user = build_reviewer_prompt(prompt_state, deps.cfg)
-        result = deps.gateway.complete("reviewer", system=system, user=user, schema=Review).parsed
+        decided = decide_criteria(state, deps)
+        prompt_state: PipelineState = {**state, "delivery": {"review_diff": deps.redactor.redact(diff), "files": files,
+            "decided_criteria": [{**c, "evidence": [r.get("evidence_id") for r in state.get("checks", []) if r["id"] in c["checks"] and r.get("commit") == state["workspace"]["head_commit"]]} for c in decided if c["verified_by"] == "checks"]}}
+        prompt = build_reviewer_prompt(prompt_state, deps.cfg, graph=deps.procedure)
+        system, user = prompt
+        deps.procedure_event("reviewer", prompt_state)
+        result = deps.gateway.complete("reviewer", system=system, user=user, schema=Review, guidance_bytes=prompt.guidance_bytes).parsed
         plan = get_plan(state)
         assert plan is not None
-        if {c.id for c in result.criteria} != {c.id for c in plan.acceptance_criteria} or len(result.criteria) != len(plan.acceptance_criteria):
-            raise ValueError("Review must assess every criterion exactly once")
-        raw = result.model_dump(mode="json")
+        evaluation = evaluate(prompt_state, deps, "reviewer", prompt, result.model_dump(mode="json"))
+        if evaluation.reject(deps):
+            raise ValueError(str(evaluation.violations) + " Valid IDs: " + str(prompt.shown))
+        required = {c.id for c in plan.acceptance_criteria if c.verified_by == "review"}
+        assessments = [c for c in result.criteria if c.id in required]
+        if {c.id for c in assessments} != required or len(assessments) != len(required):
+            raise ValueError("Review must assess every review criterion exactly once")
+        if result.verdict == "approve" and (any(c.status == "not_met" for c in result.criteria) or any(f.severity == "blocking" for f in result.findings)):
+            raise ValueError("Approval contradicts findings or criteria")
+        raw = {**result.model_dump(mode="json"), "criteria": [c.model_dump(mode="json") for c in assessments]}
+        if result.verdict == "approve":
+            for criterion in decided:
+                if criterion["verified_by"] != "checks" or criterion["state"] != "not_met":
+                    continue
+                failed = [r for r in state.get("checks", []) if r["id"] in criterion["checks"] and r.get("commit") == state["workspace"]["head_commit"] and r["status"] != "passed"]
+                detail = "; ".join(r["id"] + ": " + r.get("output_tail", "")[-4096:] for r in failed) or "Missing current results: " + ", ".join(criterion["checks"])
+                raw["verdict"] = "request_changes"
+                raw["findings"].append({"severity": "major", "category": "tests", "path": "", "description": "Criterion " + criterion["id"] + " not met: " + detail, "suggestion": "Satisfy the named checks", "citations": [r["evidence_id"] for r in failed if r.get("evidence_id")]})
         for finding in raw["findings"]:
             finding["path"] = "".join(c for c in finding["path"].replace("\\", "/") if c.isprintable())
         json_write(deps.run_dir / "artifacts" / f"review-{state.get('review_round', 0)}.json", raw)
-        if result.verdict == "approve":
+        if raw["verdict"] == "approve":
             return {"review": raw, "feedback": None}
         if state.get("review_round", 0) >= deps.cfg.limits.max_review_rounds:
             return {"review": raw, "failure": EngineError(FailureClass.IMPLEMENTATION, "review_exhausted", "Review revision budget exhausted").to_failure("review")}
         return {"review": raw, "review_round": state.get("review_round", 0) + 1, "mode": "revision",
-                "feedback": {"kind": "review_changes", "message": result.summary, "details": [f.description for f in result.findings]},
+                "feedback": {"kind": "review_changes", "message": result.summary, "details": [f["description"] for f in raw["findings"]]},
                 "step_evidence": [], "step_requests": [], "pending_edits": None}
     except ValueError as exc:
         return {**invalid(state, deps, "review", key, str(exc)), "review": None}
@@ -252,7 +318,9 @@ def package(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     path = deps.run_dir / "delivery" / "candidate.diff"
     write_bytes_atomic(path, diff.encode())
     from scranton_pipeline.report import write_report
-    update = {"delivery": {"diff_path": str(path), "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
+    grounding = recompute_summary(deps.run_dir)
+    risks = (["criteria_not_demonstrated"] if any(c["state"] == "met_not_demonstrated" for c in grounding["criteria"]) else []) + (["grounding_violations"] if any(r.get("type") == "output" and r.get("accepted") and r.get("violations") for r in _rows(deps.run_dir / "grounding.jsonl")) else [])
+    update = {"delivery": {"grounding": grounding, "risk_flags": risks, "gate_digest": digest({"diff_sha256": hashlib.sha256(diff.encode()).hexdigest(), "grounding": grounding, "risk_flags": risks}), "diff_path": str(path), "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
                            "files": files, "applied": False, "conflicts": []}}
     write_report({**state, "delivery": update["delivery"]}, deps, status="draft")
     return update
@@ -261,9 +329,9 @@ def package(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
 def approve_delivery(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     delivery = state["delivery"]
     assert delivery is not None
-    decision = interrupt({"gate": "delivery", "digest": delivery["diff_sha256"], "files": delivery["files"], "diff_path": delivery["diff_path"]})
-    deps.events.emit("gate_decided", gate="delivery", decision=decision["decision"], by="human")
-    return {"delivery_approval": {**decision, "by": "human"}}
+    decision = interrupt({"gate": "delivery", "digest": delivery["gate_digest"], "grounding": delivery["grounding"], "risk_flags": delivery["risk_flags"], "files": delivery["files"], "diff_path": delivery["diff_path"]})
+    deps.events.emit("gate_decided", gate="delivery", decision=decision["decision"], by=decision.get("by", "human"))
+    return {"delivery_approval": {**decision, "by": decision.get("by", "human")}}
 
 
 def apply_to_source(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
@@ -282,3 +350,52 @@ def apply_to_source(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     if result.conflicts or result.rolled_back:
         update["failure"] = EngineError(FailureClass.IMPLEMENTATION, "source_conflict", "Source apply refused or rolled back").to_failure("apply_to_source")
     return update
+
+
+def request_replan(state: PipelineState, deps: Dependencies, error: EngineError, node: str) -> dict[str, Any]:
+    spent = state.get("lane", {}).get("replans", counter(state, "replans"))
+    if state.get("mode") == "revision" or spent >= deps.cfg.limits.max_replans:
+        failure = error.to_failure(node)
+        if not state.get("lane"):
+            deps.events.emit("failure", **failure)
+        return {"failure": failure}
+    step = current_step(state) if state.get("mode") != "integration" else None
+    request = {"code": error.code, "message": error.message, "scope": scope_id(state), "node": node,
+               "failed_step": step.model_dump(mode="json") if step else None, "checks": state.get("checks", [])}
+    if not state.get("lane"):
+        deps.events.emit("replan_requested", code=error.code, message=error.message, scope=scope_id(state))
+    return {"replan_request": request}
+
+
+def replan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
+    request = state["replan_request"]
+    assert request is not None
+    if counter(state, "replans") >= deps.cfg.limits.max_replans:
+        kind = FailureClass.CHECKS_FAILED if request["code"] == "checks_exhausted" else FailureClass.IMPLEMENTATION
+        return {"failure": EngineError(kind, request["code"], request["message"]).to_failure(request["node"])}
+    green = state["workspace"]["green_commit"]
+    deps.repo().reset_hard(green)
+    _, files = diff_info(state, deps, green=True)
+    reason = request["code"] + ": " + request["message"]
+    revisions = [{**entry, "replaced_reason": reason} if entry["revision"] == state.get("plan_revision", 0)
+                 else entry for entry in state.get("plan_revisions", [])]
+    step = current_step(state)
+    revision = state.get("plan_revision", 0) + 1
+    brief = {"reason": reason, "failed_step": request.get("failed_step", step.model_dump(mode="json") if step else None),
+             "completed_steps": [s["step_id"] for s in state.get("steps_done", [])],
+             "changed_files": files, "checks": request.get("checks", state.get("checks", [])),
+             "verified_absence": request.get("verified_absence", []), "absence_refuted": request.get("absence_refuted", [])}
+    deps.events.emit("replanned", revision=revision)
+    return {"workspace": {**state["workspace"], "head_commit": green}, "counters": {"replans": 1},
+            "plan_revision": revision, "plan_revisions": revisions, "previous_plan": state.get("plan"),
+            "replan_brief": brief, "replan_request": None, "plan": None, "plan_digest": "", "risk_flags": [],
+            "plan_requests": [], "plan_evidence": [], "plan_approval": None, "step_index": -1,
+            "mode": "step", "wave": {}, "serial_steps": [], "lanes": {}, "step_evidence": [], "step_requests": [], "feedback": None, "pending_edits": None,
+            "deviations": [p for p in state.get("deviations", []) if p in {f["path"] for f in files}]}
+
+
+def cleanup_sandbox(deps: Dependencies) -> None:
+    try:
+        sandbox(deps).cleanup()
+    except Exception:  # noqa: BLE001 - cleanup must never replace the actual result
+        deps.events.emit("warning", code="cleanup_failed", message="Sandbox cleanup failed")

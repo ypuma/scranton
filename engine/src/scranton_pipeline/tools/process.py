@@ -96,7 +96,7 @@ class _Job:
 
 def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout_s: float,
                 log_path: Path | None = None, tail_bytes: int = 8192, max_log_bytes: int = 5000000,
-                stop: StopSignal | None = None) -> ProcResult:
+                stop: StopSignal | None = None, redact_output: bool = True) -> ProcResult:
     if not argv or timeout_s <= 0 or tail_bytes < 0 or max_log_bytes < 0:
         raise EngineError(FailureClass.INVALID_INPUT, "invalid_process", "Invalid process bounds")
     name = argv[0].rstrip(" .") if os.name == "nt" else argv[0]
@@ -161,7 +161,9 @@ def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeo
         if reader.is_alive():
             raise EngineError(FailureClass.INFRASTRUCTURE, "output_not_closed", "Process output did not close")
         redactor = Redactor()
-        text = redactor.redact(tail.decode("utf-8", errors="replace"))
+        text = tail.decode("utf-8", errors="replace")
+        if redact_output:
+            text = redactor.redact(text)
         text = text.encode("utf-8")[-tail_bytes:].decode("utf-8", errors="ignore") if tail_bytes else ""
         if log_path:
             safe = redactor.redact(log.decode("utf-8", errors="replace")).encode("utf-8")

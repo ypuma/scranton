@@ -1,6 +1,7 @@
 """Synchronous, single-owner run lifecycle over durable SQLite checkpoints."""
 import importlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -21,11 +22,15 @@ from scranton_pipeline.agents.providers import Role, build_chat_model
 from scranton_pipeline.config import EngineConfig, config_digest, load_config
 from scranton_pipeline.errors import EngineError, FailureClass
 from scranton_pipeline.graph import build_graph
+from scranton_pipeline.grounding import append_trace
+from scranton_pipeline.guidance import pinned
 from scranton_pipeline.limits import recursion_limit
 from scranton_pipeline.models import RunStatus
-from scranton_pipeline.nodes.common import Dependencies
-from scranton_pipeline.nodes.workflow import json_write
+from scranton_pipeline.nodes.common import Dependencies, cleanup_provider
+from scranton_pipeline.nodes.workflow import cleanup_sandbox, json_write
 from scranton_pipeline.observability import EventLog, UsageLedger, read_status, write_status
+from scranton_pipeline.procedure import digest as procedure_digest
+from scranton_pipeline.procedure import load as load_procedure
 from scranton_pipeline.report import finalize_out_of_band, make_status, now
 from scranton_pipeline.state import PipelineState
 from scranton_pipeline.tools.process import StopSignal
@@ -83,7 +88,12 @@ def parent_guard(stop: StopSignal) -> None:
 def dependencies(run_dir: Path, cfg: EngineConfig, *, trust_host: bool,
                  guarded: bool = False, models: bool = True) -> Iterator[Dependencies]:
     metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-    secrets = [os.environ.get(getattr(cfg.models, role).api_key_env, "") for role in ("planner", "implementer", "reviewer")]
+    procedure = pinned(run_dir, cfg.procedure.enabled)
+    secrets = [value for name, value in os.environ.items() if name.startswith("SCRANTON_PIPELINE_KEY_") or (
+        re.search("KEY|TOKEN|SECRET|PASSWORD", name, re.IGNORECASE) and len(value) >= 12
+        and value.casefold() not in {"true", "false", "none", "null", "yes", "no", "enabled", "disabled", "undefined", "development", "production", "default", "password", "changeme"}
+        and not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", value) and not Path(value).exists())]
+    secrets += [os.environ.get(getattr(cfg.models, role).api_key_env, "") for role in ("planner", "implementer", "reviewer")]
     redactor = Redactor(v for v in secrets if v)
     ledger = UsageLedger(run_dir / "usage.jsonl")
     events = EventLog(run_dir / "events.jsonl", run_dir.name, redactor)
@@ -96,7 +106,7 @@ def dependencies(run_dir: Path, cfg: EngineConfig, *, trust_host: bool,
     connection = sqlite3.connect(run_dir / "checkpoints.sqlite", check_same_thread=False)
     try:
         yield Dependencies(cfg, run_dir, Path(metadata["workspace"]), gateway, ledger, events, stop, redactor,
-                           trust_host=trust_host, checkpointer=SqliteSaver(connection))
+                           trust_host=trust_host, checkpointer=SqliteSaver(connection), procedure=procedure)
     finally:
         connection.close()
 
@@ -108,7 +118,8 @@ def validate_trust(cfg: EngineConfig, trust_host: bool) -> None:
 
 def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id: str | None = None,
           workspace_root: Path | None = None, delivery: str = "patch", trust_host: bool = False,
-          guarded: bool = False, demo: bool = False) -> RunStatus:
+          guarded: bool = False, demo: bool = False, demo_scenario: str = "basic") -> RunStatus:
+    procedure = load_procedure(Path(cfg.procedure.graph) if cfg.procedure.graph else None) if cfg.procedure.enabled else None
     validate_trust(cfg, trust_host)
     run_id = run_id or uuid.uuid4().hex[:12]
     if not re.fullmatch("[a-z0-9]{8,32}", run_id):
@@ -130,8 +141,8 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
         if model.provider == "scripted" and not demo:
             try:
                 script = json.loads(Path(model.script_path).read_text(encoding="utf-8"))
-                if not isinstance(script, list):
-                    raise invalid("invalid_script", "Script must be an array")
+                if not isinstance(script, (list, dict)):
+                    raise invalid("invalid_script", "Script must be an array or a scope map")
             except (OSError, ValueError) as exc:
                 raise invalid("invalid_script", "Cannot load scripted model responses") from exc
         elif model.provider == "openai_compatible" and not os.environ.get(model.api_key_env):
@@ -142,23 +153,49 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
         raise invalid("run_exists", "Run directory already exists") from None
     (run_dir / "artifacts" / "logs").mkdir(parents=True)
     (run_dir / "delivery").mkdir()
+    if procedure is not None:
+        json_write(run_dir / "artifacts" / "procedure.json", procedure.model_dump(mode="json", by_alias=True))
     if demo:
         from scranton_pipeline.demo.fixture import materialize
-        materialize(run_dir)
+        materialize(run_dir, demo_scenario)
     json_write(run_dir / "config.json", cfg.model_dump(mode="json", by_alias=True))
     json_write(run_dir / "run.json", {"run_id": run_id, "task": task, "source_dir": str(source), "delivery_mode": delivery,
-        "created_at": now(), "config_digest": config_digest(cfg), "engine_version": "0.1.0", "workspace": str(workspace), "demo": demo})
+        "created_at": now(), "config_digest": config_digest(cfg), "engine_version": "0.1.0", "workspace": str(workspace), "demo": demo,
+        **({"procedure": {"enabled": True, "name": procedure.name, "digest": procedure_digest(procedure)}} if procedure is not None else {})})
     initial: PipelineState = {"run_id": run_id, "task": task, "source_dir": str(source), "delivery_mode": delivery,
         "step_index": -1, "mode": "step", "counters": {}, "active_seconds": 0.0, "history": [],
-        "steps_done": [], "failure": None, "outcome": "", "review_round": 0}
+        "plan_revision": 0, "plan_revisions": [], "steps_done": [], "failure": None, "outcome": "", "review_round": 0}
     with owner(run_dir), dependencies(run_dir, cfg, trust_host=trust_host, guarded=guarded) as deps:
+        append_trace(run_dir, {"type": "settings", "mode": cfg.grounding.mode, "weights": cfg.grounding.weights.model_dump()})
+        cleanup_provider(deps)
+        cleanup_sandbox(deps)
         deps.events.emit("run_started")
         return drive(deps, initial)
 
 
+def suspension_detail(exc: Exception, deps: Dependencies) -> dict[str, Any]:
+    def local(match: re.Match[str]) -> str:
+        value = match.group(0)
+        try:
+            return Path(value).relative_to(deps.run_dir).as_posix()
+        except ValueError:
+            return "[external-path]"
+    message = re.sub(r"[A-Za-z]:[\\/][^'\"\r\n]*|(?<![\w:])/[^'\"\s]*", local, str(exc))
+    frame = ""
+    trace = exc.__traceback__
+    while trace is not None:
+        module = trace.tb_frame.f_globals.get("__name__", "")
+        if module.startswith("scranton_pipeline."):
+            frame = module + ":" + trace.tb_frame.f_code.co_name
+        trace = trace.tb_next
+    return {"exception": type(exc).__name__, "exception_message": deps.redactor.redact(message)[:2000],
+        "errno": getattr(exc, "errno", None), "winerror": getattr(exc, "winerror", None), "engine_frame": frame}
+
+
 def drive(deps: Dependencies, value: Any = None) -> RunStatus:
     graph = build_graph(deps)
-    config = {"configurable": {"thread_id": deps.run_dir.name}, "recursion_limit": recursion_limit(deps.cfg.limits)}
+    config = {"configurable": {"thread_id": deps.run_dir.name}, "recursion_limit": recursion_limit(deps.cfg.limits),
+              "max_concurrency": max(2, deps.cfg.execution.max_parallel_steps)}
     existing = graph.get_state(config).values
     if existing:
         write_status(deps.run_dir, make_status(existing, deps, node=(graph.get_state(config).next or ("prepare_workspace",))[0]))
@@ -189,27 +226,35 @@ def drive(deps: Dependencies, value: Any = None) -> RunStatus:
         return finished
     except Exception as exc:  # noqa: BLE001 - lifecycle boundary preserves resumability
         state = graph.get_state(config).values or (value if isinstance(value, dict) else {})
-        deps.events.emit("warning", code="suspended", message=f"Execution suspended ({type(exc).__name__})")
+        detail = suspension_detail(exc, deps)
+        deps.events.emit("warning", code="suspended", message=f"Execution suspended ({type(exc).__name__})", **detail)
+        logging.getLogger(__name__).warning(json.dumps({"run_id": deps.run_dir.name, "code": "suspended", **detail}))
         status = make_status(cast(PipelineState, state), deps, status="suspended", node=(graph.get_state(config).next or ("",))[0])
         write_status(deps.run_dir, status)
         return status
 
 
 def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = None, digest: str | None = None,
-           comment: str = "", trust_host: bool = False, guarded: bool = False, cancelling: bool = False) -> RunStatus:
+           comment: str = "", trust_host: bool = False, guarded: bool = False, cancelling: bool = False, by: str = "human") -> RunStatus:
+    if by not in {"human", "eval"}:
+        raise invalid("invalid_decider", "Gate decider must be human or eval")
     run_dir = run_dir.resolve()
     cfg = load_config(run_dir / "config.json")
     metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    pinned(run_dir, cfg.procedure.enabled)
     validate_trust(cfg, trust_host or metadata.get("demo", False) or cancelling)
     if config_digest(cfg) != metadata["config_digest"]:
         raise invalid("config_changed", "Copied run configuration changed")
     with owner(run_dir):
+        pinned(run_dir, cfg.procedure.enabled)
         status = read_status(run_dir)
         if status is None:
             raise invalid("missing_status", "Run status missing")
         if status.status in TERMINAL:
             if gate:
                 raise invalid("not_waiting", "Run is already terminal")
+            with dependencies(run_dir, cfg, trust_host=trust_host or metadata.get("demo", False), models=False) as deps:
+                cleanup_provider(deps)
             return status
         value: Any = None
         if not cancelling:
@@ -217,7 +262,7 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                 if gate != status.pending["gate"] or digest != status.pending["digest"] or decision not in {"approve", "reject"}:
                     raise invalid("stale_digest", "Decision must match the pending gate and digest")
                 # Also bind to the checkpoint payload, not only an editable status snapshot.
-                value = Command(resume={"decision": decision, "digest": digest, "comment": comment})
+                value = Command(resume={"decision": decision, "digest": digest, "comment": comment, "by": by})
             elif gate or decision or digest:
                 raise invalid("not_waiting", "Run is not waiting at a gate")
         with dependencies(run_dir, cfg, trust_host=trust_host or metadata.get("demo", False), guarded=guarded, models=not cancelling) as deps:
@@ -229,8 +274,14 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                     raise invalid("stale_digest", "Decision disagrees with checkpoint gate")
                 path = Path(status.pending["path"])
                 from scranton_pipeline.tools.fs import sha256_file
-                if sha256_file(path) != digest:
+                artifact_digest = sha256_file(path)
+                if gate == "delivery":
+                    from scranton_pipeline.grounding import digest as grounding_digest
+                    artifact_digest = grounding_digest({"diff_sha256": artifact_digest, "grounding": payloads[0]["grounding"], "risk_flags": payloads[0]["risk_flags"]})
+                if artifact_digest != digest:
                     raise invalid("stale_digest", "Gate artifact changed")
+            cleanup_provider(deps)
+            cleanup_sandbox(deps)
             deps.events.emit("run_resumed")
             return drive(deps, value)
 

@@ -4,10 +4,14 @@ import os
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from scranton_pipeline.grounding import recompute_summary
+from scranton_pipeline.guidance import status as procedure_status
 from scranton_pipeline.models import RunStatus
-from scranton_pipeline.nodes.common import Dependencies, scope_id
-from scranton_pipeline.state import PipelineState, current_step, get_plan
+from scranton_pipeline.nodes.common import Dependencies, cleanup_provider, scope_id
+from scranton_pipeline.observability import _rows
+from scranton_pipeline.state import PipelineState, counter, current_step, get_plan
 from scranton_pipeline.tools.fs import write_bytes_atomic
+from scranton_pipeline.tools.sandbox import sandbox_description
 
 
 def now() -> str:
@@ -19,8 +23,7 @@ def usage_summary(deps: Dependencies) -> dict[str, Any]:
     cost = 0.0
     known = True
     path = deps.run_dir / "usage.jsonl"
-    for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
-        item = json.loads(line)
+    for item in _rows(path):
         price = deps.cfg.pricing.get(item.get("model", ""))
         if price is None:
             known = False
@@ -34,7 +37,7 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
     metadata_path = deps.run_dir / "run.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
     phase = {"prepare_workspace": "prepare", "index_repo": "prepare", "baseline_checks": "prepare", "plan": "plan",
-             "plan_context": "plan", "approve_plan": "approve_plan", "review": "review", "package": "deliver",
+             "plan_context": "plan", "replan": "plan", "approve_plan": "approve_plan", "review": "review", "ground": "review", "package": "deliver",
              "approve_delivery": "deliver", "apply_to_source": "deliver", "finalize": "done"}.get(node, "implement")
     plan = get_plan(state)
     index = min(state.get("step_index", -1), len(plan.steps) - 1) if plan else -1
@@ -45,17 +48,22 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
                  "diff": delivery.get("diff_path") if delivery else None,
                  "report_md": str(deps.run_dir / "delivery" / "report.md") if (deps.run_dir / "delivery" / "report.md").exists() else None,
                  "report_json": str(deps.run_dir / "delivery" / "report.json") if (deps.run_dir / "delivery" / "report.json").exists() else None}
-    return RunStatus.model_validate({"run_id": state["run_id"], "status": status, "phase": phase, "node": node,
+    return RunStatus.model_validate({"procedure": procedure_status(deps.run_dir, deps.cfg.procedure.enabled, metadata.get("procedure", {})), "grounding": recompute_summary(deps.run_dir), "run_id": state["run_id"], "status": status, "phase": phase, "node": node,
         "task": deps.redactor.redact(state["task"])[:500], "source_dir": state["source_dir"], "delivery_mode": state["delivery_mode"],
         "progress": {"step_index": index, "step_count": len(plan.steps) if plan else 0,
                      "step_title": step.title if step else "", "attempt": state.get("counters", {}).get("attempts:" + scope_id(visible_state), 0),
-                     "review_round": state.get("review_round", 0)}, "pending": pending, "failure": state.get("failure"),
+                     "review_round": state.get("review_round", 0), "plan_revision": state.get("plan_revision", 0),
+                     "replans_left": max(0, deps.cfg.limits.max_replans - counter(state, "replans")),
+                     "steps_done": sum(s["step_id"].startswith("step:") for s in state.get("steps_done", [])), "lanes": [{"step_id": plan.steps[i].id, "title": plan.steps[i].title,
+                         "state": state.get("lanes", {}).get(plan.steps[i].id, {}).get("state", "running"),
+                         "attempt": state.get("lanes", {}).get(plan.steps[i].id, {}).get("attempt", 0)}
+                         for i in state.get("wave", {}).get("indices", [])] if plan else []}, "pending": pending, "failure": state.get("failure"),
         "resumable": status in {"suspended", "awaiting_approval"}, "usage": usage_summary(deps),
         "checks": [{**{k: c[k] for k in ("id", "kind", "status", "required", "duration_s")},
                     "output_tail": deps.redactor.redact(c.get("output_tail", ""))[-4096:] if c["status"] != "passed" else ""} for c in state.get("checks", state.get("baseline", []))],
         "delivery": {"applied": delivery.get("applied"), "diff_sha256": delivery.get("diff_sha256", ""),
                      "files": len(delivery.get("files", [])), "conflicts": delivery.get("conflicts", [])} if delivery else None,
-        "artifacts": artifacts, "sandbox": {"mode": deps.cfg.sandbox.mode, "isolated": deps.cfg.sandbox.mode == "docker"},
+        "artifacts": artifacts, "sandbox": sandbox_description(deps.cfg.sandbox, setup_network=any(c.network for c in deps.cfg.setup)),
         "pid": os.getpid() if status == "running" else None, "created_at": metadata.get("created_at", now()), "updated_at": now()})
 
 
@@ -63,6 +71,10 @@ def write_report(state: PipelineState, deps: Dependencies, *, status: str) -> No
     plan = get_plan(state)
     review = state.get("review") or {}
     limitations = ["Outgoing context redaction is best effort."]
+    if deps.cfg.sandbox.mode == "docker":
+        limitations.append(sandbox_description(deps.cfg.sandbox)["isolation"])
+        if any(c.network for c in deps.cfg.setup):
+            limitations.append("Network-enabled setup is configured; it can reach the internet and local host services, including the control API via host.docker.internal.")
     if deps.cfg.sandbox.mode == "host":
         limitations.append("Trusted host checks have no OS isolation.")
     if not deps.cfg.checks:
@@ -74,16 +86,21 @@ def write_report(state: PipelineState, deps: Dependencies, *, status: str) -> No
     if any(c["status"] == "unclear" for c in review.get("criteria", [])):
         limitations.append("Some acceptance criteria remain unclear.")
     events_path = deps.run_dir / "events.jsonl"
-    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()] if events_path.exists() else []
+    events = _rows(events_path)
     if any(e["type"] == "warning" and e["data"].get("code") == "check_modified_tracked" for e in events):
         limitations.append("Checks modified tracked files; those changes were restored.")
     if any(e["type"] == "llm_call" and e["data"].get("estimated") for e in events):
         limitations.append("Some model usage is estimated.")
+    if any(e["type"] == "warning" and e["data"].get("code") == "rollback_failed" for e in events):
+        limitations.append("Integration rollback failed; workspace may retain unverified changes.")
     delivery = state.get("delivery") or {}
-    record = {"schema": 1, "status": status, "failure": state.get("failure"), "task": state["task"],
+    grounding = recompute_summary(deps.run_dir)
+    assessments = [*review.get("criteria", []), *[{"id": c["id"], "status": "met" if c["state"] in {"demonstrated", "met_not_demonstrated"} else "not_met", "evidence": "Python checks: " + ", ".join(c["checks"])} for c in grounding["criteria"] if c["verified_by"] == "checks"]]
+    record = {"grounding": grounding, "schema": 1, "status": status, "failure": state.get("failure"), "task": state["task"],
+              "plan_revisions": state.get("plan_revisions", []), "waves": state.get("waves", []),
               "plan_summary": plan.summary if plan else None,
               "acceptance_criteria": [c.model_dump(mode="json") for c in plan.acceptance_criteria] if plan else [],
-              "assessments": review.get("criteria", []), "steps": state.get("steps_done", []),
+              "assessments": assessments, "steps": state.get("steps_done", []),
               "changed_files": [{**f, "deviation": f["path"] in state.get("deviations", [])} for f in delivery.get("files", [])],
               "baseline": state.get("baseline", []), "checks": state.get("checks", []), "review": review,
               "usage": usage_summary(deps), "timeline": [e for e in events if e["type"] == "node_finished"],
@@ -95,10 +112,20 @@ def write_report(state: PipelineState, deps: Dependencies, *, status: str) -> No
 
 
 def finalize_out_of_band(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
-    from scranton_pipeline.nodes.workflow import diff_info
+    from scranton_pipeline.nodes.workflow import cleanup_sandbox, diff_info
     from scranton_pipeline.observability import write_status
+    cleanup_sandbox(deps)
+    cleanup_provider(deps)
+    from scranton_pipeline.nodes.parallel import cleanup_lanes, rollback_integration
+    try:
+        rollback = rollback_integration(state, deps) if state.get("mode") == "integration" else {}
+    except Exception:  # noqa: BLE001 - terminal status must survive rollback failure
+        deps.events.emit("warning", code="rollback_failed", message="Integration rollback failed; workspace may retain unverified changes")
+        rollback = {}
+    state = cast(PipelineState, {**state, **rollback})
+    cleanup_lanes(state, deps)
     outcome = state.get("outcome") or ("failed" if state.get("failure") else "succeeded")
-    update: dict[str, Any] = {"outcome": outcome}
+    update: dict[str, Any] = {**rollback, "outcome": outcome}
     if outcome != "succeeded":
         diff, files = diff_info(state, deps, green=True)
         path = deps.run_dir / "delivery" / "partial.diff"
@@ -130,6 +157,14 @@ def render_markdown(record: dict[str, Any]) -> str:
         assessment = assessments.get(criterion["id"], {})
         lines.append("| " + " | ".join(cell(v) for v in (criterion["id"], criterion["text"], criterion["verified_by"],
                      assessment.get("status", "not assessed"), assessment.get("evidence", ""))) + " |")
+    lines += ["", "## Plan revisions", ""]
+    for entry in record.get("plan_revisions", []):
+        lines += [f"### Revision {entry['revision']}", "", entry["plan"]["summary"], "",
+                  "Replaced: " + (entry.get("replaced_reason") or "not replaced"), ""]
+    if record.get("waves"):
+        lines += ["", "## Waves", ""]
+        for wave in record["waves"]:
+            lines.append(f"- Wave {wave['number']}: merged {', '.join(wave['merged']) or 'none'}; failed {', '.join(wave['failed']) or 'none'}")
     lines += ["", "## Steps", "", "| Step | Attempts | Commit |", "| --- | --- | --- |"]
     for step in record["steps"]:
         lines.append(f"| {cell(step['step_id'])} | {step['attempts']} | {cell(step['commit'])} |")
@@ -152,6 +187,14 @@ def render_markdown(record: dict[str, Any]) -> str:
     for finding in review.get("findings", []):
         lines += ["", f"- {cell(finding['severity'])} / {cell(finding['category'])} — {cell(finding.get('path', ''))}: {cell(finding['description'])}",
                   f"  Suggestion: {cell(finding.get('suggestion', ''))}"]
+    grounding = record.get("grounding", {})
+    lines += ["", "## Grounding", ""]
+    lines += [f"- {key}: {cell(grounding.get(key))}" for key in ("mode", "answer", "trajectory", "unadjusted", "violation_rate", "adjusted", "tier", "outputs")]
+    lines += ["", "### Violations", "", *[f"- {cell(k)}: {v}" for k, v in grounding.get("violations", {}).items()]]
+    lines += ["", "### Criteria", "", "| ID | State | By | Checks |", "| --- | --- | --- | --- |"]
+    for criterion in grounding.get("criteria", []):
+        lines.append("| " + " | ".join(cell(criterion[k]) for k in ("id", "state", "by", "checks")) + " |")
+    lines += ["", f"Probe: {cell(grounding.get('probe', {}).get('status', 'not_needed'))}"]
     lines += ["", "## Usage", ""]
     lines += [f"- {key}: {cell(value)}" for key, value in record["usage"].items()]
     lines += ["", "## Timeline", "", "| Node | Seconds |", "| --- | --- |"]

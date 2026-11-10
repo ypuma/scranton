@@ -1,0 +1,22 @@
+[
+  {
+    "kind": "edits",
+    "edits": [
+      {
+        "path": "calculator.py",
+        "action": "modify",
+        "replacements": [
+          {
+            "search": "return a - b",
+            "replace": "return a + b"
+          }
+        ]
+      },
+      {
+        "path": "test_addition.py",
+        "action": "create",
+        "content": "import unittest\nfrom calculator import add\n\nclass Addition(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n"
+      }
+    ]
+  }
+]

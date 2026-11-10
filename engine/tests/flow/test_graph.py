@@ -14,8 +14,8 @@ from scranton_pipeline.runner import dependencies, drive
 from .conftest import begin, cli, decision, script
 
 EXPECTED = {"prepare_workspace", "index_repo", "baseline_checks", "plan", "plan_context", "approve_plan",
-            "select_step", "implement", "implement_context", "apply_edits", "verify", "review", "package",
-            "approve_delivery", "apply_to_source", "finalize"}
+            "select_step", "implement", "implement_context", "apply_edits", "verify", "review", "ground", "package",
+            "approve_delivery", "apply_to_source", "finalize", "replan", "run_lane", "merge_wave"}
 
 
 def test_graph_shape_and_mermaid():
@@ -24,6 +24,10 @@ def test_graph_shape_and_mermaid():
     from scranton_pipeline.demo.fixture import config
     graph = build_graph(SimpleNamespace(cfg=config(Path.cwd()), checkpointer=None))
     assert set(graph.builder.nodes) == EXPECTED
+    lane = graph.builder.nodes["run_lane"].runnable
+    assert set(lane.builder.nodes) == {"lane_prepare", "implement", "implement_context", "apply_edits", "verify", "lane_finish"}
+    for branches in lane.builder.branches.values():
+        assert all(branch.ends for branch in branches.values())
     for branches in graph.builder.branches.values():
         assert all(branch.ends for branch in branches.values())
     assert Path("docs/graph.mmd").read_text(encoding="utf-8").strip() == graph_text().strip()
@@ -95,7 +99,7 @@ def test_context_exhaustion_is_output_failure(case):
 
 def test_timeout_exhaustion(case):
     from scranton_pipeline.demo.fixture import EDIT
-    case["cfg"]["limits"] = {"max_step_attempts": 1}
+    case["cfg"]["limits"] = {"max_step_attempts": 1, "max_replans": 0}
     case["cfg"]["checks"][0].update(argv=[__import__("sys").executable, "-c", "import time; time.sleep(2)"], timeout_s=0.05)
     script(case, "implementer", [EDIT])
     _, status = begin(case)

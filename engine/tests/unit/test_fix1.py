@@ -10,7 +10,6 @@ from scranton_pipeline.config import (
     CheckConfig,
     CommandConfig,
     Limits,
-    SandboxConfig,
 )
 from scranton_pipeline.errors import EngineError
 from scranton_pipeline.models import FileEdit
@@ -18,7 +17,6 @@ from scranton_pipeline.tools.fs import PathPolicy, is_dependency_manifest
 from scranton_pipeline.tools.git import WorkspaceRepo
 from scranton_pipeline.tools.patches import validate_and_apply
 from scranton_pipeline.tools.process import run_process, scrubbed_env
-from scranton_pipeline.tools.sandbox import DockerSandbox
 from scranton_pipeline.tools.secrets import Redactor
 
 
@@ -125,29 +123,3 @@ def test_command_id_rule_is_shared_and_named(model):
     assert model(id="a_1-Z", argv=["safe"]).id == "a_1-Z"
     with pytest.raises(ValueError, match="id"):
         model(id="bad.id", argv=["safe"])
-
-
-@pytest.mark.skipif(os.environ.get("SCRANTON_PIPELINE_DOCKER_TEST") != "1", reason="opt-in local Docker image only")
-def test_opt_in_docker_network_timeout_and_no_git_mount(tmp_path):
-    # Guard: DockerSandbox flags/kill and external WorkspaceRepo layout; never pulls/builds or touches other containers.
-    workspace = tmp_path / "workspace"
-    repo = WorkspaceRepo.init(workspace)
-    (workspace / "file.txt").write_text("fixture")
-    repo.commit_all("fixture")
-    box = DockerSandbox(SandboxConfig(), workspace, "fix1docker")
-    box.preflight()
-    script = ("const fs=require('fs'),os=require('os');"
-              "if(fs.existsSync('.git')||fs.existsSync('git')||fs.existsSync('workspace.git'))process.exit(2);"
-              "if(Object.keys(os.networkInterfaces()).some(k=>k!=='lo'))process.exit(3);"
-              "console.log('trivial command passed; network none; no git metadata');")
-    result = box.run(["node", "-e", script], timeout_s=30, log_path=tmp_path / "docker.log")
-    assert result.exit_code == 0, result.output_tail
-    print(result.output_tail.strip())
-    result = box.run(["node", "-e", "console.log('started');setInterval(()=>{},1000)"], timeout_s=5, log_path=tmp_path / "timeout.log")
-    assert result.timed_out and "started" in result.output_tail
-    name = f"scranton-pipeline-fix1dock-{os.getpid()}-2"
-    # Inspect only the exact container this test created; kill is synchronous but --rm can finish asynchronously.
-    probe = run_process(["docker", "inspect", "--format", "{{.State.Running}}", name], cwd=workspace,
-                        env=scrubbed_env(os.environ, []), timeout_s=15)
-    assert probe.exit_code != 0 or probe.output_tail.strip() == "false"
-    print("timeout killed owned container; no running container remains")

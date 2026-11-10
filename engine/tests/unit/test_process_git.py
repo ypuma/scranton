@@ -125,7 +125,12 @@ def test_host_requires_trust(tmp_path):
     sandbox.preflight()
 
 
-def test_docker_exact_argv_and_cleanup_without_engine(tmp_path):
+def test_docker_exact_argv_and_cleanup_without_engine(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scranton_pipeline.tools import sandbox as module
+    monkeypatch.setattr(module.uuid, "uuid4", lambda: SimpleNamespace(hex="0123456789abcdef"))
+    monkeypatch.setattr(module.time, "time", lambda: 1000)
     calls = []
 
     def runner(argv, **kwargs):
@@ -136,13 +141,20 @@ def test_docker_exact_argv_and_cleanup_without_engine(tmp_path):
     sandbox = DockerSandbox(cfg, tmp_path, "abcdefgh1234", runner=runner)
     sandbox.preflight()
     assert calls[0][0] == ["docker", "info", "--format", "{{.ServerVersion}}"]
-    assert calls[1][0] == ["docker", "image", "inspect", cfg.docker.image]
+    assert calls[1][0] == ["docker", "image", "inspect", "scranton-pipeline-sandbox:0.1.0"]
     sandbox.run(["python", "-m", "pytest"], timeout_s=3, log_path=tmp_path / "docker.log")
-    name = f"scranton-pipeline-abcdefgh-{os.getpid()}-1"
-    assert calls[2][0] == ["docker", "run", "--rm", "--pull", "never", "--name", name, "--network", "none", "--cpus", "2", "--memory", "2048m", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-v", f"{tmp_path.resolve()}:/workspace", "-w", "/workspace", "--entrypoint", "python", "scranton-sandbox:1.5.0", "-m", "pytest"]
-    assert calls[3][0] == ["docker", "kill", name]
-    sandbox.run(["setup"], timeout_s=3, log_path=tmp_path / "setup.log", network=True)
+    name = f"scranton-pipeline-abcdefgh-{os.getpid()}-0123456789ab-1"
+    assert calls[2][0] == ["docker", "run", "--rm", "--pull", "never", "--name", name, "--log-driver", "none", "--network", "none", "--cpus", "2", "--memory", "2048m", "--memory-swap", "2048m", "--pids-limit", "256", "--read-only", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=512m", "--user", "10001:10001", "--label", "scranton.pipeline.run=abcdefgh1234", "--label", "scranton.pipeline.deadline=1033", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--env", "HOME=/tmp", "--env", "LANG=C.UTF-8", "--env", "TMPDIR=/tmp",
+        "--env", "XDG_CACHE_HOME=/tmp/cache", "--env", "PIP_CACHE_DIR=/tmp/pip-cache",
+        "--env", "PYTHONUSERBASE=/workspace/.pipeline/python", "--env", "PYTHONPYCACHEPREFIX=/tmp/pycache",
+        "--env", "PIP_DISABLE_PIP_VERSION_CHECK=1", "--env", "NPM_CONFIG_PREFIX=/workspace/.pipeline/npm",
+        "--env", "NPM_CONFIG_CACHE=/tmp/npm-cache", "--env", "NODE_PATH=/workspace/.pipeline/npm/lib/node_modules",
+        "--env", "PATH=/workspace/.pipeline/python/bin:/workspace/.pipeline/npm/bin:/usr/local/bin:/usr/bin:/bin", "-v", f"{tmp_path.resolve()}:/workspace", "-v", f"{sandbox.state_dir.resolve()}:/workspace/.pipeline:ro", "-w", "/workspace", "--entrypoint", "python", "scranton-pipeline-sandbox:0.1.0", "-m", "pytest"]
+    assert calls[3][0] == ["docker", "ps", "-a", "-q", "--filter", f"name=^/{name}$"]
+    sandbox.run(["setup"], timeout_s=3, log_path=tmp_path / "setup.log", network=True, writable_state=True)
     assert calls[4][0][calls[4][0].index("--network") + 1] == "bridge"
+    assert f"{sandbox.state_dir.resolve()}:/workspace/.pipeline:rw" in calls[4][0]
     assert all("pull" not in argv[:2] and "build" not in argv[:2] for argv, _ in calls)
 
 
@@ -184,5 +196,6 @@ def test_docker_failure_is_closed_and_timeout_kills_container(tmp_path):
 
     sandbox = DockerSandbox(SandboxConfig(), tmp_path, "abcdefgh", runner=timeout)
     assert sandbox.run(["check"], timeout_s=1, log_path=tmp_path / "log").timed_out
-    assert calls[-1][:2] == ["docker", "kill"]
-    assert calls[-1][2] == calls[0][calls[0].index("--name") + 1]
+    name = calls[0][calls[0].index("--name") + 1]
+    assert calls[1:] == [["docker", "rm", "-f", name],
+                         ["docker", "ps", "-a", "-q", "--filter", f"name=^/{name}$"]] * 8

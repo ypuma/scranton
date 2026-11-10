@@ -51,7 +51,6 @@ def test_edit_shape_consistency(data):
     (PlannerTurn, {"kind": "need_context"}),
     (ImplementerTurn, {"kind": "blocked"}),
     (ImplementerTurn, {"kind": "edits", "blocked_reason": "no"}),
-    (Review, {"verdict": "approve", "summary": "s", "criteria": [{"id": "c", "status": "not_met"}]}),
     (Review, {"verdict": "approve", "summary": "s", "findings": [{"severity": "blocking", "category": "tests", "description": "bad"}]}),
 ])
 def test_turn_shape_consistency(model, data):

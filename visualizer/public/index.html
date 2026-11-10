@@ -425,7 +425,17 @@
             <textarea id="pf-task" rows="7" maxlength="32768" aria-describedby="pf-task-count" placeholder="What should change in the project?"></textarea>
             <span class="hint mono field-count" id="pf-task-count">0 bytes</span>
           </div>
-          <label class="check"><input type="checkbox" id="pf-demo"><span>Demo run (sample project, no model) <span class="hint">the engine fixes a bundled sample project with scripted models; it stops at both approval points</span></span></label>
+          <label class="check"><input type="checkbox" id="pf-demo"><span>Demo run (sample project, no model) <span class="hint">the engine fixes a bundled sample project with scripted models; it stops at every approval point</span></span></label>
+          <div class="field pf-scenario" id="pf-scenario-row" hidden>
+            <label for="pf-scenario">Scenario</label>
+            <select id="pf-scenario" aria-describedby="pf-scenario-hint">
+              <option value="basic" selected>Basic fix</option>
+              <option value="replan">Re-planning</option>
+              <option value="parallel">Parallel steps</option>
+              <option value="evidence">Evidence checks</option>
+            </select>
+            <span class="hint" id="pf-scenario-hint">One bug, one step, both approvals.</span>
+          </div>
           <fieldset class="exec" id="pf-setup-set">
             <legend>Setup</legend>
             <p class="hint pf-note" id="pf-setup-note" hidden>Runs once in the fresh workspace before the first check, for example to install dependencies. Network stays off unless a command needs it.</p>
@@ -450,10 +460,19 @@
               <label class="check"><input type="radio" name="pf-sandbox" value="docker" id="pf-docker" checked><span>Docker container <span class="hint">no network, limited CPU, memory and processes; the image must exist locally</span></span></label>
               <label class="check"><input type="radio" name="pf-sandbox" value="host" id="pf-host"><span>Trusted host <span class="hint">checks run on this computer with your user rights</span></span></label>
             </div>
+            <div class="pf-sandbox-state">
+              <p class="form-status" id="pf-sandbox-status" role="status" aria-live="polite" tabindex="-1"></p>
+              <button type="button" class="btn btn-small" id="pf-build" hidden>Build sandbox image</button>
+            </div>
+            <details class="pv-tail" id="pf-build-log" hidden>
+              <summary>Build output</summary>
+              <pre class="exit-tail" id="pf-build-tail" tabindex="0" aria-label="Last output of the sandbox image build"></pre>
+            </details>
             <div class="field" id="pf-image-row">
               <label for="pf-image">Image <span class="hint" id="pf-image-hint">optional</span></label>
               <input id="pf-image" class="mono" type="text" spellcheck="false" autocomplete="off" maxlength="256">
             </div>
+            <p class="hint pf-note" id="pf-trust-demo" hidden>No acknowledgement is needed for the demo: only the bundled sample project runs on this computer.</p>
             <label class="check trust" id="pf-trust-row" hidden><input type="checkbox" id="pf-trust"><span>I accept that the checks run model-written code on this computer without OS isolation</span></label>
           </fieldset>
           <fieldset class="exec" id="pf-models-set">
@@ -476,6 +495,40 @@
               </div>
             </div>
             <p class="hint" id="pf-models-note">Every model of a signed-in account or API key can be used. Models marked via pi are answered by pi with its own sign-in.</p>
+          </fieldset>
+          <fieldset class="exec" id="pf-exec-set">
+            <legend>Execution</legend>
+            <div class="field-row" id="pf-exec-row">
+              <div class="field">
+                <label for="pf-replans">Re-planning</label>
+                <select id="pf-replans" aria-describedby="pf-replans-hint">
+                  <option value="0">Off</option>
+                  <option value="1" selected>Up to 1 revision</option>
+                  <option value="2">Up to 2 revisions</option>
+                  <option value="3">Up to 3 revisions</option>
+                </select>
+                <span class="hint" id="pf-replans-hint">If a step cannot be completed, the planner may revise the remaining plan; you approve every revision.</span>
+              </div>
+              <div class="field">
+                <label for="pf-parallel">Parallel steps</label>
+                <select id="pf-parallel" aria-describedby="pf-parallel-hint">
+                  <option value="1">1, one after another</option>
+                  <option value="2" selected>Up to 2</option>
+                  <option value="3">Up to 3</option>
+                  <option value="4">Up to 4</option>
+                </select>
+                <span class="hint" id="pf-parallel-hint">Independent steps run at the same time in private copies and are merged one by one.</span>
+              </div>
+            </div>
+            <div class="field">
+              <label for="pf-grounding">Evidence checks</label>
+              <select id="pf-grounding">
+                <option value="enforce" selected>Enforce - reject output that is not backed by evidence</option>
+                <option value="observe">Observe only - record and score, reject nothing</option>
+              </select>
+              <span class="hint" id="pf-grounding-hint" hidden>The evidence demo needs Enforce.</span>
+            </div>
+            <label class="check"><input type="checkbox" id="pf-guidance" aria-describedby="pf-guidance-hint"><span>Procedural guidance (experimental) <span class="hint" id="pf-guidance-hint">Adds situational advice to the models' prompts. Off by default until a graph has been validated.</span></span></label>
           </fieldset>
           <fieldset class="exec" id="pf-policy-set">
             <legend>Approval</legend>

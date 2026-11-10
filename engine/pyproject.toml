@@ -24,3 +24,6 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+scranton_pipeline = ["sandbox_image/Dockerfile", "sandbox_image/.dockerignore", "procedure/default.json", "evals/packs/core/pack.json", "evals/packs/core/refiner.json", "evals/packs/core/fixture/*.py", "evals/packs/core/green/*.py", "evals/packs/core/turns/*/*.json"]

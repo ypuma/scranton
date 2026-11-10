@@ -6,9 +6,9 @@ import { postJson } from './control-panel.js';
 import { formatClock } from './format.js';
 import {
   parseRunList, parseRunDoc, mergeEvents, runChoices, pickRun, runLine, stepper, lastWorkNode, announcement,
-  canCancel, canResume, createPoller, classifyDiff, diffFiles, actionLabel, eventText, LOUD_EVENTS, buildDecision,
+  canCancel, canResume, createPoller, classifyDiff, diffFiles, actionLabel, eventText, buildDecision,
   reportLimitations, revealBidi, folderName, pipelineUrl, runUrl, launchText, TERMINAL, RUN_STATUS, DIFF_LINES_SHOWN, COMMENT_MAX,
-  RUN_ID_RE,
+  RUN_ID_RE, laneRows, evidenceView, riskFlagText, activityEvents, eventLoud, nodeLabel,
 } from './pipeline-model.js';
 
 const $ = (id) => document.getElementById(id);
@@ -357,7 +357,7 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     const glyph = el('span', 'pill-glyph', line.glyph);
     glyph.setAttribute('aria-hidden', 'true');
     e.pill.replaceChildren(glyph, el('span', 'pill-text', line.label));
-    e.meta.textContent = line.parts.join(' · ');
+    renderMeta(line);
     e.pill.hidden = !s;
 
     const choices = runChoices(list?.runs ?? []);
@@ -407,6 +407,25 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       announced = news;
     }
     renderSections(s);
+  }
+
+  // The run line figures. The sandbox fragment carries the engine's whole sentence as its title; when the fragment
+  // shortens it, the sentence is also said once in a quiet line below, where keyboard and screen readers reach it.
+  // Rebuilt only on change, so a hovered title survives the polls.
+  function renderMeta(line) {
+    const key = JSON.stringify([line.parts, line.sandbox]);
+    if (e.meta.dataset.key === key) return;
+    e.meta.dataset.key = key;
+    const sb = line.sandbox;
+    e.meta.replaceChildren(...line.parts.flatMap((p, i) => {
+      let node = p;
+      if (i === sb?.at && sb.full) {
+        node = el('span', '', p);
+        node.title = sb.full;
+      }
+      return i ? [' · ', node] : [node];
+    }));
+    if (sb?.more) e.meta.append(' ', el('span', 'hint pv-block', sb.full));
   }
 
   function renderStepper(s) {
@@ -461,24 +480,32 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     const main = [];
     const side = [];
     if (s && run) {
+      if (s.progress.lanes.length) main.push(['lanes', JSON.stringify(s.progress.lanes), () => lanesSection(s.progress.lanes)]);
       const plan = run.plan;
       const planGate = s.pending?.gate === 'plan' ? s.pending : null;
       if (plan || planGate) main.push(['plan', JSON.stringify([plan, planGate, s.progress.stepIndex, gateState('plan')]), () => planSection(plan, planGate, s)]);
       if (s.checks.length) main.push(['checks', JSON.stringify(s.checks), () => checksSection(s.checks)]);
-      if (run.review) main.push(['review', JSON.stringify(run.review), () => reviewSection(run.review)]);
       const diff = artifacts.get('diff');
       const deliveryGate = s.pending?.gate === 'delivery' ? s.pending : null;
+      const finished = TERMINAL.has(s.status) || s.status === 'suspended';
+      // said once, where the decision is made: in the delivery gate, else in the result of a finished run
+      const evidence = deliveryGate || finished ? evidenceView(deliveryGate?.grounding ?? s.grounding, plan, run.review) : null;
+      // the evidence lists every criterion with its decided state, so the review leaves its own list out
+      const decided = Boolean(evidence?.criteria.length);
+      if (run.review) main.push(['review', JSON.stringify([run.review, decided]), () => reviewSection(run.review, decided)]);
       if (deliveryGate || diff?.content || diff?.loading || diff?.error || s.delivery?.applied === true || s.delivery?.conflicts.length) {
-        main.push(['changes', JSON.stringify([diff?.key, diff?.loading, diff?.error, Boolean(diff?.content), deliveryGate, s.delivery, s.sourceDir, gateState('delivery')]),
-          () => changesSection(diff, deliveryGate, s)]);
+        main.push(['changes', JSON.stringify([diff?.key, diff?.loading, diff?.error, Boolean(diff?.content), deliveryGate, s.delivery, s.sourceDir, gateState('delivery'), deliveryGate && evidence]),
+          () => changesSection(diff, deliveryGate, s, evidence)]);
       }
-      if (TERMINAL.has(s.status) || s.status === 'suspended') {
+      if (finished) {
         const report = artifacts.get('report');
         const limits = artifacts.get('report-json');
-        main.push(['result', JSON.stringify([s.status, s.failure, s.resumable, report?.key, report?.loading, report?.error, Boolean(report?.content), limits?.key, limits?.loading]),
-          () => resultSection(s, report, limits)]);
+        const shown = deliveryGate ? null : evidence;
+        main.push(['result', JSON.stringify([s.status, s.failure, s.resumable, report?.key, report?.loading, report?.error, Boolean(report?.content), limits?.key, limits?.loading, shown]),
+          () => resultSection(s, report, limits, shown)]);
       }
-      if (run.events.length || run.stderrTail) side.push(['activity', JSON.stringify([run.events.at(-1)?.seq ?? 0, run.events.length, run.stderrTail]), () => activitySection(run.events, run.stderrTail)]);
+      const observe = s.grounding?.mode === 'observe';
+      if (run.events.length || run.stderrTail) side.push(['activity', JSON.stringify([run.events.at(-1)?.seq ?? 0, run.events.length, run.stderrTail, observe]), () => activitySection(run.events, run.stderrTail, observe)]);
     }
     place(e.sections, main);
     place(e.side, side);
@@ -543,9 +570,7 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
   function planSection(plan, gate, s) {
     const root = section('plan', 'Plan', plan ? `${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}` : '');
     if (gate) {
-      const flags = gate.riskFlags.length
-        ? bullets('pv-flags', gate.riskFlags, (li, f) => { li.className = 'badge'; li.dataset.tone = 'loud'; li.textContent = f.replace(/_/g, ' '); })
-        : el('p', 'hint', 'No risk flag was raised.');
+      const flags = gate.riskFlags.length ? riskFlags(gate.riskFlags) : el('p', 'hint', 'No risk flag was raised.');
       const field = el('div', 'field');
       const label = el('label', '', 'Comment ');
       label.append(el('span', 'hint', 'optional, kept with the decision'));
@@ -559,7 +584,9 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       label.htmlFor = text.id;
       text.addEventListener('input', () => { comment = text.value; });
       field.append(label, text);
-      root.append(gateBox('plan', 'The plan waits for your approval', [flags, field], [
+      const revised = gate.revision > 0;
+      const detail = revised && gate.replanReason ? [el('p', 'pv-text pv-reason', `Why: ${gate.replanReason}`), flags, field] : [flags, field];
+      root.append(gateBox('plan', revised ? `Revised plan (revision ${gate.revision}) waits for your approval` : 'The plan waits for your approval', detail, [
         ['Approve plan', 'approve', true],
         ['Reject plan', 'reject', false],
       ]));
@@ -599,6 +626,62 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     return root;
   }
 
+  function riskFlags(flags) {
+    return bullets('pv-flags', flags, (li, f) => { li.className = 'badge'; li.dataset.tone = 'loud'; li.textContent = riskFlagText(f); });
+  }
+
+  // Section 21: the criteria with their decided state, the score, the violations and the probe. No box of its own:
+  // it sits in the delivery gate or in the result.
+  function evidenceBlock(v) {
+    const root = el('div', 'pv-evidence');
+    root.append(sub('Evidence'));
+    if (v.criteria.length) {
+      const ul = bullets('pv-list', v.criteria, (li, c) => {
+        li.append(el('span', 'mono pv-id', c.id));
+        if (c.text !== c.id) li.append(' ', el('span', '', c.text));
+        const st = el('span', 'pv-block pv-crit');
+        const word = el('span', 'pv-crit-state', c.label);
+        if (c.loud) word.dataset.loud = 'true';
+        st.append(word);
+        const more = [c.detail, c.checks].filter(Boolean).join(' · ');
+        if (more) st.append(el('span', 'hint', ` · ${more}`));
+        li.append(st);
+        if (c.note) li.append(el('span', 'hint pv-block', c.note));
+      });
+      ul.setAttribute('aria-label', 'Acceptance criteria');
+      root.append(ul);
+    }
+    if (v.score) root.append(el('p', 'pv-text', v.score));
+    // the parts of the score, quiet, where the keyboard and screen readers still reach them
+    if (v.parts) root.append(el('p', 'hint pv-text', v.parts));
+    if (v.rating) root.append(el('p', 'hint pv-text', v.rating));
+    if (v.observeNote) root.append(el('p', 'hint pv-text', 'observe only - nothing was rejected'));
+    if (v.violations.length) {
+      const ul = bullets('pv-list', v.violations, (li, x) => li.append(el('span', 'mono pv-id', String(x.count)), ' ', el('span', '', x.label)));
+      ul.setAttribute('aria-label', 'Violations by kind');
+      root.append(el('p', 'pv-sub', 'Violations'), el('p', 'hint pv-text', v.violationsLead), ul);
+    }
+    if (v.probe) root.append(el('p', 'pv-text', v.probe));
+    return root;
+  }
+
+  // the steps of a parallel wave: one hairline-separated list, no box per lane
+  function lanesSection(lanes) {
+    const rows = laneRows(lanes);
+    const root = section('lanes', 'Implement', `${rows.length} steps in parallel`);
+    root.append(bullets('pv-lanes', rows, (li, l) => {
+      li.className = 'pv-lane';
+      li.dataset.state = l.state;
+      li.dataset.loud = String(l.loud);
+      const g = el('span', 'pv-lane-glyph', l.glyph);
+      g.setAttribute('aria-hidden', 'true');
+      const title = el('span', 'pv-lane-title');
+      title.append(el('span', 'mono pv-id', l.stepId), ' ', el('span', '', l.title));
+      li.append(g, title, el('span', 'pv-lane-state', l.label), el('span', 'pv-lane-attempt', l.attempt));
+    }));
+    return root;
+  }
+
   function checksSection(checks) {
     const failed = checks.filter((c) => c.status !== 'passed').length;
     const root = section('checks', 'Checks', failed ? `${failed} not passed` : 'all passed');
@@ -633,7 +716,8 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     return d;
   }
 
-  function reviewSection(r) {
+  // decided: the evidence block shows the criteria
+  function reviewSection(r, decided = false) {
     const root = section('review', 'Review');
     const verdict = el('p', 'pv-verdict');
     const badge = el('span', 'badge', r.verdict === 'approve' ? 'Approved' : 'Changes requested');
@@ -641,7 +725,7 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     verdict.append(badge);
     if (r.summary) verdict.append(' ', el('span', '', r.summary));
     root.append(verdict);
-    if (r.criteria.length) {
+    if (r.criteria.length && !decided) {
       root.append(sub('Criteria'), bullets('pv-list', r.criteria, (li, c) => {
         const st = el('span', 'pv-action', c.status.replace(/_/g, ' '));
         if (c.status === 'not_met') st.dataset.loud = 'true';
@@ -661,7 +745,7 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     return root;
   }
 
-  function changesSection(diff, gate, s) {
+  function changesSection(diff, gate, s, evidence) {
     const lines = diff?.content ? classifyDiff(diff.content) : [];
     const files = gate?.files.length ? gate.files.map((f) => ({ ...f, action: f.action })) : diffFiles(lines);
     // without a delivery gate, only a succeeded run has the whole change; any other one stopped part way
@@ -673,7 +757,10 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       where.id = 'pv-apply-where';
       where.append('Apply writes these changes into ', el('span', 'mono', folder || 'the project folder'),
         '. Nothing there changes until you choose. Keep as patch only leaves the folder as it is.');
-      root.append(gateBox('delivery', 'Apply the changes to the project?', [where], [
+      const detail = [where];
+      if (gate.riskFlags.length) detail.push(riskFlags(gate.riskFlags));
+      if (evidence) detail.push(evidenceBlock(evidence));
+      root.append(gateBox('delivery', 'Apply the changes to the project?', detail, [
         [`Apply to ${folderName(folder) || 'project'}`, 'approve', true, (b) => { b.title = folder; b.setAttribute('aria-describedby', where.id); }],
         ['Keep as patch only', 'reject', false],
       ]));
@@ -711,17 +798,18 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     return root;
   }
 
-  function resultSection(s, report, limits) {
+  function resultSection(s, report, limits, evidence) {
     const root = section('result', 'Result', RUN_STATUS[s.status].label);
     if (s.failure) {
       const box = el('div', 'pv-failure');
       box.append(el('strong', '', `${s.failure.failureClass || 'failure'}${s.failure.code ? ` / ${s.failure.code}` : ''}`));
       if (s.failure.message) box.append(el('span', 'pv-block', s.failure.message));
-      if (s.failure.node) box.append(el('span', 'pv-block pv-dim', `in ${s.failure.node}`));
+      if (s.failure.node) box.append(el('span', 'pv-block pv-dim', `in ${nodeLabel(s.failure.node)}`));
       root.append(box);
     } else if (s.status === 'rejected') root.append(el('p', 'pv-text', 'The plan was rejected; nothing was implemented.'));
     else if (s.status === 'cancelled') root.append(el('p', 'pv-text', 'The run was cancelled. The project folder was not changed by it unless the changes had been applied before.'));
     else if (s.status === 'suspended') root.append(el('p', 'pv-text', s.resumable ? 'The run stopped before it finished (the engine or the app went away). Resume continues from the last finished step.' : 'The run stopped before it finished.'));
+    if (evidence) root.append(evidenceBlock(evidence));
     const lim = limits?.content ? reportLimitations(limits.content) : [];
     if (lim.length) root.append(sub('Limitations'), bullets('pv-list', lim, (li, l) => { li.textContent = l; }));
     if (report?.loading && !report.content) root.append(el('p', 'hint', 'Loading the report...'));
@@ -736,7 +824,9 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     return root;
   }
 
-  function activitySection(events, stderr) {
+  // observe: the run records grounding violations instead of rejecting the output
+  function activitySection(all, stderr, observe) {
+    const events = activityEvents(all);
     const root = section('activity', 'Activity', `${events.length} event${events.length === 1 ? '' : 's'}, newest first`);
     const ol = el('ol', 'pv-events');
     ol.tabIndex = 0;
@@ -744,9 +834,11 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     ol.setAttribute('aria-label', 'Engine events, newest first');
     ol.append(...events.slice(-EVENTS_SHOWN).reverse().map((ev) => {
       const li = el('li', 'pv-event');
-      if (LOUD_EVENTS.has(ev.type)) li.dataset.loud = 'true';
-      li.append(el('span', 'mono pv-ev-time', formatClock(ev.ts)), el('span', 'mono pv-ev-type', ev.type.replace(/_/g, ' ')),
-        el('span', 'pv-ev-text', [ev.node, eventText(ev)].filter(Boolean).join(' · ')));
+      if (eventLoud(ev, { observe })) li.dataset.loud = 'true';
+      const said = [nodeLabel(ev.node), eventText(ev, { observe })].filter(Boolean).join(' · ');
+      const text = el('span', 'pv-ev-text', ev.lane ? undefined : said);
+      if (ev.lane) text.append(el('span', 'mono pv-ev-lane', ev.lane), el('span', '', said));
+      li.append(el('span', 'mono pv-ev-time', formatClock(ev.ts)), el('span', 'mono pv-ev-type', ev.type.replace(/_/g, ' ')), text);
       return li;
     }));
     if (events.length) root.append(ol);

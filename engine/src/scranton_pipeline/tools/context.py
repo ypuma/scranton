@@ -5,7 +5,7 @@ from pathlib import Path
 from ..config import Limits
 from ..errors import EngineError, FailureClass
 from ..models import ContextItem, ContextRequest
-from .fs import PathPolicy, read_text
+from .fs import PathPolicy, read_text, sha256_file
 from .secrets import Redactor
 
 
@@ -70,4 +70,10 @@ def fulfil(requests: Sequence[ContextRequest], *, workspace: Path, policy: PathP
             results.append(ContextItem(request=request, ok=False, content="", truncated=False, note=redactor.redact(str(exc))))
         except OSError:
             results.append(ContextItem(request=request, ok=False, content="", truncated=False, note="Path unavailable"))
-    return results
+    from scranton_pipeline.grounding import context_id
+    stamped = []
+    for item in results:
+        sha = sha256_file(policy.resolve(item.request.path)) if item.ok and item.request.kind == "read" else ""
+        raw = {**item.model_dump(mode="json"), "sha256": sha}
+        stamped.append(item.model_copy(update={"sha256": sha, "evidence_id": context_id(raw)}))
+    return stamped

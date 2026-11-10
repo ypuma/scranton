@@ -19,6 +19,22 @@ export const COMMAND_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const COMMAND_ID_MAX = 64;
 export const RUN_ID_RE = /^[a-z0-9]{8,32}$/;
 export const DEMO_TASK = 'Demo run: fix the bug in the bundled sample project.';
+// section 19: the engine's demo scenarios, the first is the default
+export const DEMO_SCENARIOS = [
+  { id: 'basic', label: 'Basic fix', hint: 'One bug, one step, both approvals.' },
+  { id: 'replan', label: 'Re-planning', hint: 'The first plan gets stuck; you approve a revised plan.' },
+  { id: 'parallel', label: 'Parallel steps', hint: 'Two independent fixes run side by side and are merged.' },
+  // section 25b: the server refuses this scenario with observe
+  { id: 'evidence', label: 'Evidence checks', hint: 'Ungrounded output is rejected and repaired; at delivery one criterion is shown by checks, one passed before the change too.', enforce: true },
+];
+export const demoScenario = (id) => DEMO_SCENARIOS.find((s) => s.id === id) ?? DEMO_SCENARIOS[0];
+// sections 16 and 18: the server takes replans 0..3 and parallelSteps 1..4; the form starts at 1 and 2
+export const REPLANS_MAX = 3;
+export const REPLANS_DEFAULT = 1;
+export const PARALLEL_MAX = 4;
+export const PARALLEL_DEFAULT = 2;
+export const SANDBOX_POLL_MS = 1000;
+export const BUILD_URL = '/api/pipeline/sandbox/build';
 
 // status -> what the run line says and the chat status the sidebar shows for it (section 9)
 export const RUN_STATUS = {
@@ -47,7 +63,8 @@ const NODE_PHASE = {
   prepare_workspace: 'prepare', index_repo: 'prepare', baseline_checks: 'prepare',
   plan: 'plan', plan_context: 'plan', approve_plan: 'approve_plan',
   select_step: 'implement', implement: 'implement', implement_context: 'implement', apply_edits: 'implement', verify: 'implement',
-  review: 'review', package: 'deliver', approve_delivery: 'deliver', apply_to_source: 'deliver', finalize: 'done',
+  replan: 'plan', run_lane: 'implement', merge_wave: 'implement',
+  review: 'review', ground: 'review', package: 'deliver', approve_delivery: 'deliver', apply_to_source: 'deliver', finalize: 'done',
 };
 
 const str = (v) => (typeof v === 'string' ? stripBidi(v) : '');
@@ -57,6 +74,12 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const list = (v) => (Array.isArray(v) ? v : []);
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
 const enc = encodeURIComponent;
+// a word for a key from the engine, never one inherited from Object.prototype
+const own = (map, key) => (typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined);
+
+// Node names shown as words; every other node keeps its name
+const NODE_LABEL = { ground: 'Check evidence' };
+export const nodeLabel = (node) => own(NODE_LABEL, node) ?? node ?? '';
 
 // Diffs and reports quote the repository verbatim. Bidi controls there are shown, never applied or dropped, so a
 // reordered line (trojan source) cannot read as something else.
@@ -89,7 +112,7 @@ export function detectUrl(project) {
 
 // httpStatus: of the answer (404 = a server older than this page); doc: its body
 export function parseEngineInfo(doc, httpStatus = 200) {
-  const none = (reason) => ({ available: false, reason, version: null, dockerImage: null, providers: [] });
+  const none = (reason) => ({ available: false, reason, version: null, dockerImage: null, sandbox: parseSandbox(null), providers: [] });
   if (httpStatus === 0) return none('The server did not answer.');
   if (httpStatus === 404) return none('This server does not offer the Pipeline engine yet.');
   const d = obj(doc);
@@ -108,8 +131,44 @@ export function parseEngineInfo(doc, httpStatus = 200) {
     reason: d.available === true ? null : str(d.reason) || 'The Pipeline engine is not available on this server.',
     version: str(d.version) || null,
     dockerImage: str(obj(d.sandbox)?.dockerImage) || null,
+    sandbox: parseSandbox(d.sandbox),
     providers,
   };
+}
+
+const BUILD_STATES = ['idle', 'running', 'succeeded', 'failed'];
+
+// GET /api/pipeline sandbox (section 18). known: false for a server that only names the default image.
+export function parseSandbox(v) {
+  const o = obj(v);
+  const docker = obj(o?.docker);
+  const image = obj(o?.image);
+  if (!docker || typeof docker.available !== 'boolean') return { known: false, docker: null, image: null, build: null };
+  const b = obj(o.build);
+  return {
+    known: true,
+    docker: { available: docker.available, version: str(docker.version) || null, reason: str(docker.reason) || null },
+    image: image ? { name: str(image.name) || str(o.dockerImage) || null, present: image.present === true } : null,
+    build: b && BUILD_STATES.includes(b.state) ? { state: b.state, startedAt: str(b.startedAt) || null, finishedAt: str(b.finishedAt) || null, tail: raw(b.tail) } : null,
+  };
+}
+
+// What the Sandbox part of the form says about Docker, in one line. ready: Docker can be preselected (null = unknown).
+// buildError: the answer to this page's own build request, if it failed.
+// -> { line, tone, ready, build: hidden | idle | running, tail }
+export function sandboxView(sb, { buildError = '' } = {}) {
+  if (!sb?.known) return { line: '', tone: '', ready: null, build: 'hidden', tail: '' };
+  const name = sb.image?.name || 'the sandbox image';
+  const state = sb.build?.state ?? 'idle';
+  const tail = state === 'running' || state === 'failed' ? sb.build.tail : '';
+  if (state === 'running') return { line: `Building the sandbox image ${name}...`, tone: 'busy', ready: false, build: 'running', tail };
+  if (!sb.docker.available) return { line: `Docker is not running: ${sb.docker.reason || 'no reason given'}`, tone: 'error', ready: false, build: 'hidden', tail };
+  if (sb.image && !sb.image.present) {
+    if (buildError) return { line: `The sandbox image could not be built: ${clip(buildError, 300)}`, tone: 'error', ready: false, build: 'idle', tail };
+    if (state === 'failed') return { line: `The sandbox image ${name} could not be built. Its output is below.`, tone: 'error', ready: false, build: 'idle', tail };
+    return { line: `The sandbox image ${name} has not been built yet.`, tone: '', ready: false, build: 'idle', tail };
+  }
+  return { line: `Docker${sb.docker.version ? ` ${sb.docker.version}` : ''} is running; the image ${name} is present.`, tone: '', ready: true, build: 'hidden', tail: '' };
 }
 
 // The option groups of a role's model select. value = JSON [provider, model]; unsupported providers are listed, disabled.
@@ -210,10 +269,14 @@ export function pickRun(parsed, picked = null) {
 function parsePending(p) {
   const o = obj(p);
   if (!o || (o.gate !== 'plan' && o.gate !== 'delivery') || typeof o.digest !== 'string' || !o.digest) return null;
-  const base = { gate: o.gate, digest: o.digest, path: str(o.path) || null };
-  if (o.gate === 'plan') return { ...base, riskFlags: list(o.risk_flags).filter((x) => typeof x === 'string').map(str) };
+  const base = { gate: o.gate, digest: o.digest, path: str(o.path) || null, riskFlags: list(o.risk_flags).filter((x) => typeof x === 'string' && x).map(str) };
+  if (o.gate === 'plan') {
+    // the engine says "code: message"; a {code, message} object reads the same
+    const why = obj(o.replan_reason) ? [str(o.replan_reason.code), str(o.replan_reason.message)].filter(Boolean).join(': ') : str(o.replan_reason);
+    return { ...base, revision: int(o.revision), replanReason: why };
+  }
   return {
-    ...base,
+    ...base, grounding: parseGrounding(o.grounding),
     files: list(o.files).map((f) => (obj(f) && typeof f.path === 'string'
       ? { path: str(f.path), action: str(f.action), added: int(f.added), removed: int(f.removed) } : null)).filter(Boolean),
   };
@@ -234,6 +297,10 @@ export function parseStatus(s) {
     progress: {
       stepIndex: Number.isInteger(pr.step_index) ? pr.step_index : -1, stepCount: int(pr.step_count),
       stepTitle: str(pr.step_title), attempt: int(pr.attempt), reviewRound: int(pr.review_round),
+      planRevision: int(pr.plan_revision), replansLeft: Number.isInteger(pr.replans_left) && pr.replans_left >= 0 ? pr.replans_left : null,
+      stepsDone: Number.isInteger(pr.steps_done) && pr.steps_done >= 0 ? pr.steps_done : null,
+      lanes: list(pr.lanes).map((l) => (obj(l) && typeof l.step_id === 'string' && l.step_id
+        ? { stepId: str(l.step_id), title: str(l.title), state: str(l.state) || 'running', attempt: int(l.attempt) } : null)).filter(Boolean),
     },
     pending: parsePending(o.pending),
     failure: f ? { failureClass: str(f.failure_class), code: str(f.code), message: str(f.message), node: str(f.node) } : null,
@@ -250,7 +317,16 @@ export function parseStatus(s) {
     artifacts: {
       plan: Boolean(art.plan), diff: Boolean(art.diff), reportMd: Boolean(art.report_md), reportJson: Boolean(art.report_json),
     },
-    sandbox: { mode: obj(o.sandbox)?.mode === 'docker' ? 'docker' : obj(o.sandbox)?.mode === 'host' ? 'host' : null, isolated: obj(o.sandbox)?.isolated === true },
+    sandbox: {
+      mode: obj(o.sandbox)?.mode === 'docker' ? 'docker' : obj(o.sandbox)?.mode === 'host' ? 'host' : null, isolated: obj(o.sandbox)?.isolated === true,
+      isolation: str(obj(o.sandbox)?.isolation).replace(/\s+/g, ' ').trim() || null,
+      image: str(obj(o.sandbox)?.image).trim() || null, setupNetwork: obj(o.sandbox)?.setup_network === true,
+    },
+    grounding: parseGrounding(o.grounding),
+    procedure: {
+      enabled: obj(o.procedure)?.enabled === true, name: str(obj(o.procedure)?.name) || null,
+      situation: str(obj(o.procedure)?.situation).trim() || null,
+    },
     createdAt: str(o.created_at) || null, updatedAt: str(o.updated_at) || null,
   };
 }
@@ -258,7 +334,10 @@ export function parseStatus(s) {
 function parseEvent(e) {
   const o = obj(e);
   if (!o || !Number.isInteger(o.seq) || typeof o.type !== 'string') return null;
-  return { seq: o.seq, ts: str(o.ts), type: str(o.type), node: str(o.node) || null, data: obj(o.data) ?? {} };
+  const data = obj(o.data) ?? {};
+  // section 17: events from a parallel lane carry the lane's step id
+  const lane = str(data.lane) || str(o.lane) || null;
+  return { seq: o.seq, ts: str(o.ts), type: str(o.type), node: str(o.node) || null, lane, data };
 }
 
 function parseLaunchError(v) {
@@ -328,6 +407,97 @@ export function reportLimitations(text) {
   }
 }
 
+// ------------------------------------------------------------ evidence grounding (sections 21 and 24)
+
+const TIERS = ['clean', 'minor', 'major', 'failing'];
+const PROBE_STATES = ['not_needed', 'demonstrated', 'not_demonstrated', 'inconclusive', 'off'];
+const DECIDED_BY = ['baseline', 'probe', 'review', 'none'];
+export const CRITERION_STATES = {
+  demonstrated: 'shown by checks',
+  met_not_demonstrated: 'passes, but passed before the change too',
+  attested: "reviewer's judgement, with cited evidence",
+  not_met: 'not met',
+  unclear: 'unclear',
+  undecided: 'not decided yet',
+};
+const DEMONSTRATED_BY = { baseline: 'failed before the change, passes now', probe: 'the new tests fail without the change' };
+export const VIOLATION_TEXT = {
+  unknown_citation: 'cited evidence that was never shown',
+  unsupported_assessment: 'criterion marked met without evidence',
+  unsupported_finding: 'finding without evidence',
+  unseen_target: 'planned a change to a file it had not read',
+  unseen_edit: 'edited a file it had not been shown',
+  false_absence: 'claimed something was missing that exists',
+  protected_request: 'asked for a protected path',
+  out_of_scope_edit: "edited outside the step's files",
+};
+const PROBE_TEXT = { demonstrated: 'the new tests fail without the change', not_demonstrated: 'the tests pass even without the change', inconclusive: 'could not be run' };
+export const RISK_FLAG_TEXT = {
+  criteria_not_demonstrated: "A criterion's checks passed before the change too",
+  // section 21.7: set only for accepted output, so only in observe mode
+  grounding_violations: 'Output that was not backed by evidence was accepted (observe only)',
+};
+export const riskFlagText = (flag) => own(RISK_FLAG_TEXT, flag) ?? str(flag).replace(/_/g, ' ');
+const violationText = (kind) => own(VIOLATION_TEXT, kind) ?? str(kind);
+const stateText = (state) => own(CRITERION_STATES, state) ?? (str(state).replace(/_/g, ' ') || 'unknown');
+
+// status.grounding / pending.grounding. null: an engine without grounding
+export function parseGrounding(v) {
+  const o = obj(v);
+  if (!o) return null;
+  const score = (x) => (num(x) !== null && x >= 0 ? x : null);
+  return {
+    mode: o.mode === 'observe' ? 'observe' : 'enforce',
+    answer: score(o.answer), trajectory: score(o.trajectory), violationRate: num(o.violation_rate) !== null && o.violation_rate >= 0 && o.violation_rate <= 1 ? o.violation_rate : null,
+    adjusted: score(o.adjusted), tier: TIERS.includes(o.tier) ? o.tier : null, outputs: int(o.outputs),
+    violations: Object.entries(obj(o.violations) ?? {}).filter(([k, n]) => str(k) && Number.isInteger(n) && n > 0).map(([kind, count]) => ({ kind: str(kind), count })),
+    criteria: list(o.criteria).map((c) => (obj(c) && typeof c.id === 'string' && c.id ? {
+      id: str(c.id), verifiedBy: str(c.verified_by), state: str(c.state) || 'undecided', by: DECIDED_BY.includes(c.by) ? c.by : 'none',
+      checks: list(c.checks).filter((x) => typeof x === 'string' && x).map(str),
+    } : null)).filter(Boolean),
+    probe: PROBE_STATES.includes(obj(o.probe)?.status) ? o.probe.status : null,
+  };
+}
+
+// What the delivery gate and the result say about the evidence. plan: for the criterion texts; review: the
+// reviewer's own words for the criteria it decided. null: nothing was evaluated yet.
+// -> { criteria: [{ id, text, state, label, detail, checks, note, loud }], score, parts, rating, violations: [{ kind, label, count }], violationsLead, probe, observe, observeNote }
+export function evidenceView(g, plan = null, review = null) {
+  if (!g || (!g.outputs && !g.criteria.length)) return null;
+  const texts = new Map(list(plan?.criteria).map((c) => [c.id, c.text]));
+  const said = new Map(list(review?.criteria).map((c) => [c.id, c.evidence]));
+  const criteria = g.criteria.map((c) => ({
+    id: c.id, text: texts.get(c.id) || c.id, state: own(CRITERION_STATES, c.state) ? c.state : 'other', label: stateText(c.state),
+    detail: c.state === 'demonstrated' ? own(DEMONSTRATED_BY, c.by) ?? '' : '',
+    checks: c.verifiedBy === 'checks' ? (c.checks.length ? `checks: ${c.checks.join(', ')}` : 'all required checks') : '',
+    note: c.by === 'review' ? said.get(c.id) ?? '' : '',
+    loud: c.state === 'not_met',
+  }));
+  const parts = [
+    g.answer !== null ? `answer ${g.answer.toFixed(2)}` : '',
+    g.trajectory !== null ? `trajectory ${g.trajectory.toFixed(2)}` : '',
+    g.violationRate !== null ? `${Math.round(g.violationRate * 100)}% of outputs with a violation` : '',
+  ].filter(Boolean).join(' · ');
+  const observe = g.mode === 'observe';
+  // the tier rates the models' discipline, not the change: with few outputs two rejected ones already make it failing
+  const flagged = g.outputs > 0 && g.violationRate !== null ? Math.round(g.violationRate * g.outputs) : null;
+  const rating = !g.tier || g.tier === 'clean' ? '' : `The score rates how the models worked, not the change itself${flagged === null ? '.'
+    : `: ${flagged} of ${g.outputs} output${g.outputs === 1 ? '' : 's'} ${flagged === 1 ? 'was' : 'were'} ${observe ? 'accepted without evidence' : 'rejected and repaired'}.`}`;
+  return {
+    criteria,
+    score: g.adjusted !== null ? `Evidence score ${g.adjusted.toFixed(2)}${g.tier ? ` · ${g.tier}` : ''}` : '',
+    parts,
+    rating,
+    violations: g.violations.map((v) => ({ kind: v.kind, label: violationText(v.kind), count: v.count })),
+    // enforce repairs every violating output before it is accepted; observe accepts it
+    violationsLead: !g.violations.length ? '' : g.mode === 'observe' ? 'Accepted without evidence:' : 'Rejected and repaired:',
+    probe: own(PROBE_TEXT, g.probe) ? `Counterfactual probe: ${PROBE_TEXT[g.probe]}` : '',
+    observe,
+    // "N outputs were accepted without evidence" already says nothing was rejected
+    observeNote: observe && !(rating && flagged),
+  };
+}
+
 // ------------------------------------------------------------ status, phase, stepper
 
 export function chatStatusOf(status) {
@@ -374,31 +544,74 @@ export function stepper(s, lastNode = null) {
   return PHASES.map((p, i) => ({ ...p, state: i < at ? 'done' : i === at ? here : 'pending' }));
 }
 
-// The run line: the status once, then the figures. -> { status, label, glyph, loud, parts: [text] }
+// The first clause of the engine's isolation sentence (up to the first ';', else the whole sentence), at most max
+// characters and cut only between words.
+const TRAILING = /[\s.,:;]+$/;
+function firstClause(sentence, max = 80) {
+  const c = sentence.split(';')[0].replace(TRAILING, '');
+  if (c.length <= max) return c;
+  // the space found is at most at max - 3, so the ellipsis still fits
+  const at = c.slice(0, max - 2).lastIndexOf(' ');
+  return `${c.slice(0, at > 0 ? at : max - 3).replace(TRAILING, '')}...`;
+}
+
+// The sandbox fragment of the run line. -> { text, full, more }
+// full: the engine's sentence ('' from an older engine); more: it says more than the fragment does.
+function sandboxFragment(sb) {
+  const clause = sb.isolation ? firstClause(sb.isolation) : '';
+  if (!clause) return { text: sb.mode === 'host' ? 'host, no OS isolation' : 'Docker (isolated, no network)', full: '', more: false };
+  const label = sb.mode === 'host' ? 'host' : 'Docker';
+  return {
+    text: new RegExp(`^${label}\\b`, 'i').test(clause) ? clause : `${label} · ${clause}`,
+    full: sb.isolation, more: clause !== sb.isolation.replace(TRAILING, ''),
+  };
+}
+
+// The run line: the status once, then the figures. -> { status, label, glyph, loud, parts: [text], sandbox }
+// sandbox: { at, full, more } for the fragment at parts[at]; more: the full sentence says more than the fragment.
 export function runLine(s) {
-  if (!s) return { status: 'idle', label: 'No run', glyph: '○', loud: false, parts: [] };
+  if (!s) return { status: 'idle', label: 'No run', glyph: '○', loud: false, parts: [], sandbox: null };
   const v = RUN_STATUS[s.status];
   const parts = [];
   const phase = PHASES.find((p) => p.id === s.phase);
   if (phase && !TERMINAL.has(s.status)) parts.push(phase.label);
-  if (s.progress.stepCount > 0 && s.progress.stepIndex >= 0) {
+  if (s.progress.lanes.length) {
+    // the lanes list names the steps; the run line only counts
+    if (s.progress.stepCount > 0 && s.progress.stepsDone !== null) parts.push(`${Math.min(s.progress.stepsDone, s.progress.stepCount)} of ${s.progress.stepCount} steps done`);
+  } else if (s.progress.stepCount > 0 && s.progress.stepIndex >= 0) {
     parts.push(`step ${Math.min(s.progress.stepIndex + 1, s.progress.stepCount)}/${s.progress.stepCount}${s.progress.stepTitle ? ` ${clip(s.progress.stepTitle, 60)}` : ''}`);
   }
-  if (s.progress.attempt > 1) parts.push(`attempt ${s.progress.attempt}`);
+  if (s.progress.attempt > 1 && !s.progress.lanes.length) parts.push(`attempt ${s.progress.attempt}`);
+  const revision = Math.max(s.progress.planRevision, s.pending?.revision ?? 0);
+  if (revision > 0) {
+    parts.push(`plan revision ${revision}`);
+    if (s.progress.replansLeft !== null) parts.push(`${s.progress.replansLeft} replan${s.progress.replansLeft === 1 ? '' : 's'} left`);
+  }
   if (s.progress.reviewRound > 0) parts.push(`review round ${s.progress.reviewRound}`);
+  // section 23: one fragment for the procedure events, which get no activity entry of their own
+  if (s.procedure.enabled && s.procedure.situation) parts.push(`guidance: ${clip(s.procedure.situation, 60)}`);
   if (s.usage.calls > 0) {
     parts.push(`${s.usage.calls} model call${s.usage.calls === 1 ? '' : 's'} · ${formatTokens(s.usage.inputTokens)} in · ${formatTokens(s.usage.outputTokens)} out`);
   }
   if (s.usage.cost !== null) parts.push(`~${formatCost(s.usage.cost)}`);
-  if (s.sandbox.mode === 'host') parts.push('host, no OS isolation');
-  else if (s.sandbox.mode === 'docker') parts.push('Docker sandbox');
-  return { status: s.status, label: v.label, glyph: v.glyph, loud: LOUD.has(s.status), parts };
+  // the engine's own isolation sentence is the truth; the line keeps its first clause, an older engine sends none
+  let sandbox = null;
+  if (s.sandbox.mode) {
+    const f = sandboxFragment(s.sandbox);
+    sandbox = { at: parts.length, full: f.full, more: f.more };
+    parts.push(f.text);
+  }
+  if (s.sandbox.setupNetwork) parts.push('setup had network access');
+  return { status: s.status, label: v.label, glyph: v.glyph, loud: LOUD.has(s.status), parts, sandbox };
 }
 
 // What the screen-reader status line says when it changes; the figures are left out on purpose.
 export function announcement(s) {
   if (!s) return '';
-  if (s.status === 'awaiting_approval' && s.pending) return s.pending.gate === 'plan' ? 'Pipeline: the plan waits for your approval' : 'Pipeline: the changes wait for your decision';
+  if (s.status === 'awaiting_approval' && s.pending) {
+    if (s.pending.gate !== 'plan') return 'Pipeline: the changes wait for your decision';
+    return s.pending.revision > 0 ? `Pipeline: the revised plan (revision ${s.pending.revision}) waits for your approval` : 'Pipeline: the plan waits for your approval';
+  }
   return `Pipeline run ${RUN_STATUS[s.status].label.toLowerCase()}`;
 }
 
@@ -555,14 +768,73 @@ const EVENT_TEXT = {
   warning: (d) => `${str(d.code)}${d.message ? `: ${str(d.message)}` : ''}`,
   failure: (d) => `${str(d.failure_class)}/${str(d.code)}${d.message ? `: ${str(d.message)}` : ''}`,
   run_finished: (d) => `run finished: ${str(d.status)}`,
+  replan_requested: (d) => `${str(d.code) || 'replan'}${str(d.message) ? `: ${str(d.message)}` : ''}`,
+  replanned: (d) => (int(d.revision) ? `plan revision ${int(d.revision)}` : 'plan revised'),
+  wave_started: (d) => `wave ${waveOf(d.wave)}: ${ids(d.steps) || 'no steps'}`,
+  lane_started: () => 'started',
+  lane_finished: (d) => str(d.status) || 'finished',
+  wave_merged: (d) => `wave ${waveOf(d.wave)}: merged ${ids(d.merged) || 'none'}${ids(d.failed) ? ` · not merged ${ids(d.failed)}` : ''}`,
+  // listed only when not accepted (activityEvents); observe mode records instead of rejecting
+  grounding: (d, ctx) => `${own(ROLE_LABEL, d.role) ?? (str(d.role) || 'Model')} output ${ctx.observe ? 'recorded' : 'rejected'}: ${
+    [...new Set(list(d.violations).filter((k) => typeof k === 'string' && k).map(violationText))].join(', ') || 'no violation named'}`,
+  // protected files are outside the search space (section 25), so the claim is never "not in the project"
+  absence_verified: (d) => `Verified: ${clip(str(d.subject), 120) || 'it'} was not found in the ${
+    Number.isInteger(d.files_searched) && d.files_searched >= 0 ? `${d.files_searched} file${d.files_searched === 1 ? '' : 's'}` : 'files'} models may read`,
+  criteria_decided: (d) => {
+    const n = Object.entries(obj(d.states) ?? {}).filter(([, v]) => Number.isInteger(v) && v > 0).map(([k, v]) => `${v} ${stateText(k)}`);
+    return `criteria decided${n.length ? `: ${n.join('; ')}` : ''}`;
+  },
+  absence_refuted: (d) => {
+    const subject = clip(str(d.subject), 120);
+    if (!subject) return 'Refuted: the claimed absence';
+    const hits = list(d.hits).map(obj).filter((h) => h && str(h.path)).map((h) => `${clip(str(h.path), 120)}${int(h.line) ? `:${h.line}` : ''}`);
+    if (!hits.length) return `Refuted: ${subject} exists in the project`;
+    const more = hits.length - 1;
+    return `Refuted: ${subject} exists at ${hits[0]}${more ? ` and ${more} more place${more === 1 ? '' : 's'}` : ''}`;
+  },
+  probe_finished: (d) => `counterfactual probe: ${own(PROBE_TEXT, d.status) ?? own({ not_needed: 'not needed', off: 'off' }, d.status) ?? (str(d.status).replace(/_/g, ' ') || 'finished')}${
+    ids(d.checks) ? ` (${ids(d.checks)})` : ''}`,
 };
 
-export function eventText(e) {
-  const fn = EVENT_TEXT[e.type];
-  return clip(fn ? fn(e.data) : '', 300);
+const waveOf = (v) => (Number.isInteger(v) ? String(v) : str(v) || '?');
+
+function ids(v) {
+  return list(v).filter((x) => typeof x === 'string').map(str).join(', ');
 }
 
-export const LOUD_EVENTS = new Set(['failure', 'gate_waiting', 'edits_rejected', 'warning']);
+// unknown types (an engine newer than this page) read as an empty text, never as an error
+// ctx: { observe } - the run's grounding mode
+export function eventText(e, ctx = {}) {
+  const fn = Object.hasOwn(EVENT_TEXT, e.type) ? EVENT_TEXT[e.type] : null;
+  try {
+    return clip(fn ? fn(e.data ?? {}, ctx) : '', 300);
+  } catch {
+    return '';
+  }
+}
+
+export const LOUD_EVENTS = new Set(['failure', 'gate_waiting', 'edits_rejected', 'warning', 'replan_requested']);
+export const eventLoud = (e, ctx = {}) => LOUD_EVENTS.has(e.type) || (e.type === 'grounding' && !ctx.observe);
+
+// The events the activity list shows: an accepted output and the per-call procedure event say nothing new.
+export const activityEvents = (events) => list(events).filter((e) => e.type !== 'procedure' && (e.type !== 'grounding' || e.data?.accepted === false));
+
+// The lanes of a parallel wave (section 17), in the order the engine lists them.
+export const LANE_STATES = {
+  running: { glyph: '●', label: 'running' },
+  passed: { glyph: '✓', label: 'passed' },
+  failed: { glyph: '✕', label: 'failed' },
+  merged: { glyph: '✓', label: 'merged' },
+};
+export function laneRows(lanes) {
+  return list(lanes).map((l) => {
+    const st = LANE_STATES[l.state];
+    return {
+      stepId: l.stepId, title: l.title || l.stepId, state: st ? l.state : 'other', glyph: st?.glyph ?? '·', label: st?.label ?? (l.state.replace(/_/g, ' ') || 'unknown'),
+      attempt: l.attempt > 0 ? `attempt ${l.attempt}` : '', loud: l.state === 'failed',
+    };
+  });
+}
 
 // ------------------------------------------------------------ request bodies
 
@@ -586,15 +858,45 @@ function commandRows(rows, { name, field, max, extra }) {
   return { rows: out };
 }
 
-// POST .../pipeline/runs. form: { task, demo, delivery, sandbox: 'docker' | 'host', image, trustHost,
+const choice = (v, lo, hi, fallback) => {
+  const n = typeof v === 'number' ? v : /^\d+$/.test(raw(v).trim()) ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= lo && n <= hi ? n : fallback;
+};
+
+// The sandbox of a run. The demo runs only its bundled sample, so the host needs no acknowledgement there.
+// -> { sandbox } or { error, field }
+function sandboxOf(form, demo) {
+  if (form.sandbox !== 'host' && form.sandbox !== 'docker') return { error: 'Choose where the checks run: Docker container or Trusted host.', field: 'sandbox' };
+  if (form.sandbox === 'host') {
+    if (demo) return { sandbox: { mode: 'host' } };
+    if (form.trustHost !== true) return { error: 'Confirm that the checks may run on this computer without OS isolation, or use Docker.', field: 'trustHost' };
+    return { sandbox: { mode: 'host', trustHost: true } };
+  }
+  const image = raw(form.image).trim();
+  if (image.length > 256 || /\s/.test(image)) return { error: 'The image is a name or id without spaces (at most 256 characters).', field: 'image' };
+  return { sandbox: image ? { mode: 'docker', image } : { mode: 'docker' } };
+}
+
+// sections 21.4 and 23.4, sent explicitly for every run: enforce and no guidance unless chosen
+const evidenceOf = (form) => ({ grounding: form.grounding === 'observe' ? 'observe' : 'enforce', guidance: form.guidance === true });
+
+// POST .../pipeline/runs. form: { task, demo, demoScenario, delivery, sandbox: 'docker' | 'host' | '' (none chosen), image,
+// trustHost, replans, parallelSteps, grounding: 'enforce' | 'observe', guidance,
 // setup: [{ id, command, network }], checks: [{ id, kind, command, required }],
 // models: { role: { provider, model } | null }, approvals } -> { body } or { error, field }
 export function buildRunBody(form = {}) {
   const task = raw(form.task).trim();
   const delivery = form.delivery === 'patch' ? 'patch' : 'apply';
   if (task && byteLength(task) > TASK_MAX_BYTES) return { error: `The task is ${byteLength(task)} bytes; the limit is ${TASK_MAX_BYTES}.`, field: 'task' };
-  // the engine's demo brings its own project, models and sandbox; only the delivery mode is honoured
-  if (form.demo === true) return { body: { task: task || DEMO_TASK, demo: true, delivery } };
+  // the engine's demo brings its own project and models; the scenario, delivery mode and sandbox are honoured
+  if (form.demo === true) {
+    const sb = sandboxOf(form, true);
+    if (sb.error) return sb;
+    const scenario = demoScenario(form.demoScenario);
+    const evidence = evidenceOf(form);
+    if (scenario.enforce) evidence.grounding = 'enforce';
+    return { body: { task: task || DEMO_TASK, demo: true, demoScenario: scenario.id, delivery, sandbox: sb.sandbox, ...evidence } };
+  }
   if (!task) return { error: 'Describe the task for the pipeline.', field: 'task' };
 
   const setup = commandRows(form.setup, { name: 'setup command', field: 'setup', max: SETUP_MAX, extra: (c, command) => ({ command, network: c.network === true }) });
@@ -605,15 +907,9 @@ export function buildRunBody(form = {}) {
   });
   if (checks.error) return checks;
 
-  let sandbox;
-  if (form.sandbox === 'host') {
-    if (form.trustHost !== true) return { error: 'Confirm that the checks may run on this computer without OS isolation, or use Docker.', field: 'trustHost' };
-    sandbox = { mode: 'host', trustHost: true };
-  } else {
-    const image = raw(form.image).trim();
-    if (image.length > 256 || /\s/.test(image)) return { error: 'The image is a name or id without spaces (at most 256 characters).', field: 'image' };
-    sandbox = image ? { mode: 'docker', image } : { mode: 'docker' };
-  }
+  const sb = sandboxOf(form, false);
+  if (sb.error) return sb;
+  const { sandbox } = sb;
 
   const models = {};
   for (const role of ROLES) {
@@ -622,7 +918,9 @@ export function buildRunBody(form = {}) {
     models[role] = { provider: m.provider, model: m.model };
   }
   const approvals = { plan: form.approvals === 'auto_low_risk' ? 'auto_low_risk' : 'always' };
-  return { body: { task, delivery, sandbox, setup: setup.rows, checks: checks.rows, models, approvals } };
+  const replans = choice(form.replans, 0, REPLANS_MAX, REPLANS_DEFAULT);
+  const parallelSteps = choice(form.parallelSteps, 1, PARALLEL_MAX, PARALLEL_DEFAULT);
+  return { body: { task, delivery, sandbox, setup: setup.rows, checks: checks.rows, models, approvals, replans, parallelSteps, ...evidenceOf(form) } };
 }
 
 // Which form field a 400 from the runs route is about: a named row field (checks.1.id, setup[0].command), else a guess.

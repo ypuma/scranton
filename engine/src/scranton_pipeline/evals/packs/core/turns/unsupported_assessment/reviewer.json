@@ -1,0 +1,26 @@
+[
+  {
+    "verdict": "approve",
+    "summary": "Verified by configured checks",
+    "criteria": [
+      {
+        "id": "sum",
+        "status": "met",
+        "evidence": "Looks correct"
+      }
+    ],
+    "findings": []
+  },
+  {
+    "verdict": "approve",
+    "summary": "Verified by configured checks",
+    "criteria": [
+      {
+        "id": "sum",
+        "status": "unclear",
+        "evidence": "No admissible citation supplied"
+      }
+    ],
+    "findings": []
+  }
+]

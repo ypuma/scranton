@@ -3,8 +3,8 @@
 import { CLIENT_HEADERS } from './control.js';
 import { postJson, store } from './control-panel.js';
 import {
-  parseEngineInfo, modelGroups, parseModelValue, hasSupportedModel, parseDetect, buildRunBody, runErrorField, detectUrl,
-  ROLES, CHECK_KINDS, CHECKS_MAX, SETUP_MAX, COMMAND_ID_MAX, TASK_MAX_BYTES, byteLength,
+  parseEngineInfo, modelGroups, parseModelValue, hasSupportedModel, parseDetect, buildRunBody, runErrorField, detectUrl, sandboxView, demoScenario,
+  ROLES, CHECK_KINDS, CHECKS_MAX, SETUP_MAX, COMMAND_ID_MAX, TASK_MAX_BYTES, SANDBOX_POLL_MS, BUILD_URL, byteLength,
 } from './pipeline-model.js';
 
 const $ = (id) => document.getElementById(id);
@@ -26,15 +26,18 @@ async function getDoc(url) {
   }
 }
 
-export function createPipelineForm() {
+// timers: setTimeout/clearTimeout for the image build poll (tests pass fakes)
+export function createPipelineForm({ timers = globalThis } = {}) {
   const e = {
-    form: $('run-form'), engineRow: $('f-engine'), team: $('f-engine-team'), pipeline: $('f-engine-pipeline'),
+    dialog: $('run-dialog'), form: $('run-form'), engineRow: $('f-engine'), team: $('f-engine-team'), pipeline: $('f-engine-pipeline'),
     pipelineRow: $('f-engine-pipeline-row'), pipelineHint: $('f-engine-pipeline-hint'),
     fields: $('pipeline-fields'), unavailable: $('pf-unavailable'), task: $('pf-task'), taskOpt: $('pf-task-opt'), taskCount: $('pf-task-count'),
-    demo: $('pf-demo'), checksSet: $('pf-checks-set'), checks: $('pf-checks'), add: $('pf-check-add'), detect: $('pf-check-detect'),
+    demo: $('pf-demo'), scenarioRow: $('pf-scenario-row'), scenario: $('pf-scenario'), scenarioHint: $('pf-scenario-hint'), checksSet: $('pf-checks-set'), checks: $('pf-checks'), add: $('pf-check-add'), detect: $('pf-check-detect'),
     setupSet: $('pf-setup-set'), setup: $('pf-setup'), setupAdd: $('pf-setup-add'), setupNote: $('pf-setup-note'),
     checksStatus: $('pf-checks-status'), sandboxSet: $('pf-sandbox-set'), docker: $('pf-docker'), host: $('pf-host'),
-    image: $('pf-image'), imageHint: $('pf-image-hint'), trustRow: $('pf-trust-row'), trust: $('pf-trust'),
+    image: $('pf-image'), imageHint: $('pf-image-hint'), trustRow: $('pf-trust-row'), trust: $('pf-trust'), trustDemo: $('pf-trust-demo'),
+    sandboxStatus: $('pf-sandbox-status'), build: $('pf-build'), buildLog: $('pf-build-log'), buildTail: $('pf-build-tail'),
+    execRow: $('pf-exec-row'), replans: $('pf-replans'), parallel: $('pf-parallel'), grounding: $('pf-grounding'), groundingHint: $('pf-grounding-hint'), guidance: $('pf-guidance'),
     modelsSet: $('pf-models-set'), all: $('pf-model-all'), modelsNote: $('pf-models-note'),
     policySet: $('pf-policy-set'), approval: $('pf-approval'), delivery: $('pf-delivery'),
     models: Object.fromEntries(ROLES.map((r) => [r, $(`pf-model-${r}`)])),
@@ -57,6 +60,15 @@ export function createPipelineForm() {
   let detectedFor = null;
   let detectGen = 0;
   let modelsKey = '';
+  // the human picked Docker or Trusted host in this drawer session; neither the probe nor a finished build overrides it
+  let sandboxTouched = false;
+  let building = false;
+  let buildError = '';
+  // the server's 409 about the sandbox (image missing, Docker gone), shown in the sandbox line instead of the probe
+  let refused = '';
+  let pollTimer = 0;
+  // the Evidence checks choice while a scenario that needs Enforce holds the select; null when it is free
+  let groundingHeld = null;
 
   // ------------------------------------------------------------ engine
   function setEngine(next) {
@@ -91,11 +103,72 @@ export function createPipelineForm() {
     fillModels();
     e.image.placeholder = info.dockerImage ?? '';
     e.imageHint.textContent = info.dockerImage ? `optional, default ${info.dockerImage}` : 'optional';
+    renderSandbox();
     if (engine === 'pipeline') {
       sync();
       detect();
     }
+    schedulePoll();
   }
+
+  // ------------------------------------------------------------ Docker state and the image build
+  function renderSandbox() {
+    const sb = info?.sandbox ?? null;
+    const v = sandboxView(sb, { buildError });
+    e.sandboxStatus.textContent = refused || v.line;
+    e.sandboxStatus.dataset.tone = refused ? 'error' : v.tone;
+    e.build.hidden = v.build === 'hidden';
+    e.build.textContent = v.build === 'running' ? 'Building...' : 'Build sandbox image';
+    const wasFocused = document.activeElement === e.build;
+    e.build.disabled = v.build === 'running' || building;
+    if (wasFocused && e.build.disabled) e.sandboxStatus.focus();
+    e.buildLog.hidden = !v.tail.trim();
+    if (e.buildTail.textContent !== v.tail) e.buildTail.textContent = v.tail;
+    if (!sandboxTouched) {
+      // unknown (an older server) keeps the Docker default. Known but not ready: a run waits for an explicit choice,
+      // a demo takes the host, which needs no acknowledgement there.
+      const docker = v.ready !== false;
+      e.docker.checked = docker;
+      e.host.checked = !docker && e.demo.checked;
+    }
+    sync();
+  }
+
+  function schedulePoll() {
+    timers.clearTimeout(pollTimer);
+    pollTimer = 0;
+    if (info?.sandbox?.build?.state !== 'running' || !e.dialog.open) return;
+    pollTimer = timers.setTimeout(() => {
+      pollTimer = 0;
+      if (e.dialog.open) loadInfo();
+    }, SANDBOX_POLL_MS);
+  }
+
+  function clearRefused() {
+    if (!refused) return;
+    refused = '';
+    e.image.removeAttribute('aria-invalid');
+    e.image.removeAttribute('aria-describedby');
+    renderSandbox();
+  }
+
+  e.build.addEventListener('click', async () => {
+    if (e.build.disabled || building) return;
+    building = true;
+    buildError = '';
+    refused = '';
+    renderSandbox();
+    const r = await postJson(BUILD_URL, {});
+    building = false;
+    // 409: a build is already running; either way the next probe shows it
+    if ((r.ok || r.status === 409) && info?.sandbox?.known) {
+      info.sandbox = { ...info.sandbox, build: { state: 'running', startedAt: null, finishedAt: null, tail: info.sandbox.build?.state === 'running' ? info.sandbox.build.tail : '' } };
+    } else if (!r.ok) {
+      buildError = r.status === 404 ? 'this server cannot build it.' : r.error || `HTTP ${r.status}`;
+    }
+    renderSandbox();
+    schedulePoll();
+  });
 
   // ------------------------------------------------------------ models
   function storedModels() {
@@ -324,15 +397,34 @@ export function createPipelineForm() {
     const demo = e.demo.checked;
     const host = e.host.checked;
     e.taskOpt.hidden = !demo;
-    for (const set of [e.setupSet, e.checksSet, e.sandboxSet, e.modelsSet]) set.dataset.demo = String(demo);
+    e.scenarioRow.hidden = !demo;
+    e.scenarioHint.textContent = demoScenario(e.scenario.value).hint;
+    // the demo honours the sandbox choice, so that part stays operable
+    for (const set of [e.setupSet, e.checksSet, e.modelsSet]) set.dataset.demo = String(demo);
     for (const r of [...setupRows, ...rows]) for (const x of [...fieldsOf(r), r.remove]) x.disabled = demo;
     e.add.disabled = demo || rows.length >= CHECKS_MAX;
     e.setupAdd.disabled = demo || setupRows.length >= SETUP_MAX;
     e.detect.disabled = demo || !info?.available;
-    e.docker.disabled = demo;
-    e.host.disabled = demo;
-    e.image.disabled = demo || host;
+    e.image.disabled = host;
+    e.build.disabled = building || info?.sandbox?.build?.state === 'running';
+    // the demo honours the evidence checks and the guidance, not re-planning or parallel steps
+    e.replans.disabled = demo;
+    e.parallel.disabled = demo;
+    e.execRow.dataset.disabled = String(demo);
+    const enforced = demo && demoScenario(e.scenario.value).enforce === true;
+    if (enforced && groundingHeld === null) {
+      groundingHeld = e.grounding.value;
+      e.grounding.value = 'enforce';
+    } else if (!enforced && groundingHeld !== null) {
+      e.grounding.value = groundingHeld;
+      groundingHeld = null;
+    }
+    e.grounding.disabled = enforced;
+    e.groundingHint.hidden = !enforced;
+    if (enforced) e.grounding.setAttribute('aria-describedby', 'pf-grounding-hint');
+    else e.grounding.removeAttribute('aria-describedby');
     e.trustRow.hidden = demo || !host;
+    e.trustDemo.hidden = !demo || !host;
     if (!host) e.trust.checked = false;
     for (const role of ROLES) e.models[role].disabled = demo;
     e.all.disabled = demo;
@@ -346,14 +438,23 @@ export function createPipelineForm() {
   }
 
   e.demo.addEventListener('change', () => {
-    sync();
+    // the preselection depends on the demo
+    renderSandbox();
     if (!e.demo.checked) detect();
   });
-  e.docker.addEventListener('change', sync);
-  e.host.addEventListener('change', () => {
+  e.scenario.addEventListener('change', sync);
+  e.docker.addEventListener('change', () => {
+    sandboxTouched = true;
+    clearRefused();
     sync();
-    if (e.host.checked) e.trust.focus();
   });
+  e.host.addEventListener('change', () => {
+    sandboxTouched = true;
+    clearRefused();
+    sync();
+    if (e.host.checked && !e.demo.checked) e.trust.focus();
+  });
+  e.image.addEventListener('input', clearRefused);
   e.task.addEventListener('input', updateCount);
   e.task.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
@@ -368,6 +469,7 @@ export function createPipelineForm() {
     if (field === 'task') return e.task;
     if (field === 'trustHost') return e.trust;
     if (field === 'image') return e.image;
+    if (field === 'sandbox') return e.docker;
     if (field?.startsWith('models.')) return e.models[field.slice(7)] ?? null;
     return null;
   }
@@ -394,6 +496,13 @@ export function createPipelineForm() {
         renderRows();
       }
       project = p;
+      sandboxTouched = false;
+      buildError = '';
+      refused = '';
+      groundingHeld = null;
+      e.grounding.value = 'enforce';
+      e.guidance.checked = false;
+      e.image.removeAttribute('aria-describedby');
       e.engineRow.hidden = !choice;
       for (const f of e.fields.querySelectorAll('[aria-invalid]')) f.removeAttribute('aria-invalid');
       setEngine(fixed ? 'pipeline' : 'team');
@@ -411,9 +520,11 @@ export function createPipelineForm() {
       for (const r of [...setupRows, ...rows]) clearRowError(r);
       if (fixed && info && !info.available) return { error: `The Pipeline engine is not available: ${info.reason}` };
       sent = { checks: rows.filter(filled), setup: setupRows.filter(filled) };
+      clearRefused();
       return buildRunBody({
-        task: e.task.value, demo: e.demo.checked, delivery: e.delivery.value,
-        sandbox: e.host.checked ? 'host' : 'docker', image: e.image.value, trustHost: e.trust.checked,
+        task: e.task.value, demo: e.demo.checked, demoScenario: e.scenario.value, delivery: e.delivery.value,
+        sandbox: e.host.checked ? 'host' : e.docker.checked ? 'docker' : '', image: e.image.value, trustHost: e.trust.checked,
+        replans: e.replans.value, parallelSteps: e.parallel.value, grounding: e.grounding.value, guidance: e.guidance.checked,
         setup: setupRows.map(rowValue),
         checks: rows.map(rowValue),
         models: Object.fromEntries(ROLES.map((r) => [r, parseModelValue(e.models[r].value, info?.providers ?? [])])),
@@ -435,6 +546,16 @@ export function createPipelineForm() {
       return atRow;
     },
     errorField: runErrorField,
+    // A 409 about the sandbox (the image is missing, Docker is gone) is said in the sandbox line. -> true when shown there
+    sandboxRefused(r) {
+      if (r?.status !== 409 || !/\bimage\b|docker/i.test(r.error ?? '')) return false;
+      refused = r.error;
+      renderSandbox();
+      e.image.setAttribute('aria-invalid', 'true');
+      e.image.setAttribute('aria-describedby', 'pf-sandbox-status');
+      (e.image.disabled ? e.sandboxStatus : e.image).focus();
+      return true;
+    },
     started() {
       e.task.value = '';
       updateCount();

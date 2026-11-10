@@ -28,7 +28,7 @@ export function execPipeline(spec, args, { env = process.env, timeoutMs = 15000 
   return new Promise((resolve) => {
     const child = spawnPipeline(spec, args, pipelineChildEnv(env));
     let stdout = '', stderr = '', error = null;
-    const timer = setTimeout(() => { error = 'Pipeline command timed out'; void killTree(child); }, timeoutMs);
+    const timer = setTimeout(() => { error = args[0] === 'sandbox' && args[1] === 'check' ? 'Docker did not answer in time' : 'Pipeline command timed out'; void killTree(child); }, timeoutMs);
     child.stdin.on('error', () => {}); child.stdin.end();
     child.stdout.on('data', (d) => { stdout = (stdout + d).slice(-1024 * 1024); });
     child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-8192); });
@@ -55,4 +55,14 @@ export async function probePipeline(options = {}) {
   });
   probes.set(key, pending);
   return pending;
+}
+
+export async function probePipelineSandbox(spec, { image, ...options } = {}) {
+  const fallback = { default_image: null, docker: { available: false, version: null, reason: 'Pipeline sandbox check is unavailable or returned invalid data (engine upgrade may be required)' }, image: { name: image ?? null, present: false } };
+  try {
+    const r = await execPipeline(spec, ['sandbox', 'check', ...(image ? ['--image', image] : [])], { timeoutMs: 45000, ...options }), v = r.value;
+    if (r.error === 'Docker did not answer in time') return { ...fallback, docker: { ...fallback.docker, reason: r.error } };
+    if (r.code !== 0 || typeof v?.default_image !== 'string' || !v.default_image || typeof v.docker?.available !== 'boolean' || typeof v.image?.name !== 'string' || typeof v.image?.present !== 'boolean' || ![null, 'string'].includes(v.docker.version === null ? null : typeof v.docker.version) || ![null, 'string'].includes(v.docker.reason === null ? null : typeof v.docker.reason)) return fallback;
+    return { default_image: v.default_image, docker: { available: v.docker.available, version: v.docker.version, reason: v.docker.reason }, image: { name: v.image.name, present: v.image.present } };
+  } catch { return fallback; }
 }

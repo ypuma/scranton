@@ -24,7 +24,7 @@ def test_large_repo_prompt_keeps_control_and_evidence(tmp_path):
             "tree": "file.py\n" * 5000, "manifests": [{"name": "pyproject.toml"}] * 5000,
             "readme_excerpt": "README" * 10000, "languages": {"Python": 5000}}
     state = {"task": "Fix addition", "repo": repo, "baseline": [{"output_tail": "baseline sentinel"}],
-             "feedback": {"message": "feedback sentinel"}, "counters": {"plan_context": 2},
+             "feedback": {"message": "feedback sentinel"}, "counters": {"plan_context:r0": 2},
              "plan_evidence": [{"request": {"path": "calculator.py"}, "content": "evidence sentinel"}]}
     system, user = build_planner_prompt(state, cfg)
     assert len((system + user).encode()) <= cfg.limits.max_prompt_bytes

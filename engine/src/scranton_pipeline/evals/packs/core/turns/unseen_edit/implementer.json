@@ -1,0 +1,27 @@
+[
+  {
+    "kind": "edits",
+    "edits": [
+      {
+        "path": "other.py",
+        "action": "modify",
+        "content": "VALUE = 2\n"
+      }
+    ]
+  },
+  {
+    "kind": "edits",
+    "edits": [
+      {
+        "path": "calculator.py",
+        "action": "modify",
+        "replacements": [
+          {
+            "search": "return a - b",
+            "replace": "return a + b"
+          }
+        ]
+      }
+    ]
+  }
+]

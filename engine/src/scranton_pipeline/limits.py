@@ -8,5 +8,5 @@ def recursion_limit(limits: Limits) -> int:
     work = (1 + limits.max_output_repairs + 2 * limits.max_step_context_rounds
             + 3 * limits.max_step_attempts)
     reviews = (limits.max_review_rounds + 1) * (1 + limits.max_output_repairs)
-    return (16 + planning + limits.max_plan_steps * work
+    return (17 + (limits.max_replans + 1) * (planning + limits.max_plan_steps * (2 * work + 6) + 2)
             + limits.max_review_rounds * work + reviews)

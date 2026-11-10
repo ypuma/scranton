@@ -106,3 +106,10 @@ test('staged Pipeline demo reaches the plan gate using bundled data and the stag
     await fs.rm(runs, { recursive: true, force: true });
   }
 });
+
+test('staged Pipeline includes the packaged sandbox Dockerfile', { skip }, async (t) => {
+  const source = path.join(root, 'engine/src/scranton_pipeline/sandbox_image/Dockerfile');
+  if (!existsSync(source)) { t.skip('Sandbox engine lane has not created its package Dockerfile yet'); return; }
+  if (!await pipeline(t)) return;
+  assert.deepEqual(await fs.readFile(path.join(runtime, 'site-packages/scranton_pipeline/sandbox_image/Dockerfile')), await fs.readFile(source), 'Sandbox Dockerfile must survive the recursive package-data copy');
+});

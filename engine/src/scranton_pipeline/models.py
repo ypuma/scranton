@@ -1,11 +1,12 @@
 """Bounded model responses and immutable runtime records."""
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-Role = Literal["planner", "implementer", "reviewer"]
+Role = Literal["planner", "implementer", "reviewer", "refiner"]
 Text = Annotated[str, Field(max_length=32768)]
 Short = Annotated[str, Field(max_length=1024)]
+EvidenceId = Annotated[str, Field(pattern=r"^[EKH]-[0-9a-f]{10}$")]
 PathText = Annotated[str, Field(max_length=4096)]
 
 
@@ -41,6 +42,7 @@ class Criterion(LlmModel):
     id: Short
     text: Text
     verified_by: Literal["checks", "review"]
+    checks: list[Short] = Field(default_factory=list, max_length=12)
 
 
 class FileIntent(LlmModel):
@@ -55,9 +57,17 @@ class PlanStep(LlmModel):
     files: list[FileIntent] = Field(max_length=100)
     context_files: list[PathText] = Field(default_factory=list, max_length=100)
     criteria: list[Short] = Field(default_factory=list, max_length=100)
+    depends_on: list[Short] | None = Field(default=None, max_length=32)
+
+
+class AbsenceClaim(LlmModel):
+    kind: Literal["missing_file", "missing_symbol"]
+    subject: Short
+    paths: list[PathText] = Field(default_factory=list, max_length=100)
 
 
 class Plan(LlmModel):
+    absent: list[AbsenceClaim] = Field(default_factory=list, max_length=100)
     summary: Text
     assumptions: list[Text] = Field(default_factory=list, max_length=100)
     risks: list[Risk] = Field(default_factory=list, max_length=100)
@@ -109,6 +119,7 @@ class ImplementerTurn(LlmModel):
     edits: list[FileEdit] = Field(default_factory=list, max_length=100)
     context_requests: list[ContextRequest] = Field(default_factory=list, max_length=50)
     blocked_reason: Text = ""
+    blocked_claim: AbsenceClaim | None = None
 
     @model_validator(mode="after")
     def payload(self) -> Self:
@@ -123,6 +134,7 @@ class CriterionAssessment(LlmModel):
     id: Short
     status: Literal["met", "not_met", "unclear"]
     evidence: Text = ""
+    citations: list[EvidenceId] = Field(default_factory=list, max_length=100)
 
 
 class Finding(LlmModel):
@@ -131,6 +143,7 @@ class Finding(LlmModel):
     path: PathText = ""
     description: Text
     suggestion: Text = ""
+    citations: list[EvidenceId] = Field(default_factory=list, max_length=100)
 
 
 class Review(LlmModel):
@@ -141,8 +154,7 @@ class Review(LlmModel):
 
     @model_validator(mode="after")
     def payload(self) -> Self:
-        if self.verdict == "approve" and (any(f.severity == "blocking" for f in self.findings)
-                                         or any(c.status == "not_met" for c in self.criteria)):
+        if self.verdict == "approve" and (any(f.severity == "blocking" for f in self.findings) or any(c.status == "not_met" for c in self.criteria)):
             raise ValueError("approval contradicts findings or criteria")
         return self
 
@@ -159,6 +171,8 @@ class CheckResult(StrictModel):
 
 
 class ContextItem(StrictModel):
+    evidence_id: str = ""
+    sha256: str = ""
     request: ContextRequest
     ok: bool
     content: str
@@ -186,6 +200,8 @@ class Usage(StrictModel):
 
 
 class RunStatus(StrictModel):
+    grounding: dict[str, Any] = Field(default_factory=dict)
+    procedure: dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "name": None, "digest": None, "situation": None})
     schema_version: Literal[1] = Field(default=1, alias="schema", serialization_alias="schema")
     run_id: str
     status: Literal["running", "awaiting_approval", "suspended", "succeeded", "failed", "rejected", "cancelled"]
@@ -194,15 +210,34 @@ class RunStatus(StrictModel):
     task: str = Field(default="", max_length=500)
     source_dir: str = ""
     delivery_mode: Literal["patch", "apply"] = "patch"
-    progress: dict[str, Any] = Field(default_factory=dict)
+    progress: dict[str, Any] = Field(default_factory=lambda: {"plan_revision": 0, "replans_left": 0, "steps_done": 0, "lanes": []})
     pending: dict[str, Any] | None = None
+
+    @field_validator("progress", mode="before")
+    @classmethod
+    def progress_defaults(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return {"plan_revision": 0, "replans_left": 0, "steps_done": 0, "lanes": [], **value}
+
+    @field_validator("pending", mode="before")
+    @classmethod
+    def pending_defaults(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value and value.get("gate") == "plan":
+            return {"revision": 0, "replan_reason": None, **value}
+        return value
+
     failure: dict[str, str] | None = None
     resumable: bool = False
     usage: dict[str, Any] = Field(default_factory=lambda: {"calls": 0, "input_tokens": 0, "output_tokens": 0, "estimated_cost": None})
     checks: list[dict[str, Any]] = Field(default_factory=list)
     delivery: dict[str, Any] | None = None
     artifacts: dict[str, Any] = Field(default_factory=dict)
-    sandbox: dict[str, Any] = Field(default_factory=dict)
+    sandbox: dict[str, Any] = Field(default_factory=lambda: {"isolation": "Unknown (legacy status).", "image": None})
+
+    @field_validator("sandbox", mode="before")
+    @classmethod
+    def sandbox_defaults(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return {"isolation": "Unknown (legacy status).", "image": None, **value}
+
     pid: int | None = None
     created_at: str = ""
     updated_at: str = ""

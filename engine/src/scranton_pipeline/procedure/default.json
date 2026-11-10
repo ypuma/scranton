@@ -1,0 +1,200 @@
+{
+  "schema": 1,
+  "name": "Scranton expert prior (unvalidated)",
+  "nodes": [
+    {
+      "id": "plan.start",
+      "type": "SITUATION",
+      "description": "Before proposing targets."
+    },
+    {
+      "id": "plan.context",
+      "type": "SITUATION",
+      "description": "After context arrives."
+    },
+    {
+      "id": "plan.repair",
+      "type": "SITUATION",
+      "description": "Validation rejected the plan."
+    },
+    {
+      "id": "plan.replan",
+      "type": "SITUATION",
+      "description": "A previous step was blocked or exhausted."
+    },
+    {
+      "id": "implement.start",
+      "type": "SITUATION",
+      "description": "Before returning edits."
+    },
+    {
+      "id": "implement.context",
+      "type": "SITUATION",
+      "description": "After requested reads arrive."
+    },
+    {
+      "id": "implement.repair",
+      "type": "SITUATION",
+      "description": "The output was invalid."
+    },
+    {
+      "id": "implement.edits_rejected",
+      "type": "SITUATION",
+      "description": "An edit set was rejected."
+    },
+    {
+      "id": "implement.checks_failed",
+      "type": "SITUATION",
+      "description": "Required checks failed."
+    },
+    {
+      "id": "implement.review_changes",
+      "type": "SITUATION",
+      "description": "Review requested changes."
+    },
+    {
+      "id": "implement.integration",
+      "type": "SITUATION",
+      "description": "Merged lanes failed verification."
+    },
+    {
+      "id": "review.start",
+      "type": "SITUATION",
+      "description": "Assessing the cumulative diff."
+    },
+    {
+      "id": "review.repair",
+      "type": "SITUATION",
+      "description": "Review output was invalid."
+    },
+    {
+      "id": "review.recheck",
+      "type": "SITUATION",
+      "description": "Reviewing a revised candidate."
+    },
+    {
+      "id": "done",
+      "type": "TERMINAL",
+      "description": "Advisory guidance complete."
+    },
+    {
+      "id": "blocked",
+      "type": "TERMINAL",
+      "description": "Report a concrete blocker; Python verifies missing-file or missing-symbol claims."
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan.start",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Before proposing targets.",
+      "guidance": "Request reads of existing files before planning modify or delete intents.",
+      "pitfalls": "The repository tree is not a successful file read."
+    },
+    {
+      "from": "plan.context",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "After context arrives.",
+      "guidance": "Use successful reads from this plan revision; give each step explicit criteria and dependencies.",
+      "pitfalls": "Use depends_on [] only for independent steps; null depends on all earlier steps."
+    },
+    {
+      "from": "plan.repair",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Validation rejected the plan.",
+      "guidance": "Correct the named schema, path, criterion or dependency error using the supplied feedback.",
+      "pitfalls": "Create requires an absent path; modify and delete require existing paths."
+    },
+    {
+      "from": "plan.replan",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "A previous step was blocked or exhausted.",
+      "guidance": "Plan only remaining work from the last green state and the replan brief.",
+      "pitfalls": "Do not repeat completed steps or assume a discarded failed attempt survived."
+    },
+    {
+      "from": "implement.start",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Before returning edits.",
+      "guidance": "Use current shown files; request full reads before whole-file overwrites or deletions.",
+      "pitfalls": "Replacements need a current shown range and a unique exact search match."
+    },
+    {
+      "from": "implement.context",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "After requested reads arrive.",
+      "guidance": "Base edits on successful current reads and stay within the declared files.",
+      "pitfalls": "Truncated reads do not support whole-file replacement or deletion."
+    },
+    {
+      "from": "implement.repair",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "The output was invalid.",
+      "guidance": "Correct the feedback and return exactly one of edits, need_context or blocked.",
+      "pitfalls": "Python owns commands and routing; do not request execution."
+    },
+    {
+      "from": "implement.edits_rejected",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "An edit set was rejected.",
+      "guidance": "Correct the named rejection against current content; the edit set is all-or-nothing.",
+      "pitfalls": "No-op edits, ambiguous search text and create over an existing path are rejected."
+    },
+    {
+      "from": "implement.checks_failed",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Required checks failed.",
+      "guidance": "Use the failed check ids and output tails to repair the current step within its file scope.",
+      "pitfalls": "A check that could not execute is infrastructure evidence, not a passing check."
+    },
+    {
+      "from": "implement.review_changes",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Review requested changes.",
+      "guidance": "Read affected files again and address the review findings in revision mode.",
+      "pitfalls": "Old reads may be stale; review revisions have bounded attempts."
+    },
+    {
+      "from": "implement.integration",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Merged lanes failed verification.",
+      "guidance": "Repair interactions within the union of merged steps' declared files.",
+      "pitfalls": "Integration edits use strict scope even when normal steps permit deviations."
+    },
+    {
+      "from": "review.start",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Assessing the cumulative diff.",
+      "guidance": "Assess review-decided criteria independently; cite shown hunks or check results for met assessments.",
+      "pitfalls": "Python decides check-based criteria; green checks alone do not demonstrate a change."
+    },
+    {
+      "from": "review.repair",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Review output was invalid.",
+      "guidance": "Correct the named feedback; cite only evidence ids shown in this review prompt.",
+      "pitfalls": "Approval cannot contradict a blocking finding or a not_met assessment."
+    },
+    {
+      "from": "review.recheck",
+      "relation": "LEADS_TO",
+      "to": "done",
+      "condition": "Reviewing a revised candidate.",
+      "guidance": "Reassess the current cumulative diff and current checks, not implementer reasoning.",
+      "pitfalls": "Blocking or major findings need shown hunk or check citations and a changed-file path."
+    }
+  ]
+}

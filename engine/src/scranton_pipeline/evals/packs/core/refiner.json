@@ -1,0 +1,48 @@
+[
+  {
+    "delete_edges": [
+      [
+        "plan.start",
+        "LEADS_TO",
+        "done"
+      ]
+    ],
+    "add_edges": [
+      {
+        "from": "plan.start",
+        "relation": "LEADS_TO",
+        "to": "done",
+        "condition": "",
+        "guidance": "Read existing targets before planning edits.",
+        "pitfalls": ""
+      }
+    ],
+    "rationale": "Preserve seen-before-plan evidence."
+  },
+  {
+    "delete_nodes": [
+      "done"
+    ],
+    "rationale": "Invalid terminal deletion is rejected."
+  },
+  {
+    "delete_edges": [
+      [
+        "plan.start",
+        "LEADS_TO",
+        "done"
+      ]
+    ],
+    "add_edges": [
+      {
+        "from": "plan.start",
+        "relation": "LEADS_TO",
+        "to": "done",
+        "condition": "",
+        "guidance": "Read existing targets and verify the resulting change.",
+        "pitfalls": ""
+      }
+    ],
+    "rationale": "Keep verification guidance explicit."
+  }
+]
