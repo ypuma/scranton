@@ -2,6 +2,8 @@
   {
     "kind": "need_context",
     "context_requests": [
+      {"kind": "search", "query": "add", "path": ""},
+      {"kind": "list", "path": ""},
       {
         "kind": "read",
         "path": "calculator.py"

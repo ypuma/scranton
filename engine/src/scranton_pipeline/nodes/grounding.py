@@ -23,7 +23,7 @@ from scranton_pipeline.models import ContextRequest
 from scranton_pipeline.nodes.common import Dependencies, scope_id
 from scranton_pipeline.observability import _rows
 from scranton_pipeline.state import PipelineState, current_step, get_plan
-from scranton_pipeline.tools.context import fulfil
+from scranton_pipeline.tools.context import fulfil, normalize_request, request_error
 from scranton_pipeline.tools.fs import read_text, write_bytes_atomic
 
 
@@ -146,11 +146,9 @@ def evaluate(state: PipelineState, deps: Dependencies, role: str, prompt: Prompt
                 violation("unseen_edit", path + (": full overwrite requires a complete read; use replacements" if full else ""))
     for request in raw.get("context_requests", []):
         try:
-            deps.policy().resolve(request["path"])
-            if deps.policy().is_protected(request["path"]):
-                violation("protected_request", request["path"])
+            normalize_request(ContextRequest.model_validate(request), deps.policy())
         except EngineError:
-            violation("protected_request", "Outside or invalid path")
+            violation("protected_request", request_error(ContextRequest.model_validate(request), deps.redactor))
     for claim in claims:
         result = absence(claim, deps)
         absences.append(result)

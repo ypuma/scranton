@@ -1362,3 +1362,28 @@ accepted, so scripted evolution demonstrates the mechanism, not an improvement.
   is demonstrated by a check that failed at baseline, one criterion's check was already green
   (`met_not_demonstrated`, risk flag `criteria_not_demonstrated`); the run succeeds after both gates. It needs
   `grounding.mode: "enforce"`: `--grounding observe` with this scenario exits 2, the HTTP API answers 400.
+
+### 25c. After the first real-model run with grounding (2026-11-10 16:07, run `3640798a7490`) - binding
+
+Evidence: planner `gpt-6.1-sol` through pi, `grounding.mode: enforce`, `policy.protected_paths: []`. Four planner
+calls; three context-request turns were rejected with `protected_request`, detail "Outside or invalid path"; the
+run failed with `output_invalid` ("Output repair budget exhausted") in `plan` before any plan existed. What the
+model asked for was not recorded. Cause in the code: `nodes/grounding.py` `evaluate` sends every context-request
+path through `PathPolicy.resolve`, which refuses the EMPTY path - while `tools/context.py` `fulfil` defines the
+empty path as "the whole workspace" for `list` and `search`, and it is the schema default of
+`ContextRequest.path`. A project-wide search or listing, the most ordinary first move of a real model, was
+therefore a violation. No scripted test, demo or eval task contained one.
+
+- A context-request path is normalised ONCE, before validation and before fulfilment: backslashes become `/`,
+  leading `./` is removed, a trailing `/` is removed, `.` becomes the empty path. `fulfil`, the evidence
+  registry and rules P1 / I1 see the normalised path.
+- The empty path is valid for `list` and `search` (whole workspace). For `read` it is answered as before
+  grounding existed (item not ok, "Read requires a file") and is not a violation.
+- `protected_request` remains for a path that is protected, leaves the workspace or cannot be normalised. Its
+  trace detail and the repair feedback name the offending request - kind and path as given, at most 200
+  characters, through the redactor - and state the valid forms (a relative path inside the project; an empty
+  path searches or lists the whole project). In `observe` such a request is recorded and answered with a
+  not-ok item; it never fails the run.
+- The standing regression paths contain the honest forms: the planner's context round of demo `basic` and of
+  eval task `baseline` includes a project-wide `search` and a project-wide `list`. Their pinned scores do not
+  change.

@@ -357,7 +357,9 @@ Die Implementierungsnachweise vom 10.11.2026 dokumentieren erfolgreiche lokale D
 
 Historischer Gesamtprüfstand **2026-11-09 abends** aus den abgeschlossenen Codegates, keine hier erneut ausgeführte Vollsuite: Engine **272 bestanden, 1 Skip** (Opt-in-Docker), Ruff sauber, mypy strict sauber auf **33 Quelldateien**; Node Server **128**, Core **415 bestanden + 1 Skip**, Visualizer **400**, Packaging **6**. Die Engine meldete 13 LangSmith-Deprecationwarnungen zu `asyncio.iscoroutinefunction`. Der neue Dokumentationslauf belegt separat die Demo mit **3 → 3 → 0** und den oben wiedergegebenen Markdownbericht.
 
-Aktueller Engine-Prüfstand vom **10.11.2026**, gemessen nach der letzten Codeänderung (Paket-Korrekturen am eingebauten Eval-Pack): **910 bestanden, 12 übersprungen** (11 Opt-in-Dockertests, 1 Symlinktest mit erforderlichem Windows-Privileg); Ruff und mypy strict ohne Befund. Der Stand nach R9 davor: 894 bestanden, 12 übersprungen. Das eingebaute Pack läuft auch mit dem ausgelieferten Interpreter der Desktop-App (`eval --pack core`: 9 von 9 Erwartungen, identische Scores).
+Erster echter Modelllauf mit Grounding (10.11.2026, `enforce`, `gpt-6.1-sol` über pi): in der Planung gescheitert (`output_invalid`), weil eine projektweite Suche oder Liste (leerer Pfad) fälschlich als `protected_request` abgelehnt wurde; behoben (ein leerer Pfad ist für `list` und `search` gültig, Pfade werden einmal normalisiert, die Rückmeldung nennt die betroffene Anfrage). Mit einem echten Modell seither nicht wiederholt.
+
+Aktueller Engine-Prüfstand vom **10.11.2026**, gemessen nach dieser Korrektur: **949 bestanden, 12 übersprungen**. Der Stand davor, nach den Paket-Korrekturen am eingebauten Eval-Pack: **910 bestanden, 12 übersprungen** (11 Opt-in-Dockertests, 1 Symlinktest mit erforderlichem Windows-Privileg); Ruff und mypy strict ohne Befund. Der Stand nach R9 davor: 894 bestanden, 12 übersprungen. Das eingebaute Pack läuft auch mit dem ausgelieferten Interpreter der Desktop-App (`eval --pack core`: 9 von 9 Erwartungen, identische Scores).
 
 ### Regression ohne Judge ausführen
 

@@ -1,7 +1,10 @@
 import copy
 import json
+import os
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -318,3 +321,159 @@ def test_registry_locator_and_absence_subject_redacted(grounded):
     for path in (deps.run_dir / "evidence.jsonl", deps.run_dir / "events.jsonl"):
         assert secret not in path.read_text()
     assert "[REDACTED]" in (deps.run_dir / "evidence.jsonl").read_text()
+
+
+@pytest.mark.parametrize("kind", ["search", "list"])
+def test_workspace_context_is_not_a_violation(grounded, kind):
+    state, deps = grounded
+    raw = {"kind": "need_context", "context_requests": [{"kind": kind, "query": "legacy_tax", "path": ""}]}
+    result = grounding.evaluate(state, deps, "planner", Prompt("", "", []), raw)
+    assert result.violations == []
+    assert not result.reject(deps)
+
+
+@pytest.mark.parametrize("path,canonical,kind", [
+    ("", "", "search"), (".", "", "list"), ("./", "", "list"),
+    ("./pricing.py", "pricing.py", "read"), ("pkg/", "pkg", "list"),
+    ("pkg\\mod.py", "pkg/mod.py", "read")])
+def test_context_forms_share_validation_fulfilment_and_registry(grounded, path, canonical, kind):
+    state, deps = grounded
+    (deps.workspace / "pricing.py").write_text("legacy_tax = 1\n")
+    (deps.workspace / "pkg").mkdir()
+    (deps.workspace / "pkg" / "mod.py").write_text("legacy_tax = 2\n")
+    state["workspace"]["files"] += ["pricing.py", "pkg/mod.py"]
+    request = ContextRequest(kind=kind, path=path, query="legacy_tax")
+    raw = {"kind": "need_context", "context_requests": [request.model_dump(mode="json")]}
+    assert not grounding.evaluate(state, deps, "planner", Prompt("", "", []), raw).violations
+    result = fulfil([request], workspace=deps.workspace, policy=deps.policy(), files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)[0]
+    assert result.ok and result.content
+    assert result.request.path == canonical
+    prompt = Prompt("", "", [result.model_dump(mode="json")])
+    grounding.evaluate(state, deps, "planner", prompt, raw)
+    assert _rows(deps.run_dir / "evidence.jsonl")[-1]["path"] == canonical
+    if kind == "read":
+        plan = copy.deepcopy(PLAN)
+        plan["plan"]["steps"][0]["files"][0]["path"] = canonical
+        state["plan"] = plan["plan"]
+        assert not grounding.evaluate(state, deps, "planner", prompt, plan).violations
+        edit = {"kind": "edits", "edits": [{"path": canonical, "action": "modify", "content": "new"}]}
+        assert not grounding.evaluate(state, deps, "implementer", prompt, edit).violations
+
+
+@pytest.mark.parametrize("path", ["", ".", "./"])
+def test_root_read_is_not_a_violation_but_not_a_file(grounded, path):
+    state, deps = grounded
+    request = ContextRequest(kind="read", path=path)
+    assert not grounding.evaluate(state, deps, "planner", Prompt("", "", []), {"context_requests": [request.model_dump()]}).violations
+    item = fulfil([request], workspace=deps.workspace, policy=deps.policy(), files=[], limits=deps.cfg.limits, redactor=deps.redactor)[0]
+    assert not item.ok and item.note == "Read requires a file" and item.request.path == ""
+
+
+@pytest.mark.parametrize("path", ["../x", "/etc/passwd", "C:/x", "bad\0path", ".env", "/", "\\"])
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+def test_unsafe_context_is_identified_and_other_requests_survive(grounded, monkeypatch, path, mode):
+    from scranton_pipeline.tools import context
+    state, deps = grounded
+    deps.cfg = deps.cfg.model_copy(update={"grounding": deps.cfg.grounding.model_copy(update={"mode": mode})})
+    requests = [ContextRequest(kind="read", path=path), ContextRequest(kind="read", path="calculator.py")]
+    raw = {"kind": "need_context", "context_requests": [r.model_dump() for r in requests]}
+    evaluation = grounding.evaluate(state, deps, "planner", Prompt("", "", []), raw)
+    assert kinds(evaluation) == {"protected_request"}
+    detail = evaluation.violations[0]["detail"]
+    assert f'read path={json.dumps(path)}' in detail
+    assert "relative path inside the project" in detail and "empty path" in detail and len(detail) <= 200
+    assert evaluation.reject(deps) == (mode == "enforce")
+    read = context.read_text
+    opened = []
+    def guarded_read(target, cap):
+        assert target.is_relative_to(deps.workspace)
+        opened.append(target)
+        return read(target, cap)
+    monkeypatch.setattr(context, "read_text", guarded_read)
+    result = fulfil(requests, workspace=deps.workspace, policy=deps.policy(), files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)
+    assert [i.ok for i in result] == [False, True]
+    assert result[0].note == detail and not result[0].content
+    assert opened == [deps.workspace / "calculator.py"]
+    assert _rows(deps.run_dir / "grounding.jsonl")[-1]["violations"] == evaluation.violations
+
+
+@pytest.mark.parametrize("role", ["planner", "implementer"])
+def test_context_repair_prompt_names_original_request_and_budget_fails(grounded, role):
+    from scranton_pipeline.agents.prompts import build_implementer_prompt
+    from scranton_pipeline.models import ImplementerTurn, PlannerTurn
+    state, deps = grounded
+    raw = {"kind": "need_context", "context_requests": [{"kind": "search", "path": "../x", "query": "tax"}, {"kind": "read", "path": "calculator.py"}]}
+    model = PlannerTurn if role == "planner" else ImplementerTurn
+    deps.gateway = SimpleNamespace(complete=lambda *a, **kw: SimpleNamespace(parsed=model.model_validate(raw)))
+    node = planner.plan if role == "planner" else workflow.implement
+    build = build_planner_prompt if role == "planner" else build_implementer_prompt
+    key = "plan_repairs:r0" if role == "planner" else "repairs:step:fix"
+    update = node(state, deps)
+    assert update["counters"] == {key: 1}
+    feedback = update["feedback"]["message"]
+    assert 'search path="../x"' in feedback and "empty path" in feedback
+    assert json.dumps(feedback) in build({**state, **update}, deps.cfg).user
+    state["counters"] = {key: deps.cfg.limits.max_output_repairs}
+    update = node(state, deps)
+    assert update["failure"]["code"] == "output_invalid"
+    assert update["failure"]["failure_class"] == "llm_output"
+    assert not _rows(deps.run_dir / "grounding.jsonl")[-1]["accepted"]
+
+
+def test_context_detail_redacts_before_capping(grounded):
+    state, deps = grounded
+    secret = "credential-private-0123456789"
+    deps.redactor = Redactor([secret])
+    path = "../" + secret + "x" * 300
+    result = grounding.evaluate(state, deps, "planner", Prompt("", "", []), {"context_requests": [{"kind": "list", "path": path}]})
+    detail = result.violations[0]["detail"]
+    assert 'list path="../[REDACTED]' in detail and secret not in detail
+    assert len(detail) <= 200 and "empty path" in detail
+    assert secret not in (deps.run_dir / "grounding.jsonl").read_text()
+    item = fulfil([ContextRequest(kind="list", path=path)], workspace=deps.workspace, policy=deps.policy(), files=[], limits=deps.cfg.limits, redactor=deps.redactor)[0]
+    assert item.note == detail and secret not in item.note and "[REDACTED]" in item.note
+
+
+@pytest.mark.parametrize("budget", [0, 2])
+def test_unsafe_context_rejected_at_repair_limit(grounded, budget):
+    state, deps = grounded
+    deps.cfg = deps.cfg.model_copy(update={"limits": deps.cfg.limits.model_copy(update={"max_output_repairs": budget})})
+    state["counters"] = {"plan_repairs:r0": budget}
+    result = grounding.evaluate(state, deps, "planner", Prompt("", "", []), {"kind": "need_context", "context_requests": [{"kind": "read", "path": "../x"}]})
+    assert result.reject(deps)
+    assert not _rows(deps.run_dir / "grounding.jsonl")[-1]["accepted"]
+
+
+def test_context_detail_redacts_raw_path_before_json_escape(grounded):
+    state, deps = grounded
+    secret = 'private\\credential"0123456789'
+    deps.redactor = Redactor([secret])
+    request = ContextRequest(kind="read", path="../" + secret)
+    result = grounding.evaluate(state, deps, "planner", Prompt("", "", []), {"context_requests": [request.model_dump()]})
+    item = fulfil([request], workspace=deps.workspace, policy=deps.policy(), files=[], limits=deps.cfg.limits, redactor=deps.redactor)[0]
+    assert result.violations[0]["detail"].startswith('read path="../[REDACTED]"')
+    assert item.note == result.violations[0]["detail"] and not item.ok
+    assert json.dumps(secret)[1:-1] not in item.note
+
+
+@pytest.mark.parametrize("kind", ["read", "search", "list"])
+def test_context_link_escape_evaluated_and_not_fulfilled(grounded, monkeypatch, kind):
+    from scranton_pipeline.tools import context
+    state, deps = grounded
+    outside = deps.workspace.parent / "outside"
+    outside.mkdir()
+    (outside / "data.txt").write_text("outside-marker-never-read")
+    link = deps.workspace / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        result = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True, timeout=5, check=False) if os.name == "nt" else None
+        if result is None or result.returncode:
+            original = Path.resolve
+            monkeypatch.setattr(Path, "resolve", lambda self, *a, **kw: outside / self.relative_to(link) if self.is_relative_to(link) else original(self, *a, **kw))
+    request = ContextRequest(kind=kind, path="link/data.txt" if kind == "read" else "link", query="outside-marker")
+    result = grounding.evaluate(state, deps, "planner", Prompt("", "", []), {"kind": "need_context", "context_requests": [request.model_dump()]})
+    assert kinds(result) == {"protected_request"} and result.reject(deps)
+    monkeypatch.setattr(context, "read_text", lambda *a: pytest.fail("outside read attempted"))
+    item = fulfil([request], workspace=deps.workspace, policy=deps.policy(), files=["link/data.txt"], limits=deps.cfg.limits, redactor=deps.redactor)[0]
+    assert not item.ok and item.content == "" and "outside-marker" not in item.note

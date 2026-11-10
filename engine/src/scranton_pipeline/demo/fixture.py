@@ -47,7 +47,9 @@ def materialize(run_dir: Path, scenario: str = "basic") -> None:
         plan["plan"]["acceptance_criteria"].append({"id": "product", "text": "multiply(2, 3) returns 6", "verified_by": "checks", "checks": ["unit"]})
         review["criteria"].append({"id": "product", "status": "met", "evidence": "Final unit tests pass"})
         scripts["implementer"] = {"step:fix": [EDIT], "step:multiply": [{"kind": "edits", "edits": [{"path": "multiplier.py", "action": "modify", "replacements": [{"search": "return a + b", "replace": "return a * b"}]}]}]}
-    reads = {"kind": "need_context", "context_requests": [{"kind": "read", "path": f["path"]} for step in plan["plan"]["steps"] for f in step["files"]]}
+    reads: dict[str, Any] = {"kind": "need_context", "context_requests": [{"kind": "read", "path": f["path"]} for step in plan["plan"]["steps"] for f in step["files"]]}
+    if scenario == "basic":
+        reads["context_requests"].extend([{"kind": "search", "query": "add", "path": ""}, {"kind": "list", "path": ""}])
     scripts["planner"] = [value for answer in scripts["planner"] for value in (reads, answer)]
     if scenario == "evidence":
         plan["plan"]["acceptance_criteria"].append({"id": "syntax", "text": "Python files compile", "verified_by": "checks", "checks": ["syntax"]})

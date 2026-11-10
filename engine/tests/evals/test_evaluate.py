@@ -254,3 +254,14 @@ def test_all_pack_files_are_declared_package_data():
     package = engine / "src" / "scranton_pipeline"
     files = [p.relative_to(package).as_posix() for p in (package / "evals" / "packs").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     assert files and all(any(fnmatch.fnmatchcase(p, g) for g in patterns) for p in files)
+
+
+def test_baseline_fulfils_project_wide_context(evaluated):
+    meta = next(m for m in evaluated[3]["meta"]["tasks"] if m["trace"]["id"] == "baseline")
+    directory = Path(meta["run_dir"])
+    turn = json.loads((directory.parent.parent / "scripts" / "planner.json").read_text())[0]
+    assert {(r["kind"], r["path"]) for r in turn["context_requests"]} >= {("search", ""), ("list", "")}
+    registry = _rows(directory / "evidence.jsonl")
+    assert {r["query"] for r in registry if r["kind"] == "context" and r["path"] == "" and r["ok"]} >= {"", "add"}
+    assert any(r["type"] == "context" and r["data"] == {"requests": 3, "fulfilled": 3} for r in _rows(directory / "events.jsonl"))
+    assert any(r.get("role") == "planner" and r["accepted"] and not r["violations"] for r in _rows(directory / "grounding.jsonl"))

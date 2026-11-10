@@ -1,4 +1,5 @@
 """Literal, byte-bounded read requests over a supplied file inventory."""
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -9,14 +10,38 @@ from .fs import PathPolicy, read_text, sha256_file
 from .secrets import Redactor
 
 
+def normalize_request(request: ContextRequest, policy: PathPolicy) -> ContextRequest:
+    path = request.path.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    if path == ".":
+        path = ""
+    elif path.endswith("/"):
+        path = path[:-1]
+    if path:
+        policy.resolve(path)
+        if policy.is_protected(path):
+            raise EngineError(FailureClass.SECURITY, "protected_path", "Protected path")
+    elif request.path.startswith(("/", "\\")):
+        raise EngineError(FailureClass.SECURITY, "unsafe_path", "Invalid relative path")
+    return request.model_copy(update={"path": path})
+
+
+def request_error(request: ContextRequest, redactor: Redactor) -> str:
+    locator = f'{request.kind} path={json.dumps(redactor.redact(request.path), ensure_ascii=False)}'[:80]
+    return locator + ': protected or invalid. Use a relative path inside the project; an empty path searches or lists the whole project.'
+
+
 def fulfil(requests: Sequence[ContextRequest], *, workspace: Path, policy: PathPolicy, files: Sequence[str],
            limits: Limits, redactor: Redactor) -> list[ContextItem]:
     remaining = limits.max_context_bytes
     results = []
     for request in requests:
-        path = policy.resolve(request.path) if request.path else workspace.resolve()
-        if request.path and policy.is_protected(request.path):
-            results.append(ContextItem(request=request, ok=False, content="", truncated=False, note="Protected path"))
+        original = request
+        try:
+            request = normalize_request(request, policy)
+        except EngineError:
+            results.append(ContextItem(request=original, ok=False, content="", truncated=False, note=request_error(original, redactor)))
             continue
         if remaining <= 0:
             results.append(ContextItem(request=request, ok=False, content="", truncated=True, note="Context budget exhausted"))
@@ -24,6 +49,7 @@ def fulfil(requests: Sequence[ContextRequest], *, workspace: Path, policy: PathP
         content = ""
         truncated = False
         try:
+            path = policy.resolve(request.path) if request.path else workspace.resolve()
             if request.kind == "read":
                 if not request.path:
                     raise EngineError(FailureClass.IMPLEMENTATION, "not_file", "Read requires a file")
@@ -65,8 +91,6 @@ def fulfil(requests: Sequence[ContextRequest], *, workspace: Path, policy: PathP
             remaining -= len(content.encode())
             results.append(ContextItem(request=request, ok=True, content=content, truncated=truncated))
         except EngineError as exc:
-            if exc.failure_class == FailureClass.SECURITY:
-                raise
             results.append(ContextItem(request=request, ok=False, content="", truncated=False, note=redactor.redact(str(exc))))
         except OSError:
             results.append(ContextItem(request=request, ok=False, content="", truncated=False, note="Path unavailable"))

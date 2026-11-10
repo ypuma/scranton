@@ -113,8 +113,8 @@ def test_context_literal_search_bounds_and_redaction(tmp_path):
     assert "hidden" not in result[1].content
     assert not result[2].ok
     assert result[3].content == "data.txt"
-    with pytest.raises(EngineError):
-        fulfil([ContextRequest(kind="read", path="../a")], workspace=tmp_path, policy=policy(tmp_path), files=[], limits=Limits(), redactor=Redactor())
+    refused = fulfil([ContextRequest(kind="read", path="../a")], workspace=tmp_path, policy=policy(tmp_path), files=[], limits=Limits(), redactor=Redactor())
+    assert not refused[0].ok and 'read path="../a"' in refused[0].note
     bounded = fulfil([ContextRequest(kind="read", path="data.txt")] * 3, workspace=tmp_path, policy=policy(tmp_path), files=[], limits=Limits(max_context_bytes=10, max_context_item_bytes=6), redactor=Redactor())
     assert sum(len(x.content.encode()) for x in bounded) <= 10
     assert not bounded[-1].ok
