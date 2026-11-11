@@ -11,7 +11,11 @@ import { prunePython } from '../../scripts/prepare-desktop.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const venv = path.join(root, '.scratch/pipeline/venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python3');
-const python = existsSync(venv) ? venv : process.platform === 'win32' ? 'python' : 'python3';
+const pythonCommand = existsSync(venv) ? venv : process.platform === 'win32' ? 'python' : 'python3';
+const resolvedPython = spawnSync(pythonCommand, ['-I', '-B', '-c', 'import sys; print(sys.executable)'], { cwd: root, encoding: 'utf8', timeout: 30000, windowsHide: true });
+assert.equal(resolvedPython.status, 0, resolvedPython.stderr || resolvedPython.error?.message);
+const python = resolvedPython.stdout.trim();
+assert.ok(path.isAbsolute(python), 'Python must resolve to an absolute executable path before PATH is cleared');
 const fixtureScript = String.raw`
 import io, json, sys, tarfile, zipfile
 file, kind, spec = sys.argv[1:]

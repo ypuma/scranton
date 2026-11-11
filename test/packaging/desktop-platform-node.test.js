@@ -53,6 +53,24 @@ test('Mach-O direct libraries catch Homebrew dependencies even with a static-loo
   }
 });
 
+for (const arch of ['x64','arm64']) {
+  const host=desktopPlatform('linux',arch);
+  const loader=arch === 'x64' ? 'ld-linux-x86-64.so.2' : 'ld-linux-aarch64.so.1';
+  const foreignLoader=arch === 'x64' ? 'ld-linux-aarch64.so.1' : 'ld-linux-x86-64.so.2';
+  test(`ELF ${arch} accepts its native loader SONAME dependency`, () => {
+    const names=['libc.so.6','libstdc++.so.6','libm.so.6',loader];
+    assert.deepEqual(validateNodeDistribution(elf(arch,names),host,config,'v24.22.2').dependencies,names);
+  });
+  test(`ELF ${arch} rejects foreign loader SONAME and interpreter`, () => {
+    assert.throws(()=>validateNodeDistribution(elf(arch,['libc.so.6',foreignLoader]),host,config,'v24.22.2'),
+      { message: `Node is not a self-contained desktop runtime: non-system ELF dependency ${foreignLoader}` });
+    const bytes=elf(arch,['libc.so.6']);
+    bytes.fill(0,256,320);
+    bytes.write(arch === 'x64' ? '/lib/ld-linux-aarch64.so.1' : '/lib64/ld-linux-x86-64.so.2',256);
+    assert.throws(()=>validateNodeDistribution(bytes,host,config,'v24.22.2'),/unsupported ELF interpreter\/dynamic table/);
+  });
+}
+
 test('ELF direct libraries catch distro dependencies and loader search paths', () => {
   for (const arch of ['x64','arm64']) {
     const host=desktopPlatform('linux',arch), names=['libc.so.6','libstdc++.so.6','libm.so.6'];

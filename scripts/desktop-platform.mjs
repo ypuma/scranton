@@ -143,7 +143,8 @@ export function validateNodeDistribution(bytes, host = desktopPlatform(), config
       dependencies.push(text(strings + value, strings + length));
     }
     if (!dependencies.length) fail('missing ELF dependencies');
-    const allowed = new Set(['libdl.so.2', 'librt.so.1', 'libstdc++.so.6', 'libm.so.6', 'libgcc_s.so.1', 'libpthread.so.0', 'libc.so.6']);
+    const allowed = new Set(['libdl.so.2', 'librt.so.1', 'libstdc++.so.6', 'libm.so.6', 'libgcc_s.so.1', 'libpthread.so.0', 'libc.so.6',
+      host.arch === 'x64' ? 'ld-linux-x86-64.so.2' : 'ld-linux-aarch64.so.1']);
     for (const name of dependencies) if (!allowed.has(name)) fail(`non-system ELF dependency ${name}`);
   } else {
     const pe = u32(60), optional = pe + 24;
