@@ -42,7 +42,7 @@ const KNOWN_TYPES = new Set([
   'run_started', 'plan_ready', 'milestone_started', 'hive_write', 'agent_status', 'agent_tool',
   'agent_finished', 'cycle_result', 'circuit_breaker', 'hitl_request', 'hitl_response',
   'milestone_finished', 'run_finished', 'log', 'instance_started', 'chat_message', 'chat_delivery', 'milestone_integrated',
-  'chat_command_rejected', 'gate_result',
+  'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply',
 ]);
 
 const CATEGORY = {
@@ -57,6 +57,7 @@ const CATEGORY = {
   milestone_integrated: 'results',
   gate_result: 'results',
   run_finished: 'results',
+  run_reply: 'results',
   circuit_breaker: 'results',
   hitl_request: 'results',
   hitl_response: 'results',
@@ -341,6 +342,8 @@ export function reduceAll(events, state = createState()) {
 
 function sourceOf(e) {
   if (e.type === 'hive_write' || e.type === 'chat_message') return e.from ?? 'orchestrator';
+  // the fallback summary is the orchestrator's own
+  if (e.type === 'run_reply') return typeof e.from === 'string' && e.from !== 'system' ? e.from : 'orchestrator';
   if (e.type === 'hitl_response') return 'human';
   return (typeof e.instanceId === 'string' && e.instanceId) || (e.agent ?? 'orchestrator');
 }
@@ -387,6 +390,8 @@ function apply(s, e) {
       s.request = e.request ?? null;
       s.workspace = e.workspace ?? null;
       s.startedAt = e.ts ?? null;
+      // absent until a run_reply, like state.json (chat-view-contract 13.11)
+      delete s.reply;
       s.execution = normalizeExecution(e.execution);
       // like state.json: every run_started replaces the roles (none listed is none), and the agents are the built-ins,
       // then the custom roles of this run in the order it lists them
@@ -676,6 +681,10 @@ function apply(s, e) {
       break;
     }
 
+    case 'run_reply':
+      s.reply = { from: e.from, kind: e.kind, text: e.text, ...(e.truncated ? { truncated: true } : {}) };
+      break;
+
     case 'run_finished':
       s.status = RUN_STATUS_BY_RESULT[e.status] ?? 'finished';
       s.result = e.status ?? null;
@@ -875,6 +884,13 @@ function clip(text, max) {
   return t.length > max ? `${t.slice(0, max - 3)}...` : t;
 }
 
+// The first line of a message that says something, for a one-line log row.
+function firstLine(text, max) {
+  const lines = String(text ?? '').split('\n').filter((l) => l.trim());
+  const head = clip(lines[0] ?? '', max);
+  return lines.length > 1 && !head.endsWith('...') ? `${head} ...` : head;
+}
+
 // Keywords that end a role's turn without passing it on.
 export const FAIL_KEYWORDS = new Set(['BLOCKED', 'TEST_FAILED', 'CHANGES_REQUESTED', 'SECURITY_ISSUES']);
 
@@ -928,6 +944,11 @@ export function describe(e, state = null) {
     }
     case 'run_finished':
       return { tone: e.status === 'success' ? 'good' : 'bad', text: `Run ${e.status}: ${clip(e.summary, 140)}` };
+    // the Chat view shows these in full; the log keeps one line of each
+    case 'agent_message':
+      return { tone: e.final ? 'info' : 'muted', text: firstLine(e.text, 140) };
+    case 'run_reply':
+      return { tone: 'info', text: `Reply (${e.kind}): ${firstLine(e.text, 140)}` };
     case 'instance_started': {
       const wt = normalizeWorktree(e.worktree, state?.workspace);
       const sb = normalizeSandbox(e.sandbox);

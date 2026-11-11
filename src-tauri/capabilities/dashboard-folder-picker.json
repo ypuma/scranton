@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dashboard-folder-picker",
+  "description": "Native open dialog for project folder selection in the main loopback dashboard. The plugin permission covers file and directory dialogs; directory-only selection is requested by the UI. No filesystem, shell, save or message commands.",
+  "local": false,
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:*", "http://localhost:*"] },
+  "permissions": ["dialog:allow-open"]
+}

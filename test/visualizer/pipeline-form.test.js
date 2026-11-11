@@ -467,7 +467,7 @@ test('demo scenario: the select is shown only for a demo, its line follows the c
     assert.equal(h.$('pf-scenario-hint').textContent, line, id);
   }
   await h.submit();
-  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'parallel', delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false });
+  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'parallel', delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false, conversation: true });
 
   // a started run closes the drawer; the next one opens it again
   await h.open();
@@ -505,7 +505,7 @@ test('demo scenario: the evidence demo holds Evidence checks on Enforce and give
   await demoOn(h);
   assert.deepEqual(state(), held, 'the demo on again with the evidence scenario');
   await h.submit();
-  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false });
+  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false, conversation: true });
 
   // the scenario and the demo stay as they were; the held choice does not survive a new drawer
   await h.open();
@@ -574,4 +574,37 @@ test('demo scenario: the trusted host needs no acknowledgement for a demo, says 
   assert.equal(h.$('pf-trust').checked, false);
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'host' });
+});
+
+// Conversation starts use the same form defaults, but never infer a demo from a question.
+test('Pipeline Chat dock starts a real conversation using detected checks and stored models, even in the pipeline read-only Team scope', async (t) => {
+  const h = harness();
+  done(t, h);
+  await h.open();
+  await h.$('pf-model-planner').fire('change');
+  h.panel.setReadOnly(true);
+  const sent = [];
+  const result = await h.panel.startPipelineFollowUp('Why does addition subtract?', { project: 'core', startPipeline: async (body) => { sent.push(body); return { ok: true, status: 202, data: { runId: 'chatanswer' } }; } });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].task, 'Why does addition subtract?');
+  assert.equal(sent[0].conversation, true);
+  assert.equal(sent[0].demo, undefined);
+  assert.deepEqual(sent[0].checks, [{ id: 'test', kind: 'test', command: 'npm test', required: true }]);
+  assert.deepEqual(sent[0].models.planner, { provider: 'anthropic', model: 'claude' });
+});
+
+test('Direct answer demo is selectable in the mounted form and starts with conversation enabled', async (t) => {
+  const h = harness();
+  done(t, h);
+  await h.open();
+  h.$('pf-demo').checked = true;
+  await h.$('pf-demo').fire('change');
+  h.$('pf-scenario').value = 'answer';
+  await h.$('pf-scenario').fire('change');
+  assert.match(h.$('pf-scenario-hint').textContent, /Nothing is changed/);
+  await h.submit();
+  assert.equal(h.sent[0].demoScenario, 'answer');
+  assert.equal(h.sent[0].conversation, true);
+  assert.equal(h.sent[0].demo, true);
 });

@@ -15,15 +15,25 @@ import { createPipelineView } from './pipeline-view.js';
 import { createNav } from './nav.js';
 import { createThread } from './thread.js';
 import { createTabs } from './tabs.js';
+import { createWindowControls } from './window-controls.js';
+import { createViewMode, createDock } from './view-mode.js';
+import { createChatView } from './chat-view.js';
+import { teamChatAdapter, CHAT_EVENT_TYPES } from './chat-adapter-team.js';
+import { pipelineChatAdapter } from './chat-adapter-pipeline.js';
 
 const params = new URLSearchParams(location.search);
 const mode = params.has('demo') ? 'demo' : params.has('live') ? 'live' : 'auto';
 const speed = Number(params.get('speed')) || 1;
 const seek = Math.max(0, Number.parseInt(params.get('seek') ?? '0', 10) || 0);
 const REFRESH_NAV_ON = new Set(['run_started', 'run_finished', 'hitl_request', 'hitl_response']);
+// the Chat view's events of the run on screen; a longer run keeps its request and its newest events
+const CHAT_EVENTS_MAX = 5000;
 
 const $ = (id) => document.getElementById(id);
-const dashboard = createDashboard();
+// first: the desktop window has no other way to be moved or closed, whatever fails further down
+createWindowControls();
+// a pipeline chat has a run once its run list has one; the team's reducer state knows nothing of it
+const dashboard = createDashboard({ hasRun: () => (engine === 'pipeline' ? Boolean(pipelineView.chat().list?.runs.length) : null) });
 const pipeline = createPipeline($('pipeline'));
 const log = createLog({
   table: $('log'), body: $('log-body'), scroller: $('log-scroll'), empty: $('log-empty'), jump: $('log-jump'), filters: $('log-filters'),
@@ -47,6 +57,20 @@ let thread = null;
 let bound = false;
 // the engine of the chat on screen: 'team' (the event stream and the dashboard) or 'pipeline' (the pipeline view)
 let engine = 'team';
+// what the Chat view is drawn from: the live run's events the adapter reads, and whether the newest of them
+// was history (a chat that was just opened replays its run) or happened now
+let liveEvents = [];
+let catchingUp = true;
+let entries = [];
+let entriesKey = '';
+// the same for a pipeline chat: what its view last loaded was the run as the page found it
+let pipelineHistory = true;
+
+function forgetLive() {
+  live = createState();
+  liveEvents = [];
+  catchingUp = true;
+}
 
 // Chat routes of the chat on screen. Without a chat (no project yet, or a project without chats) only the
 // control document is read, for the Accounts and New run buttons; nothing else has anywhere to go. A pipeline
@@ -56,7 +80,10 @@ function urlFor(suffix) {
   return suffix === 'control' ? '/api/control' : null;
 }
 const readOnlyView = () => Boolean(replay) || (projectsMode && (!scope.get()?.chat || engine === 'pipeline'));
-const models = createModelPicker({ openAccounts: (opts) => accounts?.open(opts), canOpenAccounts: () => Boolean(accounts?.available()) });
+const models = createModelPicker({
+  openAccounts: (opts) => accounts?.open(opts), canOpenAccounts: () => Boolean(accounts?.available()),
+  openAgents: () => agents?.open(), canOpenAgents: () => Boolean(agents?.available()),
+});
 const chat = createChatPanel({
   getState: current,
   // a replay reads like a recording: the transcript only, nobody to message
@@ -66,7 +93,71 @@ const chat = createChatPanel({
   },
   refresh: () => control?.refresh(),
   url: urlFor,
+  onChange: () => chatView.render(),
 });
+// Chat | Dashboard (Details in a pipeline chat): the conversation is always the live chat, so an earlier run on
+// screen gives way to it
+const viewMode = createViewMode({
+  onChange: (next) => {
+    if (next === 'chat') {
+      thread?.live();
+      if (engine === 'pipeline') pipelineView.live();
+    }
+    control?.render();
+  },
+});
+
+// The conversation of the chat on screen: its earlier runs, the live run and what was sent but not echoed yet.
+// A pipeline chat's comes from what its view polls.
+function chatEntries() {
+  if (engine === 'pipeline') {
+    const c = pipelineView.chat();
+    const key = `pipeline|${c.version}`;
+    if (key !== entriesKey) {
+      entriesKey = key;
+      entries = pipelineChatAdapter(c);
+    }
+    return entries;
+  }
+  const outbox = chat.steering.pending();
+  const key = [live.runId, live.lastSeq, liveEvents.length, thread?.version() ?? 0, outbox.map((o) => `${o.id}:${o.delivery}:${o.stale}`).join(',')].join('|');
+  if (key !== entriesKey) {
+    entriesKey = key;
+    entries = teamChatAdapter({ events: [...(thread?.details() ?? []), ...liveEvents], state: live, runs: thread?.runs() ?? [], outbox });
+  }
+  return entries;
+}
+const chatView = createChatView({
+  getEntries: chatEntries,
+  currentRunId: () => (engine === 'pipeline' ? pipelineView.chat().current : live.runId),
+  loadRun: (runId) => (engine === 'pipeline' ? pipelineView.loadRun(runId) : thread.loadRun(runId)),
+  announce: (text, kind) => {
+    // a page that can answer the question says so itself when its answer panel opens
+    if (kind === 'question' && engine !== 'pipeline' && control.snapshot().gates.on && !readOnlyView()) return;
+    $('control-announcer').textContent = text;
+  },
+  // a pipeline gate is decided in Details, where the plan, the diff and the evidence are; a team question in the
+  // answer panel docked under the transcript
+  ask: () => (engine !== 'pipeline' ? null : {
+    label: 'Review and decide',
+    open() {
+      viewMode.set('dashboard', { remember: false });
+      pipelineView.review();
+    },
+  }),
+});
+// the composer that messages a running agent: the Messages composer's session, mounted a second time
+chat.steering.mount({
+  form: $('chat-view-form'), to: $('chat-view-to'), text: $('chat-view-input'), count: $('chat-view-count'),
+  send: $('chat-view-send'), block: $('chat-view-block'), status: $('chat-view-status'),
+}, {
+  shown: ({ enabled, alive }) => enabled && alive && viewMode.get() === 'chat',
+  onSent: () => chatView.toBottom(),
+});
+const dock = createDock([
+  { form: $('followup'), field: $('followup-text') },
+  { form: $('chat-view-form'), field: $('chat-view-input') },
+], $('chat-view-scroll'));
 const activity = createTabs($('activity-tabs'), {
   onSelect: (name) => (name === 'events' ? log.reveal() : name === 'chat' ? chat.reveal() : null),
 });
@@ -89,8 +180,13 @@ function view() {
 
 const pipelineView = createPipelineView({
   confirm: (opts) => control.confirm(opts),
-  openRun: (target, onStarted) => control.openRun({ engine: 'pipeline', target, onStarted }),
+  openRun: (target, onStarted, { task, problem } = {}) => control.openRun({ engine: 'pipeline', target, onStarted, task, problem }),
   onChange: () => nav?.refresh(),
+  // the one poller of a pipeline chat feeds the Chat view too
+  onUpdate: ({ history }) => {
+    pipelineHistory = history;
+    schedule();
+  },
 });
 
 control = createControlPanel({
@@ -114,6 +210,7 @@ control = createControlPanel({
   // the control poll changes whether the run is gone and who can be messaged, so the views follow it
   onRender: () => {
     const v = view();
+    const settle = dock.hold();
     dashboard.render(v);
     pipeline.render(v);
     lanes.render(v);
@@ -121,6 +218,8 @@ control = createControlPanel({
     accounts?.render();
     agents?.render();
     thread?.render();
+    chatView.render({ quiet: engine === 'pipeline' ? pipelineHistory : catchingUp });
+    settle();
   },
 });
 accounts = createAccountsPanel({ getControl: () => control.snapshot(), confirm: control.confirm, onChange: (list) => models.setAccounts(list) });
@@ -142,6 +241,12 @@ function onEvent(event, { instant }) {
   const prev = live;
   live = reduce(live, event);
   if (live === prev) return;
+  if (live.runId !== prev.runId) liveEvents = [];
+  if (CHAT_EVENT_TYPES.has(event.type)) {
+    liveEvents.push(event);
+    if (liveEvents.length > CHAT_EVENTS_MAX) liveEvents.splice(1, liveEvents.length - CHAT_EVENTS_MAX);
+  }
+  catchingUp = Boolean(instant);
   if (!replay) {
     if (live.runId !== prev.runId) pipeline.clear();
     // instance mailboxes animate between their role cards
@@ -165,7 +270,7 @@ function bind(next) {
   bound = true;
   feed?.stop();
   feed = null;
-  live = createState();
+  forgetLive();
   replay = null;
   // before the control panel reads its url again
   applyEngine();
@@ -173,6 +278,7 @@ function bind(next) {
   control.reset();
   control.setReadOnly(readOnlyView());
   chat.reset();
+  chatView.reset();
   thread.setScope();
   nav.render();
   attach();
@@ -185,6 +291,9 @@ function applyEngine() {
   const changed = next !== engine;
   engine = next;
   document.body.dataset.engine = next;
+  // the second view of a pipeline chat is its pipeline view
+  viewMode.name(next === 'pipeline' ? 'Details' : 'Dashboard');
+  pipelineHistory = true;
   return changed;
 }
 
@@ -233,17 +342,39 @@ nav = createNav({
   onProjects: (doc) => {
     if (projectsMode && scopeGone(doc, scope.get())) follow({ replace: true });
     else if (projectsMode && bound && applyEngine()) {
-      live = createState();
+      forgetLive();
       control.reset();
       control.setReadOnly(readOnlyView());
       chat.reset();
+      chatView.reset();
       attach();
       schedule();
     }
   },
   announce: (text) => { $('control-announcer').textContent = text; },
 });
-thread = createThread({ scope, nav, control, onReplay });
+thread = createThread({
+  scope, nav, control, onReplay,
+  view: () => viewMode.get(),
+  hasRun: () => Boolean(current().runId),
+  onRuns: schedule,
+  keepEvent: (event) => CHAT_EVENT_TYPES.has(event.type),
+  pipeline: {
+    gate() {
+      const c = pipelineView.chat();
+      return { loaded: c.loaded, active: c.active, runs: c.list?.runs.length ?? 0 };
+    },
+    note: () => pipelineView.chat().note,
+    async start(task) {
+      const next = pipelineView.nextRun();
+      if (!next) return { error: 'A run of this chat is still going. Follow up once it has finished.' };
+      const r = await control.startPipelineFollowUp(task, next.target);
+      if (r.ok) next.started(r);
+      return r;
+    },
+    options: (opts) => pipelineView.newRun(opts),
+  },
+});
 
 render();
 setInterval(() => dashboard.tick(), 1000);

@@ -231,8 +231,15 @@ export function capacityText(doc) {
 // ------------------------------------------------------------ runs of a chat
 
 const RUN_STATUS_LABEL = { success: 'done', partial: 'partial', failed: 'failed', aborted: 'aborted', running: 'running' };
+const REPLY_KINDS = ['answer', 'report', 'summary'];
 
-// GET .../runs -> [{ runId, goal, status, startedAt, endedAt, current }] (oldest first) or null
+// A run's return message as the run list carries it (bounded by the server); null for a run without one.
+function parseReply(r) {
+  if (!r || typeof r !== 'object' || typeof r.text !== 'string' || !REPLY_KINDS.includes(r.kind)) return null;
+  return { kind: r.kind, text: str(r.text), ...(r.truncated === true ? { truncated: true } : {}) };
+}
+
+// GET .../runs -> [{ runId, goal, status, startedAt, endedAt, current, summary, reply }] (oldest first) or null
 export function parseRuns(doc) {
   if (!doc || typeof doc !== 'object' || !Array.isArray(doc.runs)) return null;
   const seen = new Set();
@@ -243,6 +250,7 @@ export function parseRuns(doc) {
     runs.push({
       runId: r.runId, goal: str(r.goal), status: str(r.status) || null,
       startedAt: str(r.startedAt) || null, endedAt: str(r.endedAt) || null, current: r.current === true,
+      summary: str(r.summary), reply: parseReply(r.reply),
     });
   }
   return runs;
@@ -288,13 +296,24 @@ export function replayError(status) {
   return `The run could not be loaded (HTTP ${status}).`;
 }
 
-// What the follow-up composer does. -> { hidden, disabled, reason, label }
-export function composerGate({ scoped, enabled, mode, replaying, chatStatus = 'idle', alive = false, recovery = false, runs = 0, submitting = false }) {
+// Why the agent messages of an earlier run cannot be shown in the Chat view.
+export function detailError(status) {
+  if (status === 413) return 'The event log of this run is larger than 20 MiB, so its agent messages cannot be shown here.';
+  if (status === 404) return 'This run is not in the chat history any more.';
+  if (status === 0) return 'The server did not answer. Is it still running?';
+  return `The agent messages of this run could not be loaded (HTTP ${status}).`;
+}
+
+// What the follow-up composer does. view 'chat': while a run is live the Chat view shows the composer that
+// messages its agents in the same place, so this one steps aside. -> { hidden, disabled, reason, label }
+export function composerGate({ scoped, enabled, mode, replaying, chatStatus = 'idle', alive = false, recovery = false, runs = 0, submitting = false, view = 'dashboard' }) {
   const label = runs > 0 ? 'Follow up' : 'Start run';
   if (!scoped || !enabled || mode === 'demo' || replaying) return { hidden: true, disabled: true, reason: '', label };
   if (alive || ALIVE_STATUSES.has(chatStatus)) {
+    if (view === 'chat' && alive) return { hidden: true, disabled: true, reason: '', label };
     return { hidden: false, disabled: true, label,
-      reason: 'A run is in progress. Message its agents under Messages; follow up once it has finished.' };
+      reason: view === 'chat' ? 'A run is in progress. Follow up once it has finished.'
+        : 'A run is in progress. Message its agents under Messages; follow up once it has finished.' };
   }
   if (recovery) return { hidden: false, disabled: true, reason: 'Recovery required: another owner still holds this chat.', label };
   return { hidden: false, disabled: submitting, reason: '', label };

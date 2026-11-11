@@ -1,12 +1,18 @@
 // The chat header: project and chat title, the run picker (the live run or a read-only replay of an earlier one)
-// and the Follow up composer that starts the next run of the thread.
+// and the Follow up composer that starts the next run of the thread. It also holds what the Chat view shows of
+// the chat's earlier runs: the run list and the events of the runs that were opened.
 import { CLIENT_HEADERS, REQUEST_MAX } from './control.js';
 import {
-  findProject, findChat, parseRuns, runChoices, runEventsUrl, replayRun, replayError, composerGate, CHAT_STATUS,
+  findProject, findChat, parseRuns, runChoices, runEventsUrl, replayRun, replayError, detailError, composerGate, CHAT_STATUS,
 } from './scope.js';
+import { pipelineComposerGate } from './pipeline-model.js';
+import { shortcut } from './platform.js';
 
 const $ = (id) => document.getElementById(id);
 const RUNS_ON = new Set(['run_started', 'run_finished']);
+const PLACEHOLDER = 'Ask a question or describe a task...';
+const HINT = 'Earlier runs of this chat are given to Michael as context.';
+const PIPELINE_HINT = 'Starts a pipeline run with the choices under Options.';
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -26,9 +32,14 @@ async function getDoc(url) {
 
 // scope: the scope object of main.js. nav: the sidebar. control: the control panel.
 // onReplay({ runId, state, run } | null): show an archived run, or the live one again.
-export function createThread({ scope, nav, control, onReplay }) {
+// view(): 'chat' | 'dashboard', the view on screen. hasRun(): a run is on screen. onRuns(): the run list or an
+// opened run changed. keepEvent(event): which events of an opened run are worth keeping.
+// pipeline: the run composer of a pipeline chat, which starts runs through the pipeline routes:
+//   { gate() -> { loaded, active, runs } (pipeline-model.js pipelineComposerGate), note() -> { text, tone } | null,
+//     start(task) -> what control.startFollowUp answers, options({ task, problem, onStarted }) }
+export function createThread({ scope, nav, control, onReplay, view = () => 'dashboard', hasRun = () => false, onRuns = null, keepEvent = () => true, pipeline = null }) {
   const e = {
-    root: $('thread'), project: $('thread-project'), title: $('thread-title'), state: $('thread-state'), rename: $('thread-rename'),
+    root: $('thread'), project: $('thread-project'), sep: $('thread-sep'), title: $('thread-title'), state: $('thread-state'), rename: $('thread-rename'),
     runs: $('thread-runs'), picker: $('run-picker'), status: $('thread-status'),
     empty: $('thread-empty'), emptyTitle: $('thread-empty-title'), emptyDetail: $('thread-empty-detail'), emptyAction: $('thread-empty-action'),
     banner: $('replay-banner'), bannerDetail: $('replay-detail'), back: $('replay-back'),
@@ -45,6 +56,15 @@ export function createThread({ scope, nav, control, onReplay }) {
   let emptyAction = null;
   // what the drawer has to fix before a follow-up can start: { error, field, fields }
   let problem = null;
+  // runId -> the events of an earlier run the Chat view opened
+  const details = new Map();
+  // bumped whenever runs or details change, so a reader can tell without comparing them
+  let version = 0;
+
+  function changed() {
+    version += 1;
+    onRuns?.();
+  }
 
   function say(box, text, tone = '') {
     if (box.textContent === text && box.dataset.tone === tone) return;
@@ -64,7 +84,24 @@ export function createThread({ scope, nav, control, onReplay }) {
       if (parsed) runs = parsed;
       else if (status !== 0) say(e.status, `The run history could not be loaded (HTTP ${status}).`, 'error');
       render();
+      if (parsed) changed();
     });
+  }
+
+  // The events of an earlier run, fetched once per chat. -> { ok: true } | { error }
+  async function loadRun(runId) {
+    if (details.has(runId)) return { ok: true };
+    const url = runEventsUrl(scope.get(), runId);
+    if (!url) return { error: detailError(404) };
+    const mine = scope.gen();
+    const { status, doc } = await getDoc(url);
+    if (mine !== scope.gen()) return { error: detailError(404) };
+    if (!doc) return { error: detailError(status) };
+    const events = (Array.isArray(doc.events) ? doc.events : []).filter((x) => x && typeof x === 'object' && x.runId === runId && keepEvent(x));
+    if (!events.length) return { error: 'The server sent no events for this run.' };
+    details.set(runId, events);
+    changed();
+    return { ok: true };
   }
 
   function fillPicker() {
@@ -106,32 +143,40 @@ export function createThread({ scope, nav, control, onReplay }) {
   function render() {
     const doc = nav.doc();
     const s = scope.get();
-    e.root.hidden = !active;
-    if (!active) return;
+    if (!active) {
+      // no projects (the demo recording, an older server): the head is the view switch alone, once a run is there
+      e.root.hidden = !hasRun();
+      for (const x of [e.project, e.sep, e.title, e.state, e.rename, e.runs]) x.hidden = true;
+      return;
+    }
+    e.root.hidden = false;
     const chat = findChat(doc, s);
     const project = findProject(doc, s?.project);
     document.body.dataset.scope = chat ? 'chat' : 'none';
     e.empty.hidden = Boolean(chat);
     e.project.textContent = project?.name ?? '';
     e.project.title = project?.workspace ?? '';
+    // the separator never stands without the name before it
+    e.project.hidden = !project;
     if (!chat) {
       renderEmpty(doc, s);
       e.title.textContent = '';
       for (const x of [e.title, e.state, e.rename, e.runs, e.banner, e.form]) x.hidden = true;
-      e.root.querySelector('.thread-sep').hidden = !project;
+      e.sep.hidden = true;
       return;
     }
-    // a pipeline chat has its own run selector and starts runs from the drawer, not from the composer
+    // a pipeline chat has its own run selector (Details) and starts its runs through the pipeline routes
     const pipelineChat = chat.engine === 'pipeline';
     for (const x of [e.title, e.state]) x.hidden = false;
-    e.runs.hidden = pipelineChat;
+    // the Chat view shows every run of the chat in one conversation, so it has no run to pick
+    e.runs.hidden = pipelineChat || view() === 'chat';
     // a single-mode server refuses renames (409 single_mode)
     e.rename.hidden = doc.mode === 'single';
-    e.root.querySelector('.thread-sep').hidden = false;
+    e.sep.hidden = !project;
     e.title.textContent = chat.title;
     e.title.title = chat.title;
-    const view = CHAT_STATUS[chat.status] ?? CHAT_STATUS.idle;
-    e.state.textContent = `${view.glyph} ${view.label}`;
+    const status = CHAT_STATUS[chat.status] ?? CHAT_STATUS.idle;
+    e.state.textContent = `${status.glyph} ${status.label}`;
     if (chat.status === 'needs_human' || chat.status === 'failed') e.state.dataset.tone = 'loud';
     else delete e.state.dataset.tone;
     if (runsGen !== scope.gen()) runs = [];
@@ -145,21 +190,28 @@ export function createThread({ scope, nav, control, onReplay }) {
     }
 
     const snap = control.snapshot();
-    const gate = composerGate({
-      scoped: true, enabled: Boolean(snap?.control?.enabled), mode: snap?.mode, replaying: Boolean(replay),
-      chatStatus: chat.status, alive: Boolean(snap?.gates?.alive), recovery: Boolean(snap?.gates?.recovery),
-      runs: Math.max(chat.runs, runs.length), submitting,
-    });
-    e.form.hidden = gate.hidden || pipelineChat;
+    const gate = pipelineChat
+      ? pipelineComposerGate({ enabled: Boolean(snap?.control?.enabled), mode: snap?.mode, view: view(), ...pipeline?.gate(), submitting })
+      : composerGate({
+        scoped: true, enabled: Boolean(snap?.control?.enabled), mode: snap?.mode, replaying: Boolean(replay),
+        chatStatus: chat.status, alive: Boolean(snap?.gates?.alive), recovery: Boolean(snap?.gates?.recovery),
+        runs: Math.max(chat.runs, runs.length), submitting, view: view(),
+      });
+    // the Chat view does not show the pipeline view's message line: what it says there is said under the head
+    if (pipelineChat) {
+      const note = view() === 'chat' ? pipeline?.note() : null;
+      say(e.status, note?.text ?? '', note?.tone ?? '');
+    }
+    e.form.hidden = gate.hidden;
     e.form.dataset.off = String(gate.disabled && !submitting);
     e.label.textContent = gate.label;
     e.text.disabled = gate.disabled && !submitting;
-    e.text.placeholder = gate.label === 'Follow up' ? 'What should the agents do next in this chat?' : 'What should the agents build?';
+    e.text.placeholder = PLACEHOLDER;
     e.send.disabled = gate.disabled;
     e.options.disabled = gate.disabled;
     e.send.textContent = submitting ? 'Starting...' : gate.label;
     e.fix.hidden = !problem || (gate.disabled && !submitting);
-    e.hint.textContent = gate.reason || 'Earlier runs of this chat are given to Michael as context. Ctrl+Enter starts.';
+    e.hint.textContent = gate.reason || `${pipelineChat ? PIPELINE_HINT : HINT} ${shortcut('Enter')} starts.`;
   }
 
   // ------------------------------------------------------------ replay
@@ -232,12 +284,17 @@ export function createThread({ scope, nav, control, onReplay }) {
     setProblem(null);
     e.text.value = '';
     updateCount();
-    say(e.fStatus, 'Run started. Its events appear below; the composer opens again once it has finished.');
+    say(e.fStatus, view() === 'chat' ? 'Run started.' : 'Run started. Its events appear below; the composer opens again once it has finished.');
     loadRuns();
     nav.refresh();
   };
-  e.options.addEventListener('click', () => control.openRun({ request: e.text.value, onStarted: started }));
-  e.fix.addEventListener('click', () => control.openRun({ request: e.text.value, onStarted: started, problem }));
+  const pipelineChat = () => findChat(nav.doc(), scope.get())?.engine === 'pipeline';
+  // Options: the drawer of the chat's engine, starting from what the composer holds
+  const openOptions = (fix) => (pipelineChat()
+    ? pipeline?.options({ task: e.text.value, onStarted: started, problem: fix })
+    : control.openRun({ request: e.text.value, onStarted: started, ...(fix ? { problem: fix } : {}) }));
+  e.options.addEventListener('click', () => openOptions(null));
+  e.fix.addEventListener('click', () => openOptions(problem));
   e.form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     if (submitting || e.send.disabled) return;
@@ -253,7 +310,7 @@ export function createThread({ scope, nav, control, onReplay }) {
     setProblem(null);
     say(e.fStatus, 'Starting the run...', 'busy');
     render();
-    const r = await control.startFollowUp(goal);
+    const r = await (pipelineChat() ? pipeline.start(goal) : control.startFollowUp(goal));
     submitting = false;
     if (mine !== scope.gen()) return;
     if (r.ok) started();
@@ -267,6 +324,8 @@ export function createThread({ scope, nav, control, onReplay }) {
     }
     render();
     if (r.options && !e.fix.hidden) e.fix.focus();
+    // a pipeline chat has no second composer to hand the focus to: the line that says the run started takes it
+    else if (r.ok && pipelineChat() && e.text.disabled) e.fStatus.focus();
   });
 
   return {
@@ -280,6 +339,8 @@ export function createThread({ scope, nav, control, onReplay }) {
       replay = null;
       loading = null;
       runs = [];
+      details.clear();
+      version += 1;
       submitting = false;
       setProblem(null);
       say(e.status, '');
@@ -294,5 +355,11 @@ export function createThread({ scope, nav, control, onReplay }) {
     },
     render,
     replaying: () => Boolean(replay),
+    // the live run again, if an earlier one is on screen
+    live: () => (replay || loading ? back() : undefined),
+    runs: () => (runsGen === scope.gen() ? runs : []),
+    details: () => [...details.values()].flat(),
+    version: () => version,
+    loadRun,
   };
 }

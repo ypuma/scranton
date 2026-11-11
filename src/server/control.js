@@ -19,7 +19,7 @@ import { getAuthService } from '../core/auth.js';
 import { validateDockerModels } from '../core/sandbox.js';
 import { isLoopbackAddress } from '../core/network.js';
 
-const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues'];
+const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
 // Error/blocked invocations can retry; only completed instances stop accepting queued chat.
 const CHAT_RECIPIENT_STATES = new Set(['idle', 'thinking', 'working', 'waiting', 'blocked', 'error']);
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -107,7 +107,8 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     try {
       const config = configuration();
       configurationError = config.workflowWarning;
-      execution = config.execution;
+      execution = { ...config.execution };
+      if (execution.conversation !== true) delete execution.conversation;
       workflow = config.workflow;
       agents = config.roles.map(({ id, name, title, kind, builtin, passKeyword, failKeyword }) => ({ id, name, title, kind, builtin, gate: kind === 'gate', ...(passKeyword ? { passKeyword, failKeyword } : {}) }));
       models = Object.fromEntries(Object.entries(config.agents).map(([role, { provider, model }]) => [role, provider && model ? { provider, model } : null]));
@@ -155,17 +156,26 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     if (body.workspace !== undefined && (typeof body.workspace !== 'string' || !path.isAbsolute(body.workspace))) throw error(400, 'Workspace must be absolute');
     if (body.maxCycles !== undefined && (!Number.isInteger(body.maxCycles) || body.maxCycles < 1 || body.maxCycles > 10)) throw error(400, 'Invalid maxCycles');
     if (body.noPlan !== undefined && typeof body.noPlan !== 'boolean') throw error(400, 'Invalid noPlan');
+    if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw error(400, 'Invalid conversation');
     const baseConfig = configuration();
+    if (body.sandbox !== undefined && !['docker', 'host'].includes(body.sandbox)) throw error(400, 'Invalid sandbox');
+    if (body.trustedHost !== undefined && typeof body.trustedHost !== 'boolean') throw error(400, 'Invalid trustedHost');
+    if (body.sandbox === 'host' && body.trustedHost !== true) throw error(400, 'Host execution requires trustedHost:true');
+    if (body.trustedHost === true && body.sandbox === 'docker') throw error(400, 'trustedHost conflicts with docker sandbox');
+    const docker = !demo && !body.trustedHost && (body.sandbox ?? baseConfig.execution.sandbox.mode) === 'docker';
     const workflow = normalizeWorkflow(body.workflow === undefined ? baseConfig.workflow : body.workflow, baseConfig.roles.filter((r) => r.kind === 'gate').map((r) => r.id));
     const modelEnv = {};
-    if (body.models !== undefined) {
-      if (!object(body.models) || Object.keys(body.models).some((role) => !Object.hasOwn(baseConfig.agents, role))) throw error(400, 'Invalid models');
+    if (body.models !== undefined && (!object(body.models) || Object.keys(body.models).some((role) => !Object.hasOwn(baseConfig.agents, role)))) throw error(400, 'Invalid models');
+    for (const choice of Object.values(body.models ?? {})) {
+      if (!object(choice) || Object.keys(choice).some((key) => !['provider', 'model', 'thinking'].includes(key)) ||
+          typeof choice.provider !== 'string' || typeof choice.model !== 'string' ||
+          (choice.thinking !== undefined && !THINKING_LEVELS.includes(choice.thinking))) throw error(400, 'Invalid model selection');
+    }
+    // Docker always uses resolved agent defaults, never cached per-run selections.
+    if (body.models !== undefined && !docker) {
       const catalog = await auth.listModels();
       for (const [role, choice] of Object.entries(body.models)) {
-        if (!object(choice) || Object.keys(choice).some((key) => !['provider', 'model', 'thinking'].includes(key)) ||
-            typeof choice.provider !== 'string' || typeof choice.model !== 'string' ||
-            !catalog.providers.some((p) => p.id === choice.provider && p.signedIn && p.models.some((m) => m.id === choice.model)) ||
-            (choice.thinking !== undefined && !THINKING_LEVELS.includes(choice.thinking))) throw error(400, 'Invalid model selection');
+        if (!catalog.providers.some((p) => p.id === choice.provider && p.signedIn && p.models.some((m) => m.id === choice.model))) throw error(400, 'Invalid model selection');
         const prefix = `SCRANTON_${role.toUpperCase()}`;
         modelEnv[`${prefix}_PROVIDER`] = choice.provider;
         modelEnv[`${prefix}_MODEL`] = choice.model;
@@ -185,14 +195,11 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     const options = ['--gates', workflow.gates.map((stage) => stage.join('+')).join(','), '--single-hive', '--hive', hive, '--workspace', ws, '--on-breaker', 'hive'];
     if (body.maxCycles !== undefined) options.push('--max-cycles', String(body.maxCycles));
     if (body.noPlan) options.push('--no-plan');
+    if (body.conversation !== undefined) options.push(body.conversation ? '--conversation' : '--no-conversation');
     if (body.maxParallel !== undefined) {
       if (!Number.isInteger(body.maxParallel) || body.maxParallel < 1 || body.maxParallel > 32) throw error(400, 'maxParallel must be an integer from 1 to 32');
       options.push('--parallel', String(body.maxParallel));
     }
-    if (body.sandbox !== undefined && !['docker', 'host'].includes(body.sandbox)) throw error(400, 'Invalid sandbox');
-    if (body.trustedHost !== undefined && typeof body.trustedHost !== 'boolean') throw error(400, 'Invalid trustedHost');
-    if (body.sandbox === 'host' && body.trustedHost !== true) throw error(400, 'Host execution requires trustedHost:true');
-    if (body.trustedHost === true && body.sandbox === 'docker') throw error(400, 'trustedHost conflicts with docker sandbox');
     if (body.sandbox === 'host' || body.trustedHost === true) options.push('--trusted-host');
     else if (body.sandbox === 'docker') options.push('--sandbox', 'docker');
     if (body.sandboxImage !== undefined) {
@@ -209,7 +216,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
       catch (err) { throw error(400, err.message); }
     }
     args.splice(2, 0, ...options);
-    const info = { mode, request: body.request ?? 'Build a tiny todo CLI', workspace: ws, startedAt: new Date().toISOString(), runId: randomUUID(), exitCode: null };
+    const info = { mode, request: body.request ?? (demo?.scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI'), workspace: ws, startedAt: new Date().toISOString(), runId: randomUUID(), exitCode: null };
     let lease;
     try { lease = acquire(hive, info); }
     catch (err) { if (err.code === 'EEXIST') throw error(409, 'Hive is owned by another run; stop it or recover ownership first'); throw err; }

@@ -786,3 +786,62 @@ test('run line: procedural guidance is one quiet fragment naming the situation',
   await off.tick();
   assert.doesNotMatch(lineText(off.$('pv-meta')), /guidance/);
 });
+
+// The shared transcript consumes the existing poller rather than adding a Chat-mode fetch loop.
+test('Pipeline Chat uses one poller across repeated shows, reads and Details approval focus', async (t) => {
+  const h = harness({ doc: () => doc(runStatus(), { events: [{ seq: 1, type: 'agent_message', data: { role: 'planner', text: 'Plan', final: true } }] }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  const count = h.requests.length;
+  for (let i = 0; i < 5; i += 1) {
+    h.view.show({ project: 'core', chat: 'c1' });
+    h.view.chat();
+    h.view.live();
+  }
+  assert.equal(h.requests.length, count);
+  assert.equal(h.timers.pending.size, 1);
+  assert.equal(h.view.chat().run.events[0].data.text, 'Plan');
+  h.view.review();
+  assert.equal(document.activeElement.dataset.focus, 'gate-title');
+  assert.equal(buttons(h).length, 2, 'only the existing Details approval controls');
+  h.view.hide();
+  assert.equal(h.timers.pending.size, 0);
+});
+
+test('Pipeline Chat history stays lazy, pages by lastSeq, caches once and forgets on chat switch', async (t) => {
+  const old = 'old123456789';
+  const h = harness({ list: () => ({ ...LIST, runs: [{ runId: old, status: 'succeeded', task: 'Earlier', reply: { kind: 'answer', text: 'Earlier answer' } }, ...LIST.runs] }), doc: () => doc(runStatus()) });
+  done(t, h);
+  const baseFetch = globalThis.fetch;
+  const pages = [];
+  globalThis.fetch = async (url, opts) => {
+    if (!url.startsWith(`${BASE}/runs/${old}?after=`)) return baseFetch(url, opts);
+    pages.push(url);
+    const after = Number(url.split('after=')[1]);
+    const events = after === 0 ? Array.from({ length: 500 }, (_, i) => ({ seq: i + 1, type: i === 0 ? 'agent_message' : 'node_started', data: { role: 'planner', text: 'Earlier plan' } })) : [{ seq: 501, type: 'run_reply', data: { kind: 'answer', text: 'Full earlier answer' } }];
+    return { ok: true, status: 200, json: async () => ({ status: { status: 'succeeded', task: 'Earlier' }, events, lastSeq: events.at(-1).seq }) };
+  };
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  assert.equal(pages.length, 0, 'run-list reply needs no historical fetch');
+  assert.equal(h.view.chat().list.runs[0].reply.text, 'Earlier answer');
+  assert.deepEqual(await h.view.loadRun(old), { ok: true });
+  assert.deepEqual(pages.map((p) => p.split('after=')[1]), ['0', '500']);
+  assert.deepEqual(h.view.chat().details[0].events.map((e) => e.seq), [1, 501], 'irrelevant events discarded only after paging');
+  await h.view.loadRun(old);
+  assert.equal(pages.length, 2);
+  h.view.show({ project: 'core', chat: 'other' });
+  assert.deepEqual(h.view.chat().details, []);
+});
+
+test('Pipeline Chat drains full current event pages immediately without a second timer', async (t) => {
+  const h = harness({ doc: (n) => doc(runStatus(), { events: n === 0 ? Array.from({ length: 500 }, (_, i) => ({ seq: i + 1, type: i === 2 ? 'agent_message' : 'node_started', data: { role: 'planner', text: 'First' } })) : [{ seq: 501, type: 'agent_message', data: { role: 'implementer', text: 'Next' } }], lastSeq: n === 0 ? 500 : 501 }) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  await h.tick();
+  assert.deepEqual(runGets(h).map((r) => r.url.split('after=')[1]), ['0', '500']);
+  assert.deepEqual(h.view.chat().run.events.map((e) => e.seq), [3, 501]);
+  assert.equal(h.timers.pending.size, 1);
+});

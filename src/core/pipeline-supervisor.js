@@ -87,7 +87,14 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
   }
   function list(chat) {
     const values = statuses(chat);
-    return { active: values.find((s) => !terminal.has(s.status))?.run_id ?? null, runs: values.map((s) => ({ runId: s.run_id, status: s.status, phase: s.phase, task: scrub(s.task), createdAt: s.created_at, updatedAt: s.updated_at })) };
+    return { active: values.find((s) => !terminal.has(s.status))?.run_id ?? null, runs: values.map((s) => {
+      const row = { runId: s.run_id, status: s.status, phase: s.phase, task: scrub(s.task), createdAt: s.created_at, updatedAt: s.updated_at };
+      if (s.reply) {
+        const text = scrub(s.reply.text);
+        row.reply = { kind: s.reply.kind, text: text.slice(0, 4000), truncated: s.reply.truncated === true || text.length > 4000, citations: scrub(s.reply.citations) };
+      }
+      return row;
+    }) };
   }
   const busy = (chat) => starting.has(root(chat)) || [...children.values()].some((c) => c.chatKey === root(chat)) || Boolean(list(chat).active);
   function snapshot(chat) {
@@ -186,16 +193,17 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     return { models, extra };
   }
   async function config(body) {
-    pipelineFields(body, ['task', 'demo', 'demoScenario', 'delivery', 'sandbox', 'checks', 'setup', 'models', 'approvals', 'review', 'replans', 'parallelSteps', 'grounding', 'guidance']);
+    pipelineFields(body, ['task', 'demo', 'demoScenario', 'delivery', 'sandbox', 'checks', 'setup', 'models', 'approvals', 'review', 'replans', 'parallelSteps', 'grounding', 'guidance', 'conversation']);
     if (typeof body.task !== 'string' || !body.task.trim() || Buffer.byteLength(body.task) > 32768 || body.task.includes('\0')) throw fail(400, 'Task needs 1 to 32768 bytes');
     if (body.demo !== undefined && typeof body.demo !== 'boolean') throw fail(400, 'Invalid demo');
     if (body.delivery !== undefined && !['apply', 'patch'].includes(body.delivery)) throw fail(400, 'Invalid delivery');
     for (const [field, min, max] of [['replans', 0, 3], ['parallelSteps', 1, 4]]) if (body[field] !== undefined && (!Number.isInteger(body[field]) || body[field] < min || body[field] > max)) throw fail(400, `${field}: Expected integer from ${min} to ${max}`);
-    if (body.demoScenario !== undefined && (body.demo !== true || !['basic', 'replan', 'parallel', 'evidence'].includes(body.demoScenario))) throw fail(400, 'demoScenario: Expected basic, replan, parallel or evidence with demo:true');
+    if (body.demoScenario !== undefined && (body.demo !== true || !['basic', 'replan', 'parallel', 'evidence', 'answer'].includes(body.demoScenario))) throw fail(400, 'demoScenario: Expected basic, replan, parallel, evidence or answer with demo:true');
     if (body.grounding !== undefined && !['enforce', 'observe'].includes(body.grounding)) throw fail(400, 'grounding: Expected enforce or observe');
     if (body.demoScenario === 'evidence' && body.grounding === 'observe') throw fail(400, 'grounding: The evidence demo needs enforce');
     if (body.guidance !== undefined && typeof body.guidance !== 'boolean') throw fail(400, 'guidance: Expected boolean');
-    const settings = { ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
+    if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw fail(400, 'conversation: Expected boolean');
+    const settings = { ...(body.conversation === true ? { conversation: true } : {}), ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
     const sandbox = body.sandbox ?? { mode: body.demo ? 'host' : 'docker' };
     pipelineFields(sandbox, ['mode', 'image', 'trustHost']);
     if (!['docker', 'host'].includes(sandbox.mode) || sandbox.trustHost !== undefined && typeof sandbox.trustHost !== 'boolean') throw fail(400, 'Invalid sandbox');
@@ -289,7 +297,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       if (cfg.operator) writeJson(request, cfg.operator);
       writeJson(request + '.launch.json', { models: body.demo ? null : body.models, trustHost: cfg.trustHost, demo: Boolean(body.demo), workspaceRoot, task: body.task, createdAt: new Date().toISOString() });
       const args = [body.demo ? 'demo' : 'run', '--run-root', runRoot, '--run-id', runId, '--workspace-root', workspaceRoot, '--delivery', body.delivery ?? 'apply'];
-      if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); }
+      if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); if (cfg.settings.conversation) args.push('--conversation'); }
       if (!body.demo) { const taskFile = request + '.task.txt'; writeFileAtomicSync(taskFile, body.task); args.push('--source', project.workspace, '--task-file', taskFile, '--config', request); if (cfg.trustHost) args.push('--trust-host'); }
       onStarting(chat, body.task);
       launch(spec, args, runDir, chat, cfg.extra);

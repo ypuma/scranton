@@ -145,6 +145,7 @@ export function startPiRpc(options, { describeTool }) {
       }).then((ack) => reply(typeof ack?.ok === 'boolean' ? ack : { ok: false, delivery: 'unknown', error: 'Invalid broker ACK; delivery unknown. Do not resend automatically.' }), (error) => reply({ ok: false, delivery: 'unknown', error: `${error.message}; delivery unknown. Do not resend automatically.` }));
     } else if (r.type === 'message_end' && r.message?.role === 'assistant') {
       if (typeof r.message.content !== 'string' && (!Array.isArray(r.message.content) || r.message.content.some((b) => !b || typeof b !== 'object'))) return fail('protocol', 'Invalid assistant content');
+      options.onAssistantMessage?.(typeof r.message.content === 'string' ? r.message.content : r.message.content.filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n'), Array.isArray(r.message.content) && r.message.content.some((b) => b.type === 'toolCall'));
       last = r.message;
       usage.input += last.usage?.input ?? 0; usage.output += last.usage?.output ?? 0; usage.cost += last.usage?.cost?.total ?? 0;
     } else if (r.type === 'tool_execution_start') onTool?.({ tool: r.toolName, ...describeTool(r.toolName, r.args, options.cwd) });

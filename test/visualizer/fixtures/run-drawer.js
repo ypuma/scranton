@@ -16,8 +16,9 @@ export function fakeStorage(initial = {}) {
 }
 
 // stored: the workflow kept from before (a value to stringify, or { raw } text); reject: the 400 message of a POST.
-// server.control may be swapped between polls.
-export function harness({ reject = null, stored, control = CONTROL, models: storedModels } = {}) {
+// server.control may be swapped between polls. catalog: GET /api/models (null: it fails with a 500).
+// agents: the Agents drawer is available; agentsOpened counts its opens from the model picker.
+export function harness({ reject = null, stored, control = CONTROL, models: storedModels, catalog = CATALOG, agents = false } = {}) {
   const $ = installDom();
   const initial = {};
   if (stored !== undefined) initial[WORKFLOW_KEY] = typeof stored?.raw === 'string' ? stored.raw : JSON.stringify(stored);
@@ -31,10 +32,13 @@ export function harness({ reject = null, stored, control = CONTROL, models: stor
       posts.push({ url, body: JSON.parse(opts.body) });
       return reject ? { ok: false, status: 400, json: async () => ({ error: reject }) } : { ok: true, status: 202, json: async () => ({ pid: 9 }) };
     }
-    if (url === '/api/models') return { ok: true, status: 200, json: async () => CATALOG };
+    if (url === '/api/models') return catalog ? { ok: true, status: 200, json: async () => catalog } : { ok: false, status: 500, json: async () => null };
     return { ok: true, status: 200, json: async () => structuredClone(server.control) };
   };
-  const models = createModelPicker({ openAccounts() {}, canOpenAccounts: () => false });
+  const opened = { agents: 0 };
+  const models = createModelPicker({
+    openAccounts() {}, canOpenAccounts: () => false, openAgents: () => { opened.agents += 1; }, canOpenAgents: () => agents,
+  });
   const stub = { setHumanWhere() {}, setRunMode() {} };
   const panel = createControlPanel({ dashboard: stub, pipeline: stub, lanes: stub, models, getState: () => createState(), url: (s) => `/api/projects/core/chats/a/${s}` });
   const tick = () => new Promise((r) => setTimeout(r, 10));
@@ -66,5 +70,12 @@ export function harness({ reject = null, stored, control = CONTROL, models: stor
     await tick();
     $('f-request').value = 'Build it';
   };
-  return { $, panel, models, posts, storage, server, tick, row, ids, toggle, stage, shown, select, pick, open };
+  // the trusted host or Docker, as the human sets the radio buttons
+  const sandbox = async (host) => {
+    $('f-sandbox-host').checked = host;
+    $('f-sandbox-docker').checked = !host;
+    await $(host ? 'f-sandbox-host' : 'f-sandbox-docker').fire('change');
+    $('f-trusted').checked = host;
+  };
+  return { $, panel, models, posts, storage, server, tick, row, ids, toggle, stage, shown, select, pick, open, sandbox, opened };
 }

@@ -33,10 +33,11 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--run-id")
         command.add_argument("--delivery", choices=("patch", "apply"), default="patch")
         command.add_argument("--parent-guard", action="store_true")
+        command.add_argument("--conversation", action="store_true", default=None)
         if name == "demo":
             command.add_argument("--sandbox", choices=("host", "docker"), default="host")
             command.add_argument("--image")
-            command.add_argument("--scenario", choices=("basic", "replan", "parallel", "evidence"), default="basic")
+            command.add_argument("--scenario", choices=("basic", "replan", "parallel", "evidence", "answer"), default="basic")
             command.add_argument("--grounding", choices=("enforce", "observe"), default="enforce")
             command.add_argument("--guidance", choices=("true", "false"), default="false")
     sandbox = sub.add_parser("sandbox")
@@ -148,9 +149,11 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "demo":
             from scranton_pipeline.demo.fixture import run_demo
             result = run_demo(args.run_root, run_id=args.run_id, workspace_root=args.workspace_root,
-                              delivery=args.delivery, guarded=args.parent_guard, sandbox=args.sandbox, image=args.image, scenario=args.scenario, grounding=args.grounding, guidance=args.guidance == "true")
+                              delivery=args.delivery, guarded=args.parent_guard, sandbox=args.sandbox, image=args.image, scenario=args.scenario, grounding=args.grounding, guidance=args.guidance == "true", conversation=bool(args.conversation))
         elif command == "run":
             cfg = load_config(args.config)
+            if args.conversation:
+                cfg = cfg.model_copy(update={"conversation": True})
             if args.task_file:
                 with args.task_file.open("rb") as stream:
                     task = stream.read(32769).decode("utf-8")

@@ -8,13 +8,17 @@ import {
   parseRunList, parseRunDoc, mergeEvents, runChoices, pickRun, runLine, stepper, lastWorkNode, announcement,
   canCancel, canResume, createPoller, classifyDiff, diffFiles, actionLabel, eventText, buildDecision,
   reportLimitations, revealBidi, folderName, pipelineUrl, runUrl, launchText, TERMINAL, RUN_STATUS, DIFF_LINES_SHOWN, COMMENT_MAX,
-  RUN_ID_RE, laneRows, evidenceView, riskFlagText, activityEvents, eventLoud, nodeLabel,
+  RUN_ID_RE, laneRows, evidenceView, riskFlagText, activityEvents, eventLoud, nodeLabel, EVENTS_PAGE, CHAT_EVENTS_KEPT,
 } from './pipeline-model.js';
+import { pipelineChatEvent } from './chat-adapter-pipeline.js';
+import { detailError } from './scope.js';
 
 const $ = (id) => document.getElementById(id);
 const EVENTS_SHOWN = 300;
 const FRESH_MS = 15000;
 const MOVED = 'Another chat is on screen now. Nothing was sent.';
+// an earlier run opened in the Chat view is read page by page, up to this many pages
+const EARLIER_PAGES_MAX = 200;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -61,9 +65,10 @@ function bullets(cls, items, render) {
   return ul;
 }
 
-// confirm(opts): the shared confirm dialog. openRun(target, onStarted): the New run drawer for this chat's next run.
-// timers: setTimeout/clearTimeout (tests pass fakes).
-export function createPipelineView({ confirm, openRun, onChange, timers = globalThis } = {}) {
+// confirm(opts): the shared confirm dialog. openRun(target, onStarted, { task, problem }): the New run drawer for
+// this chat's next run. onUpdate({ history }): what chat() returns may have changed; history: it is a run as the
+// page found it, not news. timers: setTimeout/clearTimeout (tests pass fakes).
+export function createPipelineView({ confirm, openRun, onChange, onUpdate, timers = globalThis } = {}) {
   const e = {
     root: $('pipeline-view'), pill: $('pv-status'), meta: $('pv-meta'), runs: $('pv-runs'), picker: $('pv-run'),
     resume: $('pv-resume'), cancel: $('pv-cancel'), announce: $('pv-announce'), msg: $('pv-msg'), stepper: $('pv-stepper'),
@@ -100,6 +105,11 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
   const built = new Map();
   // where focus goes after a rebuild took the focused control away
   let restore = [];
+  // What the Chat view reads (chat()): earlier runs whose documents it opened, a counter that moves whenever any
+  // of it may have changed, and the run this page started, whose first events are news rather than history.
+  const details = new Map();
+  let version = 0;
+  let startedHere = null;
 
   const poller = createPoller({ load, timers });
   // a run this page just started: shown once the chat lists it, and no older run is shown meanwhile
@@ -144,7 +154,11 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       // a run started a moment ago may not be listed yet
       return { live: Date.now() - shownAt < FRESH_MS, status: null };
     }
-    if (run && run.runId !== id) resetRun();
+    if (run && run.runId !== id) {
+      // the run that was on screen is an earlier one now; the Chat view opens it without asking again
+      if (run.status && run.settled) details.set(run.runId, { runId: run.runId, status: run.status, events: run.chat, plan: run.plan, review: run.review });
+      resetRun();
+    }
     const after = run?.lastSeq ?? 0;
     const { status, doc } = await getDoc(`${runUrl(scope, id)}?after=${after}`);
     if (mine !== gen || currentId() !== id) return null;
@@ -168,6 +182,8 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       runId: id, status: parsed.status, live: parsed.live,
       launchError: fresh ? parsed.launchError : run?.launchError ?? null,
       events: mergeEvents(run?.events ?? [], parsed.events),
+      chat: mergeEvents(run?.chat ?? [], parsed.events.filter(pipelineChatEvent), CHAT_EVENTS_KEPT),
+      settled: run?.settled ?? id === startedHere,
       lastSeq: parsed.lastSeq ?? run?.lastSeq ?? 0,
       plan: parsed.plan ?? run?.plan ?? null, review: parsed.review ?? run?.review ?? null, stderrTail: parsed.stderrTail,
     };
@@ -185,7 +201,37 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     }
     if (parsed.status) fetchArtifacts(mine);
     render();
+    // a full page means the run has more events than one answer carries: the rest is asked for right away
+    if (parsed.events.length >= EVENTS_PAGE) poller.now();
+    else run.settled = true;
     return { live: run.live, status: nextStatus };
+  }
+
+  // An earlier run for the Chat view: its document, page by page. Kept until another chat is on screen.
+  // -> { ok: true } | { error }
+  async function loadRun(runId) {
+    if (details.has(runId)) return { ok: true };
+    const base = runUrl(scope, runId);
+    if (!base) return { error: detailError(404) };
+    const mine = gen;
+    let doc = null;
+    let events = [];
+    let after = 0;
+    for (let page = 0; page < EARLIER_PAGES_MAX; page += 1) {
+      const r = await getDoc(`${base}?after=${after}`);
+      if (mine !== gen) return { error: detailError(404) };
+      const parsed = parseRunDoc(r.doc);
+      if (!parsed) return { error: detailError(r.status) };
+      doc = parsed;
+      events = mergeEvents(events, parsed.events.filter(pipelineChatEvent), CHAT_EVENTS_KEPT);
+      const next = parsed.lastSeq ?? after;
+      if (parsed.events.length < EVENTS_PAGE || next <= after) break;
+      after = next;
+    }
+    details.set(runId, { runId, status: doc.status, events, plan: doc.plan, review: doc.review });
+    version += 1;
+    onUpdate?.({ history: true });
+    return { ok: true };
   }
 
   function resetRun() {
@@ -323,33 +369,68 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
   });
   e.start.addEventListener('click', () => startRun());
 
-  function startRun() {
+  // Where the next run of the chat on screen is posted, and what the page does once the server took it.
+  function nextRun() {
+    const to = pinned();
+    return {
+      target: {
+        title: 'New pipeline run',
+        workspace: workspace || null,
+        project: to.where.project,
+        startPipeline: (body) => postJson(pipelineUrl(to.where, 'runs'), body),
+      },
+      started(r) {
+        if (to.stale()) return;
+        shownAt = Date.now();
+        picked = null;
+        expected = RUN_ID_RE.test(r?.data?.runId ?? '') ? r.data.runId : null;
+        startedHere = expected;
+        resetRun();
+        say('');
+        wake();
+      },
+    };
+  }
+
+  // task: what the Chat composer holds, for the drawer's task field. problem: what the drawer has to fix first.
+  // onStarted: told as well once the run is taken.
+  function startRun({ task = '', problem = null, onStarted = null } = {}) {
     if (!scope) return;
     if (!canStart()) {
       say(list ? 'A run of this chat is still going. Cancel it or wait until it has finished, then start the next one.' : 'The runs of this chat are still loading.', 'error');
+      render();
       e.msg.focus();
       return;
     }
-    const to = pinned();
-    openRun?.({
-      title: 'New pipeline run',
-      workspace: workspace || null,
-      project: to.where.project,
-      startPipeline: (body) => postJson(pipelineUrl(to.where, 'runs'), body),
-    }, (r) => {
-      if (to.stale()) return;
-      shownAt = Date.now();
-      picked = null;
-      expected = RUN_ID_RE.test(r?.data?.runId ?? '') ? r.data.runId : null;
-      resetRun();
-      say('');
-      wake();
-    });
+    const next = nextRun();
+    openRun?.(next.target, (r) => {
+      next.started(r);
+      onStarted?.(r);
+    }, { task, problem });
+  }
+
+  // The last engine call ended without a new status.
+  const launchFailed = () => (run?.launchError && !run.live ? launchText(run.launchError, { started: Boolean(run.status), action }) : '');
+
+  // What the Chat view says in place of the message line it does not show: what went wrong, and a run on its way.
+  function note() {
+    const tone = e.msg.dataset.tone;
+    if (!e.msg.textContent || !(tone === 'error' || tone === 'critical' || expected)) return null;
+    return { text: e.msg.textContent, tone: tone === 'critical' ? 'error' : tone };
+  }
+
+  // The run that is still going, for the composer: its status, or true for one that was just started.
+  function active() {
+    if (expected) return true;
+    const id = list?.active ?? null;
+    if (id) return list.runs.find((r) => r.runId === id)?.status ?? true;
+    return canCancel(run?.status) ? run.status.status : null;
   }
 
   // ------------------------------------------------------------ rendering
   function render() {
     if (!scope) return;
+    version += 1;
     const s = run?.status ?? null;
     const line = runLine(s);
     e.pill.dataset.status = line.status;
@@ -385,7 +466,7 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     e.empty.hidden = !none;
     if (none) e.emptyTitle.textContent = 'No pipeline run in this chat yet.';
     // the last engine call ended without a new status: said in the run line, inverted, instead of waiting
-    const failed = run?.launchError && !run.live ? launchText(run.launchError, { started: Boolean(s), action }) : '';
+    const failed = launchFailed();
     const auto = listError && !list ? [listError, 'error'] : runError ? [runError, 'error']
       : failed ? [failed, 'critical'] : expected ? ['Starting the run...', 'busy']
         : !list || (currentId() && !run) ? ['Loading the pipeline run...', 'busy'] : null;
@@ -407,6 +488,7 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       announced = news;
     }
     renderSections(s);
+    onUpdate?.({ history: Boolean(run) && !run.settled });
   }
 
   // The run line figures. The sandbox fragment carries the engine's whole sentence as its title; when the fragment
@@ -540,7 +622,11 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     const head = el('div', 'hitl-head');
     const mark = el('span', 'hitl-mark', '■');
     mark.setAttribute('aria-hidden', 'true');
-    head.append(mark, el('strong', 'pv-gate-title', title));
+    // where the Chat view's "Review and decide" lands: the question, with its controls next in the tab order
+    const name = el('strong', 'pv-gate-title', title);
+    name.tabIndex = -1;
+    name.dataset.focus = 'gate-title';
+    head.append(mark, name);
     box.append(head);
     for (const d of detail) box.append(d);
     const row = el('div', 'hitl-actions');
@@ -863,6 +949,8 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
       listError = '';
       picked = null;
       expected = null;
+      startedHere = null;
+      details.clear();
       busy = '';
       announced = '';
       choicesKey = '';
@@ -887,5 +975,31 @@ export function createPipelineView({ confirm, openRun, onChange, timers = global
     newRun: startRun,
     canStart,
     polling: () => poller.running(),
+    // What the Chat view shows of this chat (chat-adapter-pipeline.js) and what its composer may do, all of it
+    // from the one poller above. current: the run shown in full. active: see active().
+    chat: () => ({
+      version, list, details: [...details.values()], current: run?.runId ?? currentId(),
+      run: run && { runId: run.runId, status: run.status, events: run.chat, plan: run.plan, review: run.review },
+      loaded: Boolean(list), active: active(), note: note(),
+    }),
+    loadRun,
+    // the next run for the Chat composer, or null while one cannot start
+    nextRun: () => (scope && canStart() && !expected ? nextRun() : null),
+    // The conversation is the chat's live run: one picked in the selector gives way to it.
+    live() {
+      if (!scope || !picked) return;
+      picked = null;
+      resetRun();
+      say('');
+      render();
+      wake();
+    },
+    // "Review and decide": the gate that waits, with its controls next in the tab order.
+    review() {
+      const title = find(e.sections, (c) => c.dataset.focus === 'gate-title');
+      const to = title ?? find(e.sections, (c) => c.dataset.heading === 'true') ?? e.msg;
+      to.focus();
+      to.scrollIntoView?.({ block: 'center' });
+    },
   };
 }

@@ -70,7 +70,7 @@ test('initial and follow-up runs pass workflow and five-role model choices to ch
     const workflow = { gates: [['oscar', 'hank'], ['angela']] };
     for (const gates of [[], [['dwight']], [['hank'], ['hank']]]) assert.equal((await request(srv.url, route, 'POST', { request: 'bad', workflow: { gates }, models })).status, 400);
     assert.equal(launch, undefined);
-    const response = await request(srv.url, route, 'POST', { request: 'pass gates', workflow, models });
+    const response = await request(srv.url, route, 'POST', { request: 'pass gates', trustedHost: true, workflow, models });
     assert.equal(response.status, 202, JSON.stringify(response.body));
     assert.equal(launch.args[launch.args.indexOf('--gates') + 1], 'oscar+hank,angela');
     for (const role of Object.keys(models)) {

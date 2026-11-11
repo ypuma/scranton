@@ -31,7 +31,7 @@ from scranton_pipeline.nodes.workflow import cleanup_sandbox, json_write
 from scranton_pipeline.observability import EventLog, UsageLedger, read_status, write_status
 from scranton_pipeline.procedure import digest as procedure_digest
 from scranton_pipeline.procedure import load as load_procedure
-from scranton_pipeline.report import finalize_out_of_band, make_status, now
+from scranton_pipeline.report import complete_reply, finalize_out_of_band, make_status, now
 from scranton_pipeline.state import PipelineState
 from scranton_pipeline.tools.process import StopSignal
 from scranton_pipeline.tools.secrets import Redactor
@@ -250,11 +250,26 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
         status = read_status(run_dir)
         if status is None:
             raise invalid("missing_status", "Run status missing")
+        receipt = run_dir / "delivery" / "final-status.json"
+        if cfg.conversation and receipt.exists():
+            if gate:
+                raise invalid("not_waiting", "Run is already finalizing")
+            with dependencies(run_dir, cfg, trust_host=trust_host or metadata.get("demo", False), models=False) as deps:
+                status = complete_reply(RunStatus.model_validate_json(receipt.read_text(encoding="utf-8")), deps)
+                write_status(run_dir, status)
+                cleanup_provider(deps)
+            return status
         if status.status in TERMINAL:
             if gate:
                 raise invalid("not_waiting", "Run is already terminal")
             with dependencies(run_dir, cfg, trust_host=trust_host or metadata.get("demo", False), models=False) as deps:
                 cleanup_provider(deps)
+                if cfg.conversation:
+                    if status.reply is None:
+                        snapshot = build_graph(deps).get_state({"configurable": {"thread_id": run_dir.name}})
+                        status = make_status(snapshot.values, deps, status=status.status, node="finalize")
+                    status = complete_reply(status, deps)
+                    write_status(run_dir, status)
             return status
         value: Any = None
         if not cancelling:

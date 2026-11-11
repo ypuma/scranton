@@ -29,6 +29,19 @@ by: "core"
 ---
 
 ---
+file: "visualizer/public/js/nav.js"
+symbol: "createNav"
+ordinal: 0
+kind: "how"
+text: "Owns the New project / rename / remove dialogs and sidebar. New project's Browse control calls the existing Tauri dialog through __TAURI__.core.invoke('plugin:dialog|open') with directory:true and multiple:false; normal browsers retain manual absolute-path entry. A per-picker ticket and the submit-disabled guard prevent concurrent submits/pickers, and closing/reopening the form drops late picker answers. Results longer than FOLDER_MAX (1024) are refused rather than truncated; selection only fills the form, while buildProject and POST /api/projects perform creation."
+see_also: "src-tauri/capabilities/dashboard-folder-picker.json; test/visualizer/project-folder.test.js; docs/CONTROL.md New project folder picker"
+hash: "span:10310b46acd7e40b"
+written: "2026-11-10"
+commit: "2118ea5"
+by: "core"
+---
+
+---
 file: "visualizer/public/js/tabs.js"
 kind: "where"
 text: "The activity panel's tabs (Events / Messages / Mailboxes) live in createTabs, wired in main.js. It implements an ARIA tablist with roving tabindex and Arrow/Home/End keys. It merged the old separate Event log, Messages and Mailboxes panels in the 2026-11-08 UI rework. Pre-rework copy of the whole UI: .scratch/ui-rework/baseline/public/."

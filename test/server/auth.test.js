@@ -124,10 +124,10 @@ test('route login/input/cancel/logout lifecycle returns only public metadata and
 
 test('model overrides validate catalog and thinking then reach config via child env (regression)', async (t) => {
   const f = await setup(t);
-  for (const models of [null, [], { dev: {} }, { michael: null }, { michael: { provider: 'evil', model: 'fake-catalog' } }, { michael: { provider: 'openai', model: 'absent' } }, { michael: { provider: 'openai', model: 'fake-catalog', thinking: 'unlimited' } }, { michael: { provider: 'openai', model: 'fake-catalog', extra: true } }]) assert.equal((await request(f.srv, '/api/runs', { request: 'test', models })).status, 400);
+  for (const models of [null, [], { dev: {} }, { michael: null }, { michael: { provider: 'evil', model: 'fake-catalog' } }, { michael: { provider: 'openai', model: 'absent' } }, { michael: { provider: 'openai', model: 'fake-catalog', thinking: 'unlimited' } }, { michael: { provider: 'openai', model: 'fake-catalog', extra: true } }]) assert.equal((await request(f.srv, '/api/runs', { request: 'test', trustedHost: true, models })).status, 400);
   assert.equal(f.calls.length, 0);
   const models = Object.fromEntries(['michael', 'dwight', 'angela'].map((role) => [role, { provider: 'openai', model: 'fake-catalog', thinking: 'high' }]));
-  assert.equal((await request(f.srv, '/api/runs', { request: 'test', models })).status, 202);
+  assert.equal((await request(f.srv, '/api/runs', { request: 'test', trustedHost: true, models })).status, 202);
   const [exe, args, options] = f.calls[0];
   assert.equal(exe, process.execPath); assert.ok(!args.includes('fake-catalog'));
   const config = loadConfig({ cwd: f.workspace, env: options.env });
@@ -190,7 +190,7 @@ test('Docker pi-default refusal is actionable for initial and follow-up routes b
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   } });
   const f = await setup(t);
-  const expected = 'Docker requires an explicit provider and model for michael, dwight, angela; choose a model for each role in Options → Models (pi default cannot be used in the Docker sandbox), or set SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL';
+  const expected = 'Docker requires an explicit provider and model for michael, dwight, angela; set the agent default for each role in Agents (pi default cannot be used in the Docker sandbox), or set SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL';
   for (const route of ['/api/runs', '/api/projects/default/chats/default/runs']) {
     const refused = await request(f.srv, route, { request: 'fake goal', sandbox: 'docker' });
     assert.equal(refused.status, 400); assert.deepEqual(refused.value, { error: expected });
@@ -200,7 +200,8 @@ test('Docker pi-default refusal is actionable for initial and follow-up routes b
   }
   const choice = { provider: 'openai', model: 'fake-catalog' };
   const partial = await request(f.srv, '/api/runs', { request: 'fake goal', sandbox: 'docker', models: { dwight: choice, angela: choice } });
-  assert.equal(partial.status, 400); assert.match(partial.value.error, /for michael;/);
+  assert.equal(partial.status, 400); assert.match(partial.value.error, /for michael, dwight, angela;/);
+  for (const role of ['dwight', 'angela']) assert.equal((await request(f.srv, `/api/agents/${role}`, { model: choice }, {}, 'PATCH')).status, 200);
   const accepted = await request(f.srv, '/api/projects/default/chats/default/runs', { request: 'fake follow-up', sandbox: 'docker', noPlan: true, models: { dwight: choice, angela: choice } });
   assert.equal(accepted.status, 202); assert.deepEqual(accepted.value, { ok: true, pid: 123 });
   f.child.emit('close', 0);

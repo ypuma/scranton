@@ -108,7 +108,7 @@ export async function runDoctor({ config, env = process.env, stdout = process.st
   }
   const missing = (config.workflowWarning ? [] : activeRoles(config)).filter((id) => !config.agents[id]?.provider || !config.agents[id]?.model);
   if (config.execution?.sandbox?.mode === 'docker' && missing.length) {
-    report('warn', `Docker requires an explicit provider and model for ${missing.join(', ')}; choose a model for each role in Options → Models (pi default cannot be used in the Docker sandbox), or set SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL`);
+    report('warn', `Docker requires an explicit provider and model for ${missing.join(', ')}; set the agent default for each role in Agents (pi default cannot be used in the Docker sandbox), or set SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL`);
   } else if (!AGENT_IDS.some((id) => config.agents[id].model)) {
     report('warn', 'No model configured: pi will use its own default and credentials were not verified. Set SCRANTON_<AGENT>_MODEL to check them.');
   }

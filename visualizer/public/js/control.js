@@ -377,7 +377,8 @@ function intIn(raw, min, max) {
 //         models: { role: { provider, model } } already checked against the catalog (accounts.js buildModels),
 //         workflow: { stages } (none: an older form, the engine default stays in charge).
 // Host execution is only ever sent with the explicit confirmation; a demo sends no sandbox fields because the
-// fake pi runs on the host and must not look sandboxed. -> { body } or { error, field }
+// fake pi runs on the host and must not look sandboxed. Every run this page starts is a conversation run
+// (.enma/chat-view-contract.md section 1), a demo too. -> { body } or { error, field }
 export function buildRunRequest(form, control = DISABLED) {
   const request = raw(form.request).trim();
   const demo = Boolean(form.demo);
@@ -445,6 +446,7 @@ export function buildRunRequest(form, control = DISABLED) {
     if (delay.bad) return { error: 'The step delay must be a whole number of milliseconds from 0 to 5000.', field: 'delayMs' };
     if (!delay.empty) body.demo.delayMs = delay.value;
   }
+  body.conversation = true;
   return { body };
 }
 

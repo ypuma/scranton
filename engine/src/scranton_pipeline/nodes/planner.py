@@ -1,14 +1,15 @@
 """Planner turn and semantic validation."""
 import hashlib
 import json
-from typing import Any
+from typing import Any, cast
 
 from scranton_pipeline.agents.prompts import build_planner_prompt
+from scranton_pipeline.conversation import agent_message
 from scranton_pipeline.errors import EngineError, FailureClass
-from scranton_pipeline.models import Plan, PlannerTurn
+from scranton_pipeline.models import ConversationPlannerTurn, Plan, PlannerTurn
 from scranton_pipeline.nodes.common import Dependencies, planning_key
 from scranton_pipeline.nodes.grounding import evaluate, repair_evidence
-from scranton_pipeline.state import PipelineState, counter
+from scranton_pipeline.state import PipelineState, counter, initial_planning
 from scranton_pipeline.tools.fs import is_dependency_manifest, write_bytes_atomic
 
 
@@ -58,7 +59,7 @@ def plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         prompt = build_planner_prompt(state, deps.cfg, graph=deps.procedure)
         system, user = prompt
         deps.procedure_event("planner", state)
-        turn = deps.gateway.complete("planner", system=system, user=user, schema=PlannerTurn, guidance_bytes=prompt.guidance_bytes).parsed
+        turn = cast(PlannerTurn | ConversationPlannerTurn, deps.gateway.complete("planner", system=system, user=user, schema=ConversationPlannerTurn if deps.cfg.conversation and initial_planning(state) else PlannerTurn, guidance_bytes=prompt.guidance_bytes).parsed)
         evaluation = evaluate(state, deps, "planner", prompt, turn.model_dump(mode="json"))
         if evaluation.reject(deps):
             return {**invalid(state, deps, "plan", planning_key(state, "repairs"), str(evaluation.violations) + " Valid IDs: " + str(prompt.shown)),
@@ -66,7 +67,14 @@ def plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         if turn.kind == "need_context":
             if counter(state, planning_key(state, "context")) >= deps.cfg.limits.max_plan_context_rounds:
                 raise ValueError("No planner context rounds remain")
+            agent_message(state, deps, "planner", turn.model_dump(mode="json"))
             return {"plan_requests": [r.model_dump(mode="json") for r in turn.context_requests], "feedback": None}
+        if isinstance(turn, ConversationPlannerTurn) and turn.kind == "answer":
+            if not initial_planning(state):
+                raise ValueError("Direct answers require initial planning before any step")
+            assert turn.answer is not None
+            agent_message(state, deps, "planner", turn.model_dump(mode="json"))
+            return {"answer": turn.answer.model_dump(mode="json"), "plan_requests": [], "feedback": None}
         assert turn.plan is not None
         validate_plan(turn.plan, deps)
         raw = turn.plan.model_dump(mode="json")
@@ -101,6 +109,7 @@ def plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
             flags.append("ci_or_build_config")
         if any(c["required"] and c["status"] != "passed" for c in state.get("baseline", [])):
             flags.append("baseline_red")
+        agent_message(state, deps, "planner", turn.model_dump(mode="json"))
         return {"plan": raw, "plan_revisions": revisions, "plan_digest": hashlib.sha256(encoded).hexdigest(), "risk_flags": flags,
                 "plan_requests": [], "feedback": None}
     except ValueError as exc:

@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PACKAGE_ROOT, validateGateTools } from './config.js';
 import { isFile } from './util.js';
+import { fileURLToPath } from 'node:url';
+
+export function providerExtensionArgs(provider) {
+  return provider === 'google-antigravity' ? ['--extension', fileURLToPath(new URL('./antigravity/extension.js', import.meta.url))] : [];
+}
 
 export const PI_PACKAGE = '@earendil-works/pi-coding-agent';
 
@@ -108,6 +113,7 @@ export function buildPiArgs({ agent, pi, inboxFile, systemPromptFile, sessionDir
     if (instanceId) args.push('--name', instanceId);
     if (extensionFile) args.push('--extension', extensionFile);
   }
+  args.push(...providerExtensionArgs(agent.provider));
   if (agent.kind === 'gate') args.push('--tools', agent.tools.join(','));
   if (transport !== 'rpc') args.push(`@${inboxFile}`, AGENT_MESSAGE);
   return args;
@@ -129,6 +135,10 @@ export function piChildEnv(env) {
 
 /** Spawn pi without a shell where possible. stdin is closed so pi never waits on piped input. */
 export function spawnPi(spec, args, { cwd, env, stdin = 'ignore' }) {
+  if (spec.source === 'sandbox' && spec.providerExtension) {
+    const hostExtension = providerExtensionArgs('google-antigravity')[1];
+    args = args.map((arg) => arg === hostExtension ? spec.providerExtension : arg);
+  }
   const options = { cwd, env: piChildEnv(env ?? process.env), stdio: [stdin, 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' };
   if (spec.shell) {
     return spawn([...spec.argv, ...args].map(quoteForCmd).join(' '), { ...options, shell: true });

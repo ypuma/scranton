@@ -51,7 +51,7 @@ for (const registryMode of [false, true]) test(`configured models are exposed an
   for (const route of ['/api/control', scoped + '/control']) assert.deepEqual((await request(server, route)).value.defaults.models, expected);
   const choice = { provider: 'openai', model: 'request-model' };
   assert.equal((await request(server, scoped + '/runs', { request: 'fake', sandbox: 'docker', models: { dwight: choice } })).status, 202);
-  assert.equal(calls.length, 1); assert.equal(calls[0][2].env.SCRANTON_DWIGHT_MODEL, 'request-model');
+  assert.equal(calls.length, 1); assert.equal(calls[0][2].env.SCRANTON_DWIGHT_MODEL, 'configured-model');
   assert.equal(calls[0][2].env.SCRANTON_MICHAEL_MODEL, 'configured-model');
   assert.deepEqual((await request(server, scoped + '/control')).value.defaults.models, expected, 'request overrides are not defaults');
 });

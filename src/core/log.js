@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from 'node:util';
 import { formatDuration } from './util.js';
 
 const CODES = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, blue: 34, magenta: 35, cyan: 36 };
@@ -21,7 +22,7 @@ function localClock(ts) {
 }
 
 /** Live, readable log of a run. Returns an event listener `(event) => void`. */
-export function createTerminalLog({ stream = process.stdout, env = process.env, verbose = true } = {}) {
+export function createTerminalLog({ stream = process.stdout, env = process.env, verbose = true, ascii = false } = {}) {
   const c = styler(stream, env);
   let customNames = {};
   const roleLabel = (id) => customNames[id] ?? label(id);
@@ -74,6 +75,12 @@ export function createTerminalLog({ stream = process.stdout, env = process.env, 
         break;
       case 'milestone_finished':
         print(e, c.bold(`${e.milestoneId} ${e.status}`));
+        break;
+      case 'agent_message':
+        print(e, `${who(e.agent)} ${stripVTControlCharacters(e.text).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/[\x00-\x1f\x7f-\x9f\ufe0e\ufe0f\u2028\u2029]+/g, ' ').slice(0, 140)}`);
+        break;
+      case 'run_reply':
+        stream.write(`\n${ascii ? '--' : '──'} Reply (${e.kind}) ${ascii ? '--' : '──'}\n${stripVTControlCharacters(e.text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufe0e\ufe0f]/g, '')}\n\n`);
         break;
       case 'run_finished':
         print(e, c.bold(e.status === 'success' ? c.green(`Run finished: ${e.status}`) : c.yellow(`Run finished: ${e.status}`)) + ` - ${e.summary}`);

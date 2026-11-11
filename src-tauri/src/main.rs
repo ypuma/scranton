@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod platform;
+mod process_group;
+
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpStream},
@@ -40,6 +43,7 @@ fn stop_tree(child: &mut Child) {
             let _ = killer.wait();
         }
     }
+    process_group::kill_owned_group(child);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -92,13 +96,17 @@ fn startup(app: &tauri::AppHandle) -> Result<(tauri::Url, Arc<Mutex<Vec<u8>>>), 
     let app_dir = if cfg!(debug_assertions) {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("staged/app")
     } else { resources.join("app") };
-    let node = if cfg!(debug_assertions) {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries/node-x86_64-pc-windows-msvc.exe")
-    } else {
-        std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("node.exe")
-    };
+    let node = platform::node_path(
+        platform::TARGET, cfg!(debug_assertions), std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        &std::env::current_exe().map_err(|e| e.to_string())?,
+    )?;
     let mut command = Command::new(&node);
+    #[cfg(target_os = "macos")]
+    {
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        let home = app.path().home_dir().ok();
+        command.env("PATH", platform::sidecar_path(platform::TARGET, &inherited, home.as_deref().and_then(|path| path.to_str())));
+    }
     // Node loads this before any module, so run children inherit the same keys.
     command.arg(format!("--env-file-if-exists={}", data.join(".env").display()))
         .arg(app_dir.join("bin/scranton.js"))
@@ -110,6 +118,7 @@ fn startup(app: &tauri::AppHandle) -> Result<(tauri::Url, Arc<Mutex<Vec<u8>>>), 
     let state = app.state::<Arc<Sidecar>>();
     let mut slot = state.child.lock().unwrap();
     if state.stopping.load(Ordering::SeqCst) { return Err("Startup cancelled".into()); }
+    process_group::isolate(&mut command);
     let mut child = hidden(&mut command).spawn().map_err(|e| format!("Cannot start bundled Node: {e}"))?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -178,6 +187,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(Sidecar::default()))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_menu(Menu::default(app.handle())?)?;
             let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;

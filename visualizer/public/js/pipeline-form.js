@@ -104,11 +104,13 @@ export function createPipelineForm({ timers = globalThis } = {}) {
     e.image.placeholder = info.dockerImage ?? '';
     e.imageHint.textContent = info.dockerImage ? `optional, default ${info.dockerImage}` : 'optional';
     renderSandbox();
+    let found = null;
     if (engine === 'pipeline') {
       sync();
-      detect();
+      found = detect();
     }
     schedulePoll();
+    await found;
   }
 
   // ------------------------------------------------------------ Docker state and the image build
@@ -484,8 +486,11 @@ export function createPipelineForm({ timers = globalThis } = {}) {
   }
 
   return {
-    // choice: a new chat, so Team or Pipeline may be picked; fixed: a pipeline chat's next run
-    open({ choice: canChoose = false, fixed: isFixed = false, project: p = null } = {}) {
+    // choice: a new chat, so Team or Pipeline may be picked; fixed: a pipeline chat's next run;
+    // task: what the Chat composer holds, for the task field.
+    // -> a promise that settles once the engine info and the project's checks are in (the Chat composer starts a
+    //    run with the form's choices without showing the drawer, and waits for it)
+    open({ choice: canChoose = false, fixed: isFixed = false, project: p = null, task = '' } = {}) {
       choice = canChoose && !isFixed;
       fixed = isFixed;
       if (p !== project) {
@@ -506,23 +511,24 @@ export function createPipelineForm({ timers = globalThis } = {}) {
       e.engineRow.hidden = !choice;
       for (const f of e.fields.querySelectorAll('[aria-invalid]')) f.removeAttribute('aria-invalid');
       setEngine(fixed ? 'pipeline' : 'team');
+      if (fixed && task.trim()) e.task.value = task;
       updateCount();
-      if (choice || fixed) {
-        renderAvailability();
-        loadInfo();
-      }
+      if (!choice && !fixed) return Promise.resolve();
+      renderAvailability();
+      return loadInfo();
     },
     active: () => engine === 'pipeline',
     focus() {
       e.task.focus();
     },
-    build() {
+    // over: { task, demo } from the Chat composer, which has its own task field and never starts a demo
+    build(over = {}) {
       for (const r of [...setupRows, ...rows]) clearRowError(r);
       if (fixed && info && !info.available) return { error: `The Pipeline engine is not available: ${info.reason}` };
       sent = { checks: rows.filter(filled), setup: setupRows.filter(filled) };
       clearRefused();
       return buildRunBody({
-        task: e.task.value, demo: e.demo.checked, demoScenario: e.scenario.value, delivery: e.delivery.value,
+        task: over.task ?? e.task.value, demo: over.demo ?? e.demo.checked, demoScenario: e.scenario.value, delivery: e.delivery.value,
         sandbox: e.host.checked ? 'host' : e.docker.checked ? 'docker' : '', image: e.image.value, trustHost: e.trust.checked,
         replans: e.replans.value, parallelSteps: e.parallel.value, grounding: e.grounding.value, guidance: e.guidance.checked,
         setup: setupRows.map(rowValue),

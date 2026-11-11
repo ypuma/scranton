@@ -16,3 +16,18 @@ written: "2026-11-10"
 commit: "16fd06b"
 by: "core"
 ---
+
+---
+file: "scripts/prepare-desktop.mjs"
+symbol: "prepareDesktop"
+ordinal: 0
+kind: "trap"
+text: "Native Desktop-Vorbereitung ist ausdrücklich Windows-x64-only und erzeugt einen fest benannten Windows-Node-Sidecar; Tauri beforeDevCommand/beforeBuildCommand ruft diese Funktion über das Skript auf. Crossplatform-Nodekern bedeutet deshalb noch keinen Mac-Desktopbuild."
+evidence: "`if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Desktop packaging currently supports Windows x64 only.');` und `const node = path.join(tauri, 'binaries', 'node-x86_64-pc-windows-msvc.exe');`"
+see_also: "src-tauri/tauri.conf.json; src-tauri/src/main.rs; engine/runtime-lock.json"
+hash: "span:4adb983fbc6186d6"
+quote: "quote:7ab54d9b9dd8cc02"
+written: "2026-11-11"
+commit: "2118ea5"
+by: "core"
+---

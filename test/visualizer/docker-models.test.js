@@ -1,6 +1,6 @@
-// A Docker run needs an explicit model for every role it starts (src/core/sandbox.js validateDockerModels): the
-// drawer and the follow-up composer stop such a run before posting it, and the server's 400 points at the
-// model selects it names.
+// A Docker run uses the agent default of every role it starts and needs one for each (src/core/sandbox.js
+// validateDockerModels): the drawer and the follow-up composer stop a run with a gap before posting it and point at
+// Agents; a model picked in the drawer is for the trusted host only. The server's 400 points at the selects it names.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createControlPanel } from '../../visualizer/public/js/control-panel.js';
@@ -8,7 +8,8 @@ import { createModelPicker } from '../../visualizer/public/js/accounts-panel.js'
 import { createThread } from '../../visualizer/public/js/thread.js';
 import { createState } from '../../visualizer/public/js/state.js';
 import {
-  DOCKER_MODELS_NOTE, PI_DEFAULT_NOTE, parseModels, modelKey, buildModels, dockerGaps, dockerNote, piDefaultLabel, runRoles, planNote,
+  DOCKER_MODELS_NOTE, DOCKER_DEFAULTS_NOTE, PI_DEFAULT_NOTE, parseModels, modelKey, buildModels, dockerGaps, dockerNote, piDefaultLabel, runRoles,
+  planNote, usesAgentDefaults,
 } from '../../visualizer/public/js/accounts.js';
 import { errorField, modelErrorRoles, parseControl, WORKFLOW_KEY } from '../../visualizer/public/js/control.js';
 import { installDom, FakeEl } from './fixtures/fake-dom.js';
@@ -27,32 +28,41 @@ const CONTROL = {
 const SOL = { provider: 'openai', model: 'gpt-6.1-sol' };
 // a current server: Michael's model comes from Scranton's configuration, the others have none
 const CONFIGURED = { ...CONTROL, defaults: { models: { michael: SOL, dwight: null, angela: null } } };
+const EVERY = { ...CONTROL, defaults: { models: { michael: SOL, dwight: SOL, angela: SOL } } };
 
-test('dockerGaps: Docker needs every role it starts; the trusted host and a demo need none', () => {
-  assert.deepEqual(dockerGaps(NONE, {}), ['michael', 'dwight', 'angela']);
-  assert.deepEqual(dockerGaps({ ...ALL, dwight: '' }, {}), ['dwight']);
-  assert.deepEqual(dockerGaps(ALL, {}), []);
-  assert.deepEqual(dockerGaps(NONE, { host: true }), []);
-  assert.deepEqual(dockerGaps(NONE, { demo: true }), []);
+test('dockerGaps: Docker needs an agent default for every role it starts; the trusted host and a demo need none', () => {
+  const every = { michael: SOL, dwight: SOL, angela: SOL };
+  assert.deepEqual(dockerGaps({ configured: every }), []);
+  assert.deepEqual(dockerGaps({ configured: { ...every, dwight: null } }), ['dwight']);
+  assert.deepEqual(dockerGaps({}), ['michael', 'dwight', 'angela'], 'an older server reports no defaults');
+  assert.deepEqual(dockerGaps({ host: true }), []);
+  assert.deepEqual(dockerGaps({ demo: true }), []);
   assert.deepEqual(runRoles({ noPlan: true }), ['dwight', 'angela']);
-  assert.deepEqual(dockerGaps(NONE, { noPlan: true }), ['dwight', 'angela'], 'without a plan Michael does not run');
-  assert.deepEqual(dockerGaps({ ...NONE, dwight: GPT, angela: GPT }, { noPlan: true }), []);
+  assert.deepEqual(dockerGaps({ noPlan: true }), ['dwight', 'angela'], 'without a plan Michael does not run');
+  assert.deepEqual(dockerGaps({ noPlan: true, configured: { ...every, michael: null } }), []);
+  assert.equal(usesAgentDefaults({}), true);
+  assert.equal(usesAgentDefaults({ host: true }), false);
+  assert.equal(usesAgentDefaults({ demo: true }), false);
 });
 
-test('dockerGaps: a role Scranton\'s configuration gives a model is no gap; an older server keeps every pi default a gap', () => {
+test('dockerGaps: a role with an agent default is no gap; the labels and notes say what Docker uses and point to Agents', () => {
   const configured = { michael: SOL, dwight: null, angela: null };
-  assert.deepEqual(dockerGaps(NONE, { configured }), ['dwight', 'angela']);
-  assert.deepEqual(dockerGaps({ ...NONE, dwight: GPT }, { configured }), ['angela']);
-  assert.deepEqual(dockerGaps(NONE, { configured: { michael: SOL, dwight: SOL, angela: SOL } }), []);
-  assert.deepEqual(dockerGaps(NONE, { configured: null }), ['michael', 'dwight', 'angela'], 'an older server');
-  assert.deepEqual(dockerGaps(NONE, { configured, host: true }), []);
+  assert.deepEqual(dockerGaps({ configured }), ['dwight', 'angela']);
+  assert.deepEqual(dockerGaps({ configured: null }), ['michael', 'dwight', 'angela'], 'an older server');
+  assert.deepEqual(dockerGaps({ configured, host: true }), []);
   assert.equal(piDefaultLabel(configured, 'michael'), 'Agent default (openai/gpt-6.1-sol)');
+  assert.equal(piDefaultLabel(configured, 'michael', true), 'Agent default (openai/gpt-6.1-sol)');
   assert.equal(piDefaultLabel(configured, 'dwight'), 'pi default');
+  assert.equal(piDefaultLabel(configured, 'dwight', true), 'No agent default', 'Docker never offers pi default');
   assert.equal(piDefaultLabel(null, 'michael'), 'pi default');
+  assert.equal(piDefaultLabel(null, 'michael', true), 'Agent default', 'an older server: unknown, not none');
   assert.equal(dockerNote(['dwight', 'angela'], null), DOCKER_MODELS_NOTE, 'an older server keeps its note');
+  assert.match(DOCKER_MODELS_NOTE, /in Agents\.$/);
   assert.equal(dockerNote([], configured), '');
-  assert.match(dockerNote(['dwight', 'angela'], configured), /^The Docker sandbox needs a model for Dwight and Angela\. Scranton's configuration sets none/);
-  assert.doesNotMatch(dockerNote(['angela'], configured), /ChatGPT|Michael/);
+  assert.equal(dockerNote(['dwight', 'angela'], configured),
+    'The Docker sandbox runs every agent on its agent default, and Dwight and Angela have none. Set one for each in Agents.');
+  assert.equal(dockerNote(['angela'], configured), 'The Docker sandbox runs every agent on its agent default, and Angela has none. Set one in Agents.');
+  assert.doesNotMatch(dockerNote(['angela'], configured), /ChatGPT|Michael|Pick/);
 });
 
 test('parseControl: defaults.models keeps only string provider/model pairs; an older server reports none', () => {
@@ -68,32 +78,32 @@ test('parseControl: defaults.models keeps only string provider/model pairs; an o
   assert.equal(parseControl(null).models, null);
 });
 
-test('buildModels with a run: a configured role passes in Docker, an unconfigured one is still blocked', () => {
+test('buildModels in Docker: a picked or saved model is never sent; the agent defaults decide', () => {
   const cat = parseModels(CATALOG);
-  const configured = { michael: SOL, dwight: null, angela: null };
-  const r = buildModels(NONE, cat, { demo: false, host: false, noPlan: false, configured });
-  assert.equal(r.field, 'models.dwight');
+  const docker = { demo: false, host: false, noPlan: false, configured: { michael: SOL, dwight: SOL, angela: SOL } };
+  assert.deepEqual(buildModels(ALL, cat, docker), { models: {} }, 'the agent defaults win over the picks');
+  assert.deepEqual(buildModels({ angela: modelKey('openai', 'gone') }, cat, docker), { models: {} }, 'a stale pick is no error in Docker');
+  assert.deepEqual(buildModels({ angela: 'garbage' }, null, docker), { models: {} }, 'nor is a model list that failed to load');
+  const r = buildModels(ALL, cat, { ...docker, configured: { michael: SOL, dwight: null, angela: null } });
+  assert.equal(r.field, 'models.dwight', 'a pick does not fill a missing agent default');
   assert.deepEqual(r.fields, ['models.dwight', 'models.angela']);
+  assert.match(r.error, /Dwight and Angela have none\. Set one for each in Agents\./);
   assert.doesNotMatch(r.error, /Michael/);
-  assert.deepEqual(buildModels({ ...NONE, dwight: GPT, angela: GPT }, cat, { demo: false, host: false, noPlan: false, configured }).models,
-    { dwight: { provider: 'openai', model: 'gpt-a' }, angela: { provider: 'openai', model: 'gpt-a' } }, 'Michael stays on his agent default');
+  const old = buildModels(NONE, cat, { demo: false, host: false });
+  assert.deepEqual([old.field, old.fields, old.error], ['models.michael', ['models.michael', 'models.dwight', 'models.angela'], DOCKER_MODELS_NOTE]);
+  assert.deepEqual(buildModels(ALL, cat, { ...docker, configured: { michael: null, dwight: SOL, angela: SOL }, noPlan: true }), { models: {} },
+    'without a plan Michael needs no default');
 });
 
-test('buildModels with a run: Docker on pi default is blocked at the first such select', () => {
+test('buildModels on the trusted host: the picks are checked and sent as before; a demo sends none', () => {
   const cat = parseModels(CATALOG);
-  const docker = { demo: false, host: false, noPlan: false };
-  const r = buildModels(NONE, cat, docker);
-  assert.equal(r.field, 'models.michael');
-  assert.deepEqual(r.fields, ['models.michael', 'models.dwight', 'models.angela']);
-  assert.match(r.error, /Docker sandbox needs a model for Michael, Dwight and Angela\. Pick one for each \(pi default only works on the trusted host\)/);
-  assert.equal(buildModels({ ...ALL, angela: '' }, cat, docker).error.includes('for Angela. Pick one ('), true);
-  assert.deepEqual(buildModels(ALL, cat, docker).models, { michael: { provider: 'openai', model: 'gpt-a' }, dwight: { provider: 'openai', model: 'gpt-a' }, angela: { provider: 'openai', model: 'gpt-a' } });
-  assert.deepEqual(buildModels(NONE, cat, { ...docker, host: true }), { models: {} }, 'trusted host keeps pi default');
-  assert.deepEqual(buildModels(NONE, cat, { ...docker, demo: true }), { models: {} }, 'a demo uses no model');
-  assert.equal(buildModels(NONE, cat, { ...docker, noPlan: true }).field, 'models.dwight');
-  assert.deepEqual(buildModels({ ...NONE, dwight: GPT, angela: GPT }, cat, { ...docker, noPlan: true }).models,
-    { dwight: { provider: 'openai', model: 'gpt-a' }, angela: { provider: 'openai', model: 'gpt-a' } });
-  assert.equal(buildModels({ angela: 'garbage' }, cat, docker).field, 'models.angela', 'an unavailable model is still named first');
+  const host = { demo: false, host: true, noPlan: false, configured: { michael: SOL, dwight: null, angela: null } };
+  assert.deepEqual(buildModels(NONE, cat, host), { models: {} }, 'the trusted host keeps the defaults');
+  assert.deepEqual(buildModels(ALL, cat, host).models, { michael: { provider: 'openai', model: 'gpt-a' }, dwight: { provider: 'openai', model: 'gpt-a' }, angela: { provider: 'openai', model: 'gpt-a' } });
+  assert.deepEqual(buildModels({ ...NONE, dwight: GPT }, cat, { ...host, noPlan: true }).models, { dwight: { provider: 'openai', model: 'gpt-a' } });
+  assert.equal(buildModels({ angela: 'garbage' }, cat, host).field, 'models.angela', 'an unavailable model is named');
+  assert.match(buildModels({ angela: modelKey('openai', 'gone') }, cat, host).error, /Angela's model is not available/);
+  assert.deepEqual(buildModels(ALL, cat, { ...host, host: false, demo: true }), { models: {} }, 'a demo uses no model');
 });
 
 test('the server\'s Docker model message points at the role selects it names', () => {
@@ -149,7 +159,12 @@ function harness({ reject = null, control = CONTROL } = {}) {
     $(`f-model-${role}`).value = v;
     return $(`f-model-${role}`).fire('change');
   }));
-  return { $, panel, posts, pick, tick: () => new Promise((r) => setTimeout(r, 10)) };
+  const host = async () => {
+    $('f-sandbox-host').checked = true;
+    await $('f-sandbox-host').fire('change');
+    $('f-trusted').checked = true;
+  };
+  return { $, panel, posts, pick, host, tick: () => new Promise((r) => setTimeout(r, 10)) };
 }
 
 async function openDrawer(h) {
@@ -160,41 +175,27 @@ async function openDrawer(h) {
   h.$('f-request').value = 'Build it';
 }
 
-test('drawer: Docker with a role on pi default shows the note, refuses the submit and focuses the first select', async (t) => {
+test('drawer: a server that reports no agent defaults refuses Docker with its note; the trusted host and a demo run', async (t) => {
   const h = harness();
   t.after(() => h.panel.setMode('demo'));
   await openDrawer(h);
   assert.equal(h.$('models-need').hidden, false);
-  assert.equal(h.$('models-need').textContent, DOCKER_MODELS_NOTE);
-  await h.pick({ michael: GPT });
+  assert.equal(h.$('models-need-text').textContent, DOCKER_MODELS_NOTE);
+  assert.equal(h.$('f-model-michael').disabled, true, 'Docker picks no model');
+  assert.equal(h.$('f-model-michael').childNodes[0].textContent, 'Agent default');
   await h.$('run-form').fire('submit');
   assert.deepEqual(h.posts, []);
-  assert.match(h.$('run-error').textContent, /needs a model for Dwight and Angela/);
-  assert.equal(h.$('f-model-dwight').getAttribute('aria-invalid'), 'true');
-  assert.equal(h.$('f-model-angela').getAttribute('aria-invalid'), 'true');
-  assert.equal(h.$('f-model-michael').getAttribute('aria-invalid'), null);
-  assert.equal(globalThis.document.activeElement, h.$('f-model-dwight'));
+  assert.equal(h.$('run-error').textContent, DOCKER_MODELS_NOTE);
+  for (const role of ['michael', 'dwight', 'angela']) assert.equal(h.$(`f-model-${role}`).getAttribute('aria-invalid'), 'true', role);
 
-  await h.pick({ dwight: GPT, angela: GPT });
-  assert.equal(h.$('models-need').hidden, true, 'every role has a model');
+  await h.host();
+  assert.equal(h.$('models-need').hidden, true);
+  assert.equal(h.$('f-model-michael').disabled, false);
+  assert.equal(h.$('f-model-michael').childNodes[0].textContent, 'pi default');
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
-  assert.deepEqual(Object.keys(h.posts[0].body.models), ['michael', 'dwight', 'angela']);
-  assert.equal(h.posts[0].body.sandbox, 'docker');
-});
-
-test('drawer: trusted host, a demo and a run without a plan are not blocked by pi default', async (t) => {
-  const host = harness();
-  t.after(() => host.panel.setMode('demo'));
-  await openDrawer(host);
-  host.$('f-sandbox-host').checked = true;
-  await host.$('f-sandbox-host').fire('change');
-  host.$('f-trusted').checked = true;
-  assert.equal(host.$('models-need').hidden, true);
-  await host.$('run-form').fire('submit');
-  assert.equal(host.posts.length, 1);
-  assert.equal(host.posts[0].body.sandbox, 'host');
-  assert.equal(host.posts[0].body.models, undefined);
+  assert.equal(h.posts[0].body.sandbox, 'host');
+  assert.equal(h.posts[0].body.models, undefined);
 
   const demo = harness();
   t.after(() => demo.panel.setMode('demo'));
@@ -202,34 +203,19 @@ test('drawer: trusted host, a demo and a run without a plan are not blocked by p
   demo.$('f-demo').checked = true;
   await demo.$('f-demo').fire('change');
   demo.$('f-scenario').value = 'happy';
-  assert.equal(demo.$('models-need').hidden, true);
+  assert.equal(demo.$('models-need').hidden, true, 'the scripted demo needs no model');
   await demo.$('run-form').fire('submit');
   assert.equal(demo.posts.length, 1);
   assert.equal(demo.posts[0].body.demo.scenario, 'happy');
   assert.equal(demo.posts[0].body.sandbox, undefined);
   assert.equal(demo.posts[0].body.models, undefined);
-
-  const noPlan = harness();
-  t.after(() => noPlan.panel.setMode('demo'));
-  await openDrawer(noPlan);
-  noPlan.$('f-noplan').checked = true;
-  await noPlan.$('f-noplan').fire('change');
-  await noPlan.pick({ dwight: GPT });
-  assert.equal(noPlan.$('models-need').hidden, false, 'Angela still runs');
-  await noPlan.$('run-form').fire('submit');
-  assert.deepEqual(noPlan.posts, []);
-  assert.equal(globalThis.document.activeElement, noPlan.$('f-model-angela'));
-  await noPlan.pick({ angela: GPT });
-  assert.equal(noPlan.$('models-need').hidden, true, 'Michael is not needed without a plan');
-  await noPlan.$('run-form').fire('submit');
-  assert.equal(noPlan.posts.length, 1);
-  assert.equal(noPlan.posts[0].body.noPlan, true);
 });
 
 test('drawer: the server\'s 400 marks the role selects it names', async (t) => {
   const h = harness({ reject: SERVER('dwight, angela') });
   t.after(() => h.panel.setMode('demo'));
   await openDrawer(h);
+  await h.host();
   await h.pick(ALL);
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
@@ -240,21 +226,22 @@ test('drawer: the server\'s 400 marks the role selects it names', async (t) => {
   assert.equal(globalThis.document.activeElement, h.$('f-model-dwight'));
 });
 
-test('follow-up: Docker with pi default posts nothing and says why, with the fix in Options', async (t) => {
-  const h = harness();
+test('follow-up: Docker without agent defaults posts nothing and says why, with the fix in Options', async (t) => {
+  const h = harness({ control: CONFIGURED });
   t.after(() => h.panel.setMode('demo'));
   h.panel.setMode('live');
   await h.tick();
   const r = await h.panel.startFollowUp('Next step');
   assert.deepEqual(h.posts, []);
   assert.equal(r.options, true);
-  assert.equal(r.field, 'models.michael');
-  assert.match(r.error, /Docker sandbox needs a model for Michael, Dwight and Angela/);
+  assert.equal(r.field, 'models.dwight');
+  assert.deepEqual(r.fields, ['models.dwight', 'models.angela']);
+  assert.match(r.error, /Dwight and Angela have none\. Set one for each in Agents\./);
   assert.equal(h.$('run-dialog').open, false, 'the composer says it; the drawer opens only when asked');
 
   h.$('f-sandbox-host').checked = true;
   h.$('f-trusted').checked = true;
-  assert.deepEqual(await h.panel.startFollowUp('Next step'), { ok: true }, 'trusted host keeps pi default');
+  assert.deepEqual(await h.panel.startFollowUp('Next step'), { ok: true }, 'the trusted host keeps pi default');
   assert.equal(h.posts[0].body.sandbox, 'host');
 });
 
@@ -263,9 +250,7 @@ test('follow-up: a server 400 about models also leads to Options', async (t) => 
   t.after(() => h.panel.setMode('demo'));
   h.panel.setMode('live');
   await h.tick();
-  // the first follow-up loads the model list, which refills the selects; pi default is refused before any POST
-  await h.panel.startFollowUp('Next step');
-  assert.deepEqual(h.posts, []);
+  await h.host();
   await h.pick(ALL);
   const r = await h.panel.startFollowUp('Next step');
   assert.equal(h.posts.length, 1);
@@ -291,7 +276,7 @@ test('composer: the reason goes to its status line, and Open Options shows it on
   h.$('followup-text').value = 'Next step';
   await h.$('followup').fire('submit');
   assert.deepEqual(h.posts, []);
-  assert.match(h.$('followup-status').textContent, /Docker sandbox needs a model for Michael, Dwight and Angela/);
+  assert.equal(h.$('followup-status').textContent, DOCKER_MODELS_NOTE);
   assert.equal(h.$('followup-status').dataset.tone, 'error');
   assert.equal(h.$('followup-fix').hidden, false);
   assert.equal(globalThis.document.activeElement, h.$('followup-fix'));
@@ -299,38 +284,41 @@ test('composer: the reason goes to its status line, and Open Options shows it on
   await h.$('followup-fix').fire('click');
   assert.equal(h.$('run-dialog').open, true);
   assert.equal(h.$('f-request').value, 'Next step');
-  assert.match(h.$('run-error').textContent, /Docker sandbox needs a model/);
+  assert.equal(h.$('run-error').textContent, DOCKER_MODELS_NOTE);
   assert.equal(h.$('f-model-michael').getAttribute('aria-invalid'), 'true');
-  assert.equal(globalThis.document.activeElement, h.$('f-model-michael'));
+  assert.equal(h.$('f-model-michael').disabled, true, 'Docker keeps the select locked');
+  assert.equal(h.$('run-error').getAttribute('tabindex'), '-1');
+  assert.equal(globalThis.document.activeElement, h.$('run-error'), 'no Agents drawer here: the message, never the locked select');
 });
 
-test('drawer: a role with a configured model is not blocked in Docker and its pi default says what it uses', async (t) => {
+test('drawer: an agent default shows on its locked select in Docker, and only the roles without one are refused', async (t) => {
   const h = harness({ control: CONFIGURED });
   t.after(() => h.panel.setMode('demo'));
   await openDrawer(h);
   const def = (role) => h.$(`f-model-${role}`).childNodes[0];
   assert.equal(def('michael').textContent, 'Agent default (openai/gpt-6.1-sol)');
-  assert.equal(def('dwight').textContent, 'pi default');
+  assert.equal(def('dwight').textContent, 'No agent default');
   assert.equal(h.$('models-need').hidden, false);
-  assert.match(h.$('models-need').textContent, /needs a model for Dwight and Angela\./);
-  assert.equal(h.$('models-note').textContent.includes(PI_DEFAULT_NOTE), true);
-  assert.doesNotMatch(h.$('models-note').textContent, /agent configuration/);
+  assert.match(h.$('models-need-text').textContent, /Dwight and Angela have none\./);
+  assert.equal(h.$('models-note').textContent, DOCKER_DEFAULTS_NOTE);
 
   await h.$('run-form').fire('submit');
   assert.deepEqual(h.posts, []);
   assert.equal(h.$('f-model-michael').getAttribute('aria-invalid'), null, 'the configured role is not marked');
   assert.equal(h.$('f-model-dwight').getAttribute('aria-invalid'), 'true');
-  assert.equal(globalThis.document.activeElement, h.$('f-model-dwight'));
 
-  await h.pick({ dwight: GPT, angela: GPT });
-  assert.equal(h.$('models-need').hidden, true);
+  await h.host();
+  assert.equal(def('dwight').textContent, 'pi default');
+  assert.equal(h.$('models-note').textContent.includes(PI_DEFAULT_NOTE), true);
+  assert.doesNotMatch(h.$('models-note').textContent, /agent configuration/);
+  await h.pick({ dwight: GPT });
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
-  assert.equal(h.posts[0].body.sandbox, 'docker');
-  assert.deepEqual(Object.keys(h.posts[0].body.models), ['dwight', 'angela'], 'Michael is sent on his agent default');
+  assert.equal(h.posts[0].body.sandbox, 'host');
+  assert.deepEqual(h.posts[0].body.models, { dwight: { provider: 'openai', model: 'gpt-a' } }, 'Michael is sent on his agent default');
 });
 
-test('drawer: configured models hold for a run in any folder', async (t) => {
+test('drawer: agent defaults hold for a run in any folder', async (t) => {
   const h = harness({ control: CONFIGURED });
   t.after(() => h.panel.setMode('demo'));
   await openDrawer(h);
@@ -338,26 +326,19 @@ test('drawer: configured models hold for a run in any folder', async (t) => {
     h.$('f-workspace').value = folder;
     await h.$('f-workspace').fire('input');
     assert.equal(h.$('models-need').hidden, false, folder);
-    assert.match(h.$('models-need').textContent, /for Dwight and Angela\./, folder);
+    assert.match(h.$('models-need-text').textContent, /Dwight and Angela have none\./, folder);
     assert.equal(h.$('f-model-michael').childNodes[0].textContent, 'Agent default (openai/gpt-6.1-sol)', folder);
   }
   await h.$('run-form').fire('submit');
-  assert.deepEqual(h.posts, [], 'the unconfigured roles are still refused in another folder');
-  assert.equal(h.$('f-model-michael').getAttribute('aria-invalid'), null);
-  assert.equal(h.$('f-model-dwight').getAttribute('aria-invalid'), 'true');
-
-  await h.pick({ dwight: GPT, angela: GPT });
-  await h.$('run-form').fire('submit');
-  assert.equal(h.posts.length, 1);
-  assert.equal(h.posts[0].body.workspace, 'D:\\other');
-  assert.deepEqual(Object.keys(h.posts[0].body.models), ['dwight', 'angela'], 'Michael is sent on his agent default');
+  assert.deepEqual(h.posts, [], 'the roles without a default are still refused in another folder');
 });
 
-test('follow-up: every role configured posts on pi default in Docker; one unconfigured role is still refused', async (t) => {
-  const all = harness({ control: { ...CONTROL, defaults: { models: { michael: SOL, dwight: SOL, angela: SOL } } } });
+test('follow-up: every role with an agent default posts no models in Docker, even after picks; one without is refused', async (t) => {
+  const all = harness({ control: EVERY });
   t.after(() => all.panel.setMode('demo'));
   all.panel.setMode('live');
   await all.tick();
+  await all.pick(ALL);
   assert.deepEqual(await all.panel.startFollowUp('Next step'), { ok: true });
   assert.equal(all.posts[0].body.sandbox, 'docker');
   assert.equal(all.posts[0].body.models, undefined);
@@ -366,6 +347,7 @@ test('follow-up: every role configured posts on pi default in Docker; one unconf
   t.after(() => some.panel.setMode('demo'));
   some.panel.setMode('live');
   await some.tick();
+  await some.pick(ALL);
   const r = await some.panel.startFollowUp('Next step');
   assert.deepEqual(some.posts, []);
   assert.equal(r.field, 'models.dwight');

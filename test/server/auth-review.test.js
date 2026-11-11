@@ -19,7 +19,7 @@ test('review 1 HTTP: broken custom configuration keeps account/key/logout routes
     fs.writeFileSync(path.join(dir, file), '{broken');
     const result = await request('/api/auth');
     assert.equal(result.status, 200);
-    assert.deepEqual(result.data.accounts.map((p) => p.id), ['anthropic', 'openai', 'google']);
+    assert.deepEqual(result.data.accounts.map((p) => p.id), ['anthropic', 'openai', 'google', 'google-antigravity']);
     assert.match(result.data.accounts[0].detail, /custom provider configuration/i);
     assert.equal((await request('/api/auth/providers')).status, 200);
     assert.equal((await request('/api/auth/key', { provider: 'google', key: 'FAKE_HTTP_KEY' })).status, 202);

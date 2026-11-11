@@ -14,6 +14,8 @@ def after_prepare(state: PipelineState) -> Literal["finalize"] | list[str]:
 def after_plan(state: PipelineState) -> Literal["finalize", "plan_context", "plan", "approve_plan"]:
     if state.get("failure") or state.get("outcome"):
         return "finalize"
+    if state.get("answer"):
+        return "finalize"
     if state.get("plan_requests"):
         return "plan_context"
     return "approve_plan" if state.get("plan") else "plan"
@@ -93,6 +95,8 @@ def after_replan(state: PipelineState) -> Literal["finalize", "plan"]:
 
 def decision(route: Callable[[PipelineState], str | list[str]], state: PipelineState) -> tuple[str | list[str], str]:
     target = route(state)
+    if route == after_plan and state.get("answer") and not state.get("failure") and not state.get("outcome"):
+        return target, "direct_answer"
     if state.get("failure"):
         reason = "failure"
     elif state.get("outcome"):

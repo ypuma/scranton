@@ -8,6 +8,10 @@ export const CHECKS_MAX = 12;
 export const SETUP_MAX = 4;
 export const COMMENT_MAX = 4000;
 export const EVENTS_KEPT = 1000;
+// the run route sends at most this many events per answer; a full page means there is more to ask for
+export const EVENTS_PAGE = 500;
+// what the Chat view keeps of a run: only the events its adapter reads, so a long run keeps its whole conversation
+export const CHAT_EVENTS_KEPT = 5000;
 export const DIFF_LINES_SHOWN = 4000;
 export const POLL_LIVE_MS = 1000;
 export const POLL_IDLE_MS = 5000;
@@ -26,6 +30,8 @@ export const DEMO_SCENARIOS = [
   { id: 'parallel', label: 'Parallel steps', hint: 'Two independent fixes run side by side and are merged.' },
   // section 25b: the server refuses this scenario with observe
   { id: 'evidence', label: 'Evidence checks', hint: 'Ungrounded output is rejected and repaired; at delivery one criterion is shown by checks, one passed before the change too.', enforce: true },
+  // chat-view-pipeline-contract section 3: a question, answered from the code without a plan
+  { id: 'answer', label: 'Direct answer', hint: 'A question about the sample project: the planner reads the code and answers. Nothing is changed and no approval is asked.' },
 ];
 export const demoScenario = (id) => DEMO_SCENARIOS.find((s) => s.id === id) ?? DEMO_SCENARIOS[0];
 // sections 16 and 18: the server takes replans 0..3 and parallelSteps 1..4; the form starts at 1 and 2
@@ -224,7 +230,17 @@ export function parseDetect(doc) {
 
 // ------------------------------------------------------------ run documents
 
-// GET .../pipeline -> { active, runs } (runs oldest first, as sent)
+const REPLY_KINDS = ['answer', 'result'];
+
+// A run's return message (chat-view-pipeline-contract section 11.4), as status.json and the run list carry it.
+// -> { kind, text, truncated, citations } or null for a run without one
+export function parseReply(r) {
+  const o = obj(r);
+  if (!o || typeof o.text !== 'string' || !REPLY_KINDS.includes(o.kind)) return null;
+  return { kind: o.kind, text: str(o.text), truncated: o.truncated === true, citations: list(o.citations).filter((x) => typeof x === 'string' && x).map(str) };
+}
+
+// GET .../pipeline -> { active, runs } (runs oldest first, as sent); a run carries `reply` only when it has one
 export function parseRunList(doc) {
   const d = obj(doc);
   if (!d || !Array.isArray(d.runs)) return null;
@@ -234,9 +250,10 @@ export function parseRunList(doc) {
     const o = obj(r);
     if (!o || !RUN_ID_RE.test(o.runId ?? '') || seen.has(o.runId)) continue;
     seen.add(o.runId);
+    const reply = parseReply(o.reply);
     runs.push({
       runId: o.runId, status: Object.hasOwn(RUN_STATUS, o.status) ? o.status : null, phase: str(o.phase) || null,
-      task: str(o.task), createdAt: str(o.createdAt) || null, updatedAt: str(o.updatedAt) || null,
+      task: str(o.task), createdAt: str(o.createdAt) || null, updatedAt: str(o.updatedAt) || null, ...(reply ? { reply } : {}),
     });
   }
   const active = typeof d.active === 'string' && seen.has(d.active) ? d.active : null;
@@ -327,6 +344,7 @@ export function parseStatus(s) {
       enabled: obj(o.procedure)?.enabled === true, name: str(obj(o.procedure)?.name) || null,
       situation: str(obj(o.procedure)?.situation).trim() || null,
     },
+    reply: parseReply(o.reply),
     createdAt: str(o.created_at) || null, updatedAt: str(o.updated_at) || null,
   };
 }
@@ -352,6 +370,7 @@ export function parseRunDoc(doc) {
   const status = parseStatus(d?.status);
   const launchError = parseLaunchError(d?.launchError);
   if (!status && !(launchError && d.status === null)) return null;
+  if (status && !status.reply) status.reply = parseReply(d.reply);
   return {
     status, launchError, live: status ? d.live === true : false,
     events: list(d.events).map(parseEvent).filter(Boolean),
@@ -634,6 +653,21 @@ export function canResume(s) {
   return s?.status === 'suspended';
 }
 
+const COMPOSER_BLOCK = {
+  awaiting_approval: 'This run waits for your decision. Follow up once it has finished.',
+  suspended: 'This run is suspended. Resume or cancel it under Details, then follow up.',
+};
+
+// What the run composer of a pipeline chat does. It belongs to Chat mode (Details starts runs from its own
+// controls) and is off while a run of the chat is still going. loaded: the chat's run list is in. active: the
+// status of the run that is still going, or true for one that was just started. -> { hidden, disabled, reason, label }
+export function pipelineComposerGate({ enabled, mode, view, loaded = false, active = null, runs = 0, submitting = false }) {
+  const label = runs > 0 ? 'Follow up' : 'Start run';
+  if (!enabled || mode === 'demo' || view !== 'chat' || !loaded) return { hidden: true, disabled: true, reason: '', label };
+  if (active) return { hidden: false, disabled: true, label, reason: own(COMPOSER_BLOCK, active) ?? 'A run is in progress. Follow up once it has finished.' };
+  return { hidden: false, disabled: submitting, reason: '', label };
+}
+
 // ------------------------------------------------------------ polling
 
 // null = do not poll (the chat is not on screen)
@@ -884,6 +918,8 @@ const evidenceOf = (form) => ({ grounding: form.grounding === 'observe' ? 'obser
 // trustHost, replans, parallelSteps, grounding: 'enforce' | 'observe', guidance,
 // setup: [{ id, command, network }], checks: [{ id, kind, command, required }],
 // models: { role: { provider, model } | null }, approvals } -> { body } or { error, field }
+// Every run this page starts is a conversation run (chat-view-pipeline-contract section 11.1): role messages,
+// direct answers and the reply.
 export function buildRunBody(form = {}) {
   const task = raw(form.task).trim();
   const delivery = form.delivery === 'patch' ? 'patch' : 'apply';
@@ -895,7 +931,7 @@ export function buildRunBody(form = {}) {
     const scenario = demoScenario(form.demoScenario);
     const evidence = evidenceOf(form);
     if (scenario.enforce) evidence.grounding = 'enforce';
-    return { body: { task: task || DEMO_TASK, demo: true, demoScenario: scenario.id, delivery, sandbox: sb.sandbox, ...evidence } };
+    return { body: { task: task || DEMO_TASK, demo: true, demoScenario: scenario.id, delivery, sandbox: sb.sandbox, ...evidence, conversation: true } };
   }
   if (!task) return { error: 'Describe the task for the pipeline.', field: 'task' };
 
@@ -920,7 +956,7 @@ export function buildRunBody(form = {}) {
   const approvals = { plan: form.approvals === 'auto_low_risk' ? 'auto_low_risk' : 'always' };
   const replans = choice(form.replans, 0, REPLANS_MAX, REPLANS_DEFAULT);
   const parallelSteps = choice(form.parallelSteps, 1, PARALLEL_MAX, PARALLEL_DEFAULT);
-  return { body: { task, delivery, sandbox, setup: setup.rows, checks: checks.rows, models, approvals, replans, parallelSteps, ...evidenceOf(form) } };
+  return { body: { task, delivery, sandbox, setup: setup.rows, checks: checks.rows, models, approvals, replans, parallelSteps, ...evidenceOf(form), conversation: true } };
 }
 
 // Which form field a 400 from the runs route is about: a named row field (checks.1.id, setup[0].command), else a guess.

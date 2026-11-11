@@ -88,7 +88,8 @@ async function lockWorkspace(root) {
   }
 }
 
-function safePath(root, relative = '') {
+export function safePath(root, relative = '', { platform = process.platform, fs: hostFs = fs, path: hostPath = path } = {}) {
+  const fs = hostFs, path = hostPath;
   const parts = relative ? relative.split('/') : [];
   if (parts.some((p) => !p || p === '.' || p === '..' || /[\\:\x00]/.test(p) || /[. ]$/.test(p) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p))) throw new Error(`Unsafe path: ${relative}`);
   const full = path.resolve(root, ...parts);
@@ -98,6 +99,13 @@ function safePath(root, relative = '') {
     current = path.join(current, component);
     let st;
     try { st = fs.lstatSync(current); } catch (err) { if (err.code === 'ENOENT') continue; throw err; }
+    if (platform === 'darwin' && (current === '/var' || current === '/tmp') && st.isSymbolicLink()) {
+      const target = `/private${current}`;
+      if (path.resolve(path.dirname(current), fs.readlinkSync(current)) !== target || fs.realpathSync.native(current) !== target) throw new Error(`Link/reparse path rejected: ${current}`);
+      // Check the canonical ancestors too; only the OS alias itself is exempt.
+      current = safePath(target, '', { platform, fs, path });
+      continue;
+    }
     if (st.isSymbolicLink() || fs.realpathSync.native(current).toLowerCase() !== path.resolve(current).toLowerCase()) throw new Error(`Link/reparse path rejected: ${current}`);
   }
   return full;

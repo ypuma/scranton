@@ -11,10 +11,16 @@ from scranton_pipeline.agents.gateway import json_system
 from scranton_pipeline.config import EngineConfig
 from scranton_pipeline.grounding import diff_hunks
 from scranton_pipeline.guidance import text as guidance_text
-from scranton_pipeline.models import ContextRequest, ImplementerTurn, PlannerTurn, Review
+from scranton_pipeline.models import (
+    ContextRequest,
+    ConversationPlannerTurn,
+    ImplementerTurn,
+    PlannerTurn,
+    Review,
+)
 from scranton_pipeline.nodes.common import planning_key, scope_id
 from scranton_pipeline.procedure import Graph
-from scranton_pipeline.state import PipelineState
+from scranton_pipeline.state import PipelineState, initial_planning
 
 PROMPT_VERSION = "pipeline-v2-grounded"
 RULES = """Python owns all transitions, commands and tools. Return only the requested schema.
@@ -79,10 +85,13 @@ def fresh_evidence(state: PipelineState, cfg: EngineConfig, key: str) -> list[di
     return result
 
 
-def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg: EngineConfig, *, guidance: str = "") -> Prompt:
+def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg: EngineConfig, *, guidance: str = "", answers: bool = False) -> Prompt:
     system = f"{PROMPT_VERSION}: {role}\n{RULES}"
     schemas: dict[str, type[BaseModel]] = {"planner": PlannerTurn, "implementer": ImplementerTurn, "reviewer": Review}
     schema = schemas[role.split(":")[0]]
+    if cfg.conversation and answers and role.startswith("planner:"):
+        schema = ConversationPlannerTurn
+        system += "\nFor an informational question requiring no edits, return kind answer with answer.text and optional citations of shown evidence IDs. Request context first when needed. For changes return a plan. Never claim edits or checks ran when answering."
     if getattr(cfg.models, role.split(":")[0]).structured_output == "json_text":
         system = json_system(system, schema)
     advice = ""
@@ -143,7 +152,7 @@ def build_planner_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Grap
         "task": state["task"], "baseline": state.get("baseline"), "replan_checks": brief.get("checks", []),
         "repo": overview, "previous_plan": state.get("previous_plan"),
         "feedback": state.get("feedback"), "context_rounds_left": max(0, cfg.limits.max_plan_context_rounds - state.get("counters", {}).get(planning_key(state, "context"), 0)),
-    }, fresh_evidence(state, cfg, "plan_evidence"), cfg, guidance=guidance_text(graph, "planner", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
+    }, fresh_evidence(state, cfg, "plan_evidence"), cfg, answers=initial_planning(state), guidance=guidance_text(graph, "planner", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
 
 
 def build_implementer_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Graph | None = None) -> Prompt:

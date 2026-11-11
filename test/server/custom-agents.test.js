@@ -88,7 +88,7 @@ test('registry custom run and follow-up resolve shared settings and request > en
   assert.equal((await call(route, 'POST', { request: 'bad', noPlan: true, workflow: { gates: [['fakegate']] } })).status, 400);
   assert.equal(launch, undefined);
   for (const models of [undefined, { seclint: { provider: 'fake', model: 'catalog', thinking: 'max' } }]) {
-    const response = await call(route, 'POST', { request: 'Check', noPlan: true, workflow: { gates: [['seclint']] }, ...(models ? { models } : {}) });
+    const response = await call(route, 'POST', { request: 'Check', trustedHost: true, noPlan: true, workflow: { gates: [['seclint']] }, ...(models ? { models } : {}) });
     assert.equal(response.status, 202, JSON.stringify(response.body));
     assert.equal(launch.options.env.SCRANTON_SETTINGS_DIR, settings);
     const effective = loadConfig({ cwd: PACKAGE_ROOT, env: launch.options.env, flags: { singleHive: true, hive: chat.hiveDir, workspace: ws, gates: 'seclint' } });

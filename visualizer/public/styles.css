@@ -34,6 +34,8 @@
   --radius: 0.5rem;
   --radius-s: 0.375rem;
   --topbar-h: 3rem;
+  --read: 48rem; /* the reading column of the Chat view: the transcript and what is docked under it */
+  --win-control-w: 2.875rem; /* 46 px, a Windows caption button */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --dur: 180ms;
 }
@@ -244,7 +246,7 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outlin
 }
 
 .brand { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
-.wordmark { padding-left: var(--s2); font: 600 var(--fs-s) var(--mono); letter-spacing: 0.24em; color: var(--text-2); }
+.wordmark { padding-left: var(--s2); font: 600 var(--fs-s) var(--mono); letter-spacing: 0.12em; color: var(--text-2); }
 
 .top-actions, .run-actions { display: flex; align-items: center; gap: var(--s2); flex: none; }
 .run-actions #accounts-open {
@@ -286,6 +288,57 @@ body:has(#followup:not([hidden]):not([data-off="true"])) #new-run:hover { backgr
   font-weight: 600;
   line-height: 1rem;
   text-align: center;
+}
+
+/* ------------------------------------------------------------ title bar (desktop shell) */
+/* The desktop window has no native title bar: the top bar is one, with the window controls in its corner.
+   Every rule here waits for body[data-shell="desktop"] or for the controls, and a browser has neither. */
+.window-controls { position: absolute; top: 0; right: 0; display: flex; height: var(--topbar-h); }
+.window-controls button {
+  display: grid;
+  place-items: center;
+  width: var(--win-control-w);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  cursor: default;
+}
+/* data-hot, not :hover: under a modal dialog the bar is inert, so the script follows the pointer instead */
+.window-controls button[data-hot="true"] { background: var(--fill-hover); color: var(--text); }
+#win-close[data-hot="true"] { background: var(--text); color: var(--bg); }
+.glyph-restore, #win-maximize[data-maximized="true"] .glyph-maximize { display: none; }
+#win-maximize[data-maximized="true"] .glyph-restore { display: inline; }
+
+body[data-shell="desktop"] .topbar { padding-right: calc(3 * var(--win-control-w) + var(--s3)); user-select: none; cursor: default; }
+
+/* Nothing opens over the bar. The backdrop still spans the window, so a press on the inert bar lands on the
+   dialog element, where the script places it by position; it dims the bar but not the window controls. */
+body[data-shell="desktop"] dialog::backdrop {
+  background:
+    linear-gradient(var(--scrim), var(--scrim)) 0 0 / calc(100% - 3 * var(--win-control-w)) var(--topbar-h) no-repeat,
+    linear-gradient(var(--scrim), var(--scrim)) 0 var(--topbar-h) / 100% 100% no-repeat;
+}
+/* the clip keeps the drawer's shadow off the bar */
+body[data-shell="desktop"] .drawer {
+  top: var(--topbar-h);
+  height: calc(100% - var(--topbar-h));
+  max-height: calc(100% - var(--topbar-h));
+  clip-path: inset(0 0 0 -6rem);
+}
+/* the least gap to the bar is as deep as the shadow reaches */
+body[data-shell="desktop"] .confirm { top: var(--topbar-h); max-height: calc(100% - var(--topbar-h) - 5rem); }
+@media (max-width: 899px) {
+  body[data-shell="desktop"] .sidebar, body[data-shell="desktop"] .nav-scrim { top: var(--topbar-h); }
+}
+/* The view scrolls under the bar, never the window: a window scrollbar would sit beside the window controls.
+   relative: an absolutely placed .sr-only child scrolls with the view instead of stretching the page. */
+body[data-shell="desktop"] { overflow: hidden; }
+body[data-shell="desktop"] .main { position: relative; }
+@media (max-width: 1099px) {
+  body[data-shell="desktop"] .main { height: calc(100vh - var(--topbar-h)); overflow-y: auto; overscroll-behavior: contain; }
+  body[data-shell="desktop"] .main > * { flex-shrink: 0; }
 }
 
 /* ------------------------------------------------------------ shell */
@@ -451,13 +504,20 @@ body[data-scope="none"] .conn { display: none; }
   min-width: 0;
 }
 .hitl-head { display: flex; align-items: baseline; gap: var(--s3); min-width: 0; }
-.hitl-mark { font-size: var(--fs-xs); animation: pulse 1.8s ease-in-out infinite; }
-.hitl-head h2 { font-size: var(--fs-m); font-weight: 700; }
+.hitl-mark { font-size: var(--fs-xs); }
+.hitl-head h2 { font-size: var(--fs-m); font-weight: 600; }
 .hitl-head h2:focus, .recovery h2:focus { outline: none; }
 .hitl-head h2:focus-visible, .recovery h2:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 .hitl-meta { margin-left: auto; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.hitl-reason { margin: 0; max-height: 7.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
+.hitl-reason { margin: 0; max-height: 4.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
 .hitl-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+/* The answer card owns the reason and actions; terminal-only and exited alerts stay visible. */
+.main:has(> #hitl:not([hidden])) > .alert[data-kind="human"] { display: none; }
+.main:has(> #hitl:not([hidden])) .fig[data-critical="true"] { padding: 0; background: transparent; }
+.main:has(> #hitl:not([hidden])) .fig[data-critical="true"] dt,
+.main:has(> #hitl:not([hidden])) .fig[data-critical="true"] .fig-sub { color: var(--text-3); }
+.main:has(> #hitl:not([hidden])) .fig[data-critical="true"] .fig-value { color: var(--text); }
+.main:has(> #hitl:not([hidden])) .fig[data-critical="true"] .segments i[data-fill="full"] { background: var(--text); }
 .hitl-feedback { display: grid; gap: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--line); }
 .recovery-detail { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
 .recovery-error { margin: 0; padding-left: var(--s3); border-left: 2px solid var(--text); font: var(--fs-s)/1.5 var(--mono); color: var(--text); overflow-wrap: anywhere; }
@@ -663,7 +723,7 @@ body[data-run="none"] #dash { display: none; }
   list-style: none;
   border-radius: 2px;
   color: var(--text-3);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-s);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -708,7 +768,7 @@ body[data-run="none"] #dash { display: none; }
 /* a gate's result for the cycle, in the activity line: quiet when it passed, firm when it sent the work back */
 .agent[data-gate] .activity { color: var(--text-2); }
 .agent:is([data-gate="failed"], [data-gate="blocked"], [data-gate="error"]) .activity { color: var(--text); font-weight: 600; }
-.gate-where { font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); white-space: nowrap; }
+.gate-where { font-size: var(--fs-s); font-weight: 400; color: var(--text-3); white-space: nowrap; }
 /* crowded: the verdict wraps between its words, never clipped, and where it applies goes under it */
 .pipeline[data-wide="true"] .agent[data-gate] .activity { display: block; -webkit-line-clamp: none; line-clamp: none; }
 .pipeline[data-wide="true"] .gate-where { display: block; }
@@ -1288,6 +1348,16 @@ dialog[open]::backdrop { opacity: 1; }
 .drawer-head h2 { font-size: var(--fs-m); font-weight: 600; }
 /* relative: an absolutely placed .sr-only child scrolls with the body instead of stretching the dialog */
 .drawer-body { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; align-content: start; gap: var(--s5); padding: var(--s2) var(--s5) var(--s5); }
+.drawer :is(.field > label, .field-label, .hitl-feedback > label) { font-size: var(--fs); font-weight: 500; }
+.form-help { min-width: 0; font-size: var(--fs-s); color: var(--text-3); }
+.form-help > summary { cursor: pointer; width: fit-content; color: var(--text-2); }
+.form-help > summary:hover { color: var(--text); }
+.form-help > :not(summary) { margin: var(--s2) 0 0; }
+.form-help[open] { padding-bottom: var(--s1); }
+.form-help:has(> #models-note[hidden]) { display: none; }
+#run-dialog #f-request { min-height: 6.5rem; }
+#agents-dialog .accounts-intro { color: var(--text-2); font-size: var(--fs); }
+#agents-dialog .role-model { font-size: var(--fs); }
 .drawer-foot { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: var(--s2); padding: var(--s3) var(--s5); border-top: 1px solid var(--line); }
 .drawer-foot .hint { margin-right: auto; }
 
@@ -1350,6 +1420,10 @@ dialog[open]::backdrop { opacity: 1; }
 .dialog-form { display: grid; gap: var(--s4); }
 .dialog-form h2 { margin: 0; }
 .dialog-form > p { margin: 0; }
+.folder-row { display: flex; flex-wrap: wrap; gap: var(--s2); min-width: 0; }
+.folder-row input { flex: 1 1 12rem; }
+/* as tall as the field beside it; 2rem on a line of its own */
+.folder-row .btn { height: auto; min-height: 2rem; }
 
 /* ------------------------------------------------------------ accounts */
 .accounts-intro { margin: 0; }
@@ -1486,8 +1560,9 @@ dialog[open]::backdrop { opacity: 1; }
 }
 
 /* ------------------------------------------------------------ pipeline chats */
-/* a chat's engine is fixed: a pipeline chat shows the pipeline view instead of the team layout */
-body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #exit-panel, #recovery, #release-note, #followup, #empty, #dash) { display: none !important; }
+/* a chat's engine is fixed: a pipeline chat shows the pipeline view instead of the team layout; its composer
+   (thread.js) is there only while the conversation is on screen */
+body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #exit-panel, #recovery, #release-note, #empty, #dash) { display: none !important; }
 #run-form[data-engine="pipeline"] .team-only { display: none; }
 /* the reason the engine is unavailable stays readable */
 #f-engine-pipeline-row[data-disabled="true"] { opacity: 1; color: var(--text-3); }
@@ -1654,7 +1729,156 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #exit-panel, #recovery
   .pv-lane-attempt { grid-column: 2 / -1; }
 }
 
+/* ------------------------------------------------------------ chat view */
+/* the switch between the conversation and the dashboard of a chat */
+.view-mode { flex: none; background: var(--panel); }
+
+/* Chat mode is an app layout at every width: the head and the run line stay, the transcript scrolls on its own
+   and the answer panel and the composer are docked under it. A dock taller than the window scrolls the view. */
+body[data-view="chat"] { height: 100vh; height: 100dvh; }
+body[data-view="chat"] .shell { min-height: 0; align-items: stretch; }
+/* relative: an absolutely placed .sr-only child scrolls with the view instead of stretching the page */
+body[data-view="chat"] .main { position: relative; height: auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: var(--s4); }
+body[data-view="chat"] .main > * { flex-shrink: 0; }
+/* the run line keeps the status, the time and the connection: the figures belong to the dashboard, and the reply
+   carries the totals */
+body[data-view="chat"] .runline :is(.summary, .more-toggle, .run-more) { display: none; }
+/* that a run finished is said by its reply and the run line; an alert that needs someone stays */
+body[data-view="chat"] .alert[data-kind="finished"] { display: none; }
+/* a pipeline chat: its pipeline view is the other view (Details) */
+body[data-view="chat"] #pipeline-view { display: none; }
+
+.chatview {
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 12rem;
+  margin-top: var(--s3);
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+body[data-view="chat"] #chat-view { flex: 1 1 0; }
+body[data-run="none"] #chat-view,
+body[data-scope="none"] #chat-view { display: none; }
+/* Keep absolute screen-reader labels inside the transcript's scroll coordinate system. */
+.chatview-scroll { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; padding: var(--s5) var(--gutter); }
+.chatview-scroll:focus-visible { outline-offset: -2px; }
+.chatview-list { display: grid; gap: var(--s5); max-width: var(--read); min-width: 0; }
+.chatview .jump { right: var(--gutter); }
+
+.chat-run { display: grid; gap: var(--s4); min-width: 0; }
+.chat-run + .chat-run { padding-top: var(--s5); border-top: 1px solid var(--line); }
+.chat-run-tools { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); min-width: 0; }
+.chat-run-tools .msg-more { margin: 0; }
+.chat-run-note { font-size: var(--fs-s); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.chat-run-note:empty { display: none; }
+.chat-run-note::before { content: "✕ "; }
+
+/* an entry: a quiet label line (who, role, context, time) and the text under it */
+.chat-entry { margin: 0; min-width: 0; }
+.chat-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s2); min-width: 0; font-size: var(--fs-s); color: var(--text-3); }
+.chat-who { font-size: var(--fs); font-weight: 600; color: var(--text); }
+.chat-context { overflow-wrap: anywhere; min-width: 0; }
+.chat-context::before { content: "· "; color: var(--text-4); }
+.chat-head .badge { font-size: var(--fs-s); }
+.chat-time { margin-left: auto; padding-left: var(--s2); font-size: var(--fs-s); color: var(--text-3); white-space: nowrap; }
+.chat-body { margin-top: var(--s1); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.chat-note { margin: var(--s1) 0 0; font-size: var(--fs-s); color: var(--text-3); }
+/* a long message shows about twelve lines and fades out; Show more opens it */
+.chat-entry[data-long="true"]:not([data-open]) .chat-body {
+  max-height: 18em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 70%, transparent);
+  mask-image: linear-gradient(#000 70%, transparent);
+}
+
+/* what the human wrote sits on a surface of its own */
+.chat-entry:is([data-kind="request"], [data-kind="human"]) {
+  justify-self: start;
+  max-width: 100%;
+  padding: var(--s3) var(--s4);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.chat-entry[data-kind="human"][data-tone="fail"] .chat-context { color: var(--text); font-weight: 600; }
+/* an agent thinking aloud is lighter than what it hands over */
+.chat-entry[data-final="false"] .chat-who { font-weight: 400; color: var(--text-2); }
+.chat-entry[data-final="false"] .chat-body { color: var(--text-2); }
+/* one speaker's turn: a label line, and under it, set in a little, what that speaker said and did. An entry that
+   follows its speaker's label shows no label of its own (its accessible name still says who and where). */
+.chat-entry[data-kind="agent"] > :not(.chat-head) { margin-left: var(--s3); }
+.chat-entry[data-cont="true"] { margin-top: calc(var(--s2) - var(--s4)); }
+.chat-entry[data-cont="true"] .chat-head > :not(.badge) { display: none; }
+.chat-entry[data-cont="true"] .chat-head:not(:has(.badge)) { display: none; }
+.chat-entry[data-cont="true"] .chat-head { margin-left: var(--s3); }
+.chat-entry[data-kind="activity"][data-cont="true"] { margin-left: var(--s3); }
+.chat-entry[data-kind="activity"][data-cont="true"] + .chat-entry[data-kind="activity"][data-cont="true"] { margin-top: calc(var(--s1) - var(--s4)); }
+/* the one button of a question that is answered in the other view */
+.chat-ask { margin-top: var(--s2); }
+
+/* tools, milestones and verdicts: one line each, close to the line before */
+.chat-entry[data-kind="activity"] { display: flex; align-items: baseline; gap: var(--s2); font-size: var(--fs-s); color: var(--text-3); }
+.chat-entry[data-kind="activity"] + .chat-entry[data-kind="activity"] { margin-top: calc(var(--s1) - var(--s4)); }
+.chat-act { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-entry[data-kind="activity"][data-tone="ok"] .chat-act::before { content: "✓ "; }
+.chat-entry[data-kind="activity"][data-tone="warn"] .chat-act::before { content: "– "; }
+.chat-entry[data-kind="activity"][data-tone="fail"] .chat-act { color: var(--text); font-weight: 600; }
+.chat-entry[data-kind="activity"][data-tone="fail"] .chat-act::before { content: "✕ "; }
+
+/* the reply is what the run was for: a rule beside it, larger type, and its outcome on one quiet line */
+.chat-entry[data-kind="reply"] { padding-left: var(--s4); border-left: 2px solid var(--text); }
+.chat-kind { font-size: var(--fs); font-weight: 600; color: var(--text); }
+.chat-entry[data-kind="reply"] .chat-who { font-weight: 400; color: var(--text-2); }
+.chat-entry[data-kind="reply"] .chat-body { margin-top: var(--s2); font-size: 0.9375rem; line-height: 1.6; }
+.chat-outcome { margin: var(--s3) 0 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
+.chat-entry[data-tone="ok"] .chat-outcome::before { content: "✓ "; }
+.chat-entry[data-tone="fail"] .chat-outcome { color: var(--text); font-weight: 600; }
+.chat-entry[data-tone="fail"] .chat-outcome::before { content: "✕ "; }
+
+/* the Markdown subset of a message */
+.md { white-space: normal; }
+.md > * { margin: 0; }
+.md > * + * { margin-top: var(--s2); }
+.md p { white-space: pre-wrap; }
+.md :is(h3, h4, h5) { font-size: 1em; font-weight: 600; line-height: 1.4; }
+.md h3 { font-size: 1.125em; }
+.md > :is(h3, h4, h5):not(:first-child) { margin-top: var(--s4); }
+.md :is(ul, ol) { padding-left: 1.375rem; }
+.md li > :is(ul, ol) { margin: 0; }
+.md li { white-space: pre-wrap; }
+.md code { padding: 0.0625rem var(--s1); border-radius: 0.25rem; background: var(--fill); font-size: 0.9em; overflow-wrap: anywhere; }
+.md strong { font-weight: 600; }
+/* a code block scrolls inside itself; the page never does */
+.md pre { max-width: 100%; padding: var(--s3); overflow-x: auto; border-radius: var(--radius-s); background: var(--panel); line-height: 1.5; }
+.md pre code { padding: 0; background: none; font-size: var(--fs-s); white-space: pre; overflow-wrap: normal; }
+.md hr { height: 1px; border: 0; background: var(--line); margin: var(--s3) 0; }
+
+/* the composer that messages a running agent stands where the run composer does */
+.steer { display: grid; gap: var(--s2); margin: var(--s3) var(--gutter) 0; max-width: 56rem; min-width: 0; }
+.steer-actions { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.steer-to { flex: none; padding-left: var(--s2); font-size: var(--fs-s); color: var(--text-3); }
+.steer-actions select { flex: 0 1 14rem; height: 1.75rem; border-color: var(--line); background: transparent; font-size: var(--fs-xs); }
+.steer-actions .hint { margin-left: auto; font-size: var(--fs-xs); transition: opacity var(--dur) var(--ease-out); }
+.steer:not(:focus-within) #chat-view-count { opacity: 0; }
+/* in Chat mode everything docked under the transcript keeps to its column */
+body[data-view="chat"] :is(.followup, .steer, .hitl) { max-width: var(--read); }
+body[data-view="chat"] .followup { margin-top: var(--s3); }
+/* Keep the decision's reason beside its actions even when the transcript is scrolled away. */
+body[data-view="chat"] .hitl-reason { display: block; }
+body[data-view="chat"][data-run="none"] .followup:not([data-off="true"]) { margin-top: var(--s5); }
+
 /* ------------------------------------------------------------ narrow */
+@media (min-width: 761px) and (max-width: 1099px) {
+  body[data-view="dashboard"] .run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2) var(--s3); }
+  body[data-view="dashboard"] .run-row > .run-state { grid-column: 1; grid-row: 1; }
+  body[data-view="dashboard"] .run-row > .more-toggle { grid-column: 2; grid-row: 1; }
+  body[data-view="dashboard"] .summary { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2) var(--s4); }
+  body[data-view="dashboard"] .fig { display: block; line-height: 1.25rem; }
+  body[data-view="dashboard"] .fig-current { grid-column: span 2; }
+  body[data-view="dashboard"] .fig dd { min-height: 1.25rem; }
+}
+
 @media (max-width: 1099px) {
   :root { --gutter: var(--s4); }
 }
@@ -1663,7 +1887,6 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #exit-panel, #recovery
 }
 @media (max-width: 640px) {
   .alert-title { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
-  .thread-project, .thread-sep { display: none; }
   .thread-runs { flex: 1 1 100%; }
   .field-row { grid-template-columns: minmax(0, 1fr); }
 }
@@ -1698,7 +1921,7 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #exit-panel, #recovery
 /* motion off: short cross-fades only, nothing slides, scales or pulses */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; }
-  .btn, .icon-btn, .tab, .seg, .jump, .more-toggle svg { transition: none !important; }
+  .btn, .icon-btn, .tab, .seg, .jump, .more-toggle svg, .steer-actions .hint { transition: none !important; }
   /* the rename button keeps its fade on hover (a cross-fade) and loses the press scale */
   #thread-rename { transition: opacity var(--dur) var(--ease-out) !important; }
   .btn:active, .icon-btn:active, .tab:active, .seg:active, .jump:active, #thread-rename:active { transform: none; }

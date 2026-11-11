@@ -91,6 +91,38 @@ class PlannerTurn(LlmModel):
         return self
 
 
+class Answer(LlmModel):
+    text: Text
+    citations: list[EvidenceId] = Field(default_factory=list, max_length=100)
+    summary: Short = ""
+
+    @field_validator("text")
+    @classmethod
+    def nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Answer must not be empty")
+        return value
+
+
+class ConversationPlannerTurn(LlmModel):
+    kind: Literal["need_context", "plan", "answer"]
+    rationale: Text = ""
+    context_requests: list[ContextRequest] = Field(default_factory=list, max_length=50)
+    plan: Plan | None = None
+    answer: Answer | None = None
+
+    @model_validator(mode="after")
+    def payload(self) -> Self:
+        if self.kind == "answer":
+            if self.answer is None or self.plan is not None or self.context_requests:
+                raise ValueError("answer turn requires only an answer")
+        else:
+            if self.answer is not None:
+                raise ValueError("Only answer turns may carry an answer")
+            PlannerTurn.model_validate(self.model_dump(exclude={"answer"}))
+        return self
+
+
 class Replacement(LlmModel):
     search: Annotated[str, Field(min_length=1, max_length=2000000)]
     replace: Annotated[str, Field(max_length=2000000)]
@@ -200,6 +232,7 @@ class Usage(StrictModel):
 
 
 class RunStatus(StrictModel):
+    reply: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     grounding: dict[str, Any] = Field(default_factory=dict)
     procedure: dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "name": None, "digest": None, "situation": None})
     schema_version: Literal[1] = Field(default=1, alias="schema", serialization_alias="schema")

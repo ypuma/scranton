@@ -69,9 +69,9 @@ test('executionDefaults: the server defaults, else the engine defaults', () => {
 
 test('buildRunRequest: parallelism and the docker sandbox by default', () => {
   const c = parseControl(doc());
-  assert.deepEqual(buildRunRequest(form(), c), { body: { request: 'Build it', maxParallel: 3, sandbox: 'docker' } });
+  assert.deepEqual(buildRunRequest(form(), c), { body: { request: 'Build it', maxParallel: 3, sandbox: 'docker', conversation: true } });
   assert.deepEqual(buildRunRequest(form({ sandboxImage: ' my/img:2 ', sandboxNetwork: 'none' }), c).body,
-    { request: 'Build it', maxParallel: 3, sandbox: 'docker', sandboxImage: 'my/img:2', sandboxNetwork: 'none' });
+    { request: 'Build it', maxParallel: 3, sandbox: 'docker', sandboxImage: 'my/img:2', sandboxNetwork: 'none', conversation: true });
   assert.equal(buildRunRequest(form({ maxParallel: '' }), c).body.maxParallel, undefined, 'empty leaves the engine default');
   for (const bad of ['0', '33', '1.5', 'x']) assert.equal(buildRunRequest(form({ maxParallel: bad }), c).field, 'maxParallel', bad);
   assert.equal(buildRunRequest(form({ maxParallel: '32' }), c).body.maxParallel, 32);
@@ -79,7 +79,7 @@ test('buildRunRequest: parallelism and the docker sandbox by default', () => {
   assert.equal(buildRunRequest(form({ sandboxNetwork: 'host' }), c).field, 'sandboxNetwork');
   assert.equal(buildRunRequest(form({ sandbox: 'vm' }), c).field, 'sandbox');
   // an older form without a sandbox choice sends none
-  assert.deepEqual(buildRunRequest({ request: 'x' }, c), { body: { request: 'x' } });
+  assert.deepEqual(buildRunRequest({ request: 'x' }, c), { body: { request: 'x', conversation: true } });
 });
 
 test('buildRunRequest: trusted host needs the explicit confirmation and drops docker options', () => {
@@ -89,13 +89,13 @@ test('buildRunRequest: trusted host needs the explicit confirmation and drops do
   });
   assert.deepEqual(buildRunRequest(form({ sandbox: 'host', trustedHost: 'true' }), c).field, 'trustedHost', 'only a real true counts');
   assert.deepEqual(buildRunRequest(form({ sandbox: 'host', trustedHost: true, sandboxImage: 'x:1', sandboxNetwork: 'none' }), c).body,
-    { request: 'Build it', maxParallel: 3, sandbox: 'host', trustedHost: true });
+    { request: 'Build it', maxParallel: 3, sandbox: 'host', trustedHost: true, conversation: true });
 });
 
 test('buildRunRequest: a demo never sends sandbox fields, so it cannot look sandboxed', () => {
   const c = parseControl(doc());
   const r = buildRunRequest(form({ demo: true, request: '', scenario: 'happy', delayMs: '', sandbox: 'host', trustedHost: true }), c);
-  assert.deepEqual(r.body, { maxParallel: 3, demo: { scenario: 'happy' } });
+  assert.deepEqual(r.body, { maxParallel: 3, demo: { scenario: 'happy' }, conversation: true });
 });
 
 test('errorField maps the server execution messages onto their inputs', () => {

@@ -42,7 +42,7 @@ test('registry pins contexts while request body and catalog are pending; derived
   const pending = router.handle(req, res, `/api/projects/${project.id}/chats/${chat.id}/runs`);
   t.mock.timers.tick(1100);
   assert.equal(closed, 0, 'body wait must pin context');
-  req.end(JSON.stringify({ request: 'First\nsecond\tthird', models: {} }));
+  req.end(JSON.stringify({ request: 'First\nsecond\tthird', trustedHost: true, models: {} }));
   await entered; t.mock.timers.tick(1100);
   assert.equal(closed, 0, 'catalog wait must pin context');
   resolveCatalog({ providers: [] }); await pending;

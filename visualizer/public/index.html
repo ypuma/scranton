@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar" id="topbar">
     <div class="brand">
       <button type="button" class="icon-btn nav-toggle" id="nav-toggle" aria-controls="sidebar" aria-expanded="false" hidden>
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
@@ -26,6 +26,11 @@
         <button type="button" class="btn" id="accounts-open" aria-haspopup="dialog" aria-label="Accounts" aria-describedby="accounts-open-state" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="5.5" r="2.7" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2.8 14c.6-2.8 2.7-4.3 5.2-4.3s4.6 1.5 5.2 4.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="btn-mark" id="accounts-mark" aria-hidden="true"></span><span class="sr-only" id="accounts-open-state"></span></button>
         <button type="button" class="btn" id="stop-run" hidden>Stop run</button>
         <button type="button" class="btn btn-primary" id="new-run">New run</button>
+      </div>
+      <div class="window-controls" id="window-controls" hidden>
+        <button type="button" tabindex="-1" id="win-minimize" aria-label="Minimize"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M0 5.5h10" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+        <button type="button" tabindex="-1" id="win-maximize" aria-label="Maximize"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path class="glyph-maximize" d="M.5.5h9v9h-9z" fill="none" stroke="currentColor" stroke-width="1"/><path class="glyph-restore" d="M2.5 2.5v-2h7v7h-2M.5 2.5h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+        <button type="button" tabindex="-1" id="win-close" aria-label="Close"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M.5.5l9 9M9.5.5l-9 9" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
       </div>
     </div>
   </header>
@@ -53,10 +58,14 @@
     <div class="thread-head">
       <div class="thread-name">
         <span class="thread-project" id="thread-project"></span>
-        <span class="thread-sep" aria-hidden="true">/</span>
+        <span class="thread-sep" id="thread-sep" aria-hidden="true">/</span>
         <h1 class="thread-title" id="thread-title" tabindex="-1"></h1>
         <span class="sr-only" id="thread-state"></span>
         <button type="button" class="btn btn-small btn-quiet" id="thread-rename" aria-haspopup="dialog">Rename</button>
+      </div>
+      <div class="segmented view-mode" id="view-mode-toggle" role="group" aria-label="View">
+        <button type="button" class="seg" id="view-mode-chat" aria-pressed="true">Chat</button>
+        <button type="button" class="seg" id="view-mode-dash" aria-pressed="false">Dashboard</button>
       </div>
       <div class="thread-runs" id="thread-runs">
         <label class="field-label" for="run-picker">Run</label>
@@ -149,6 +158,14 @@
     <span class="alert-detail" id="alert-detail"></span>
   </div>
 
+  <section class="chatview" id="chat-view" hidden aria-labelledby="chat-view-title">
+    <h2 class="sr-only" id="chat-view-title">Conversation</h2>
+    <div class="chatview-scroll" id="chat-view-scroll" tabindex="0" role="group" aria-label="Conversation, newest at the bottom">
+      <div class="chatview-list" id="chat-view-list"></div>
+    </div>
+    <button type="button" class="jump" id="chat-view-jump" hidden>Jump to latest</button>
+  </section>
+
   <section class="hitl" id="hitl" hidden aria-labelledby="hitl-title">
     <div class="hitl-head">
       <span class="hitl-mark" aria-hidden="true">■</span>
@@ -200,7 +217,7 @@
   <form class="followup" id="followup" hidden novalidate aria-labelledby="followup-label">
     <label class="field-label" id="followup-label" for="followup-text">Follow up</label>
     <div class="composer">
-      <textarea id="followup-text" rows="2" maxlength="4000" aria-describedby="followup-hint followup-count" placeholder="What should the agents do next in this chat?"></textarea>
+      <textarea id="followup-text" rows="2" maxlength="4000" aria-describedby="followup-hint followup-count" placeholder="Ask a question or describe a task..."></textarea>
       <div class="followup-actions">
         <span class="hint mono" id="followup-count">0 / 4000</span>
         <button type="button" class="btn btn-small" id="followup-options" aria-haspopup="dialog">Options</button>
@@ -210,6 +227,22 @@
     <span class="hint followup-hint" id="followup-hint"></span>
     <div class="hitl-status" id="followup-status" role="status" aria-live="polite" tabindex="-1"></div>
     <button type="button" class="link-btn followup-fix" id="followup-fix" aria-haspopup="dialog" hidden>Open Options</button>
+  </form>
+
+  <form class="steer" id="chat-view-form" hidden novalidate aria-labelledby="chat-view-form-label">
+    <span class="sr-only" id="chat-view-form-label">Message a running agent</span>
+    <div class="composer">
+      <label class="sr-only" for="chat-view-input">Message</label>
+      <textarea id="chat-view-input" rows="2" maxlength="4000" aria-describedby="chat-view-count chat-view-block" placeholder="Message a running agent..."></textarea>
+      <div class="steer-actions">
+        <label class="steer-to" for="chat-view-to">To</label>
+        <select id="chat-view-to" class="mono" aria-describedby="chat-view-block"></select>
+        <span class="hint mono" id="chat-view-count">0 / 4000</span>
+        <button type="submit" class="btn btn-primary btn-small" id="chat-view-send">Send</button>
+      </div>
+    </div>
+    <span class="hint followup-hint" id="chat-view-block"></span>
+    <div class="hitl-status" id="chat-view-status" role="status" aria-live="polite" tabindex="-1"></div>
   </form>
 
   <section class="empty" id="empty" hidden aria-label="No run">
@@ -318,7 +351,7 @@
         <p class="form-error team-only" id="config-error" role="alert" hidden></p>
         <div class="field team-only">
           <label for="f-request">Request <span class="hint" id="f-request-opt" hidden>optional for a demo</span></label>
-          <textarea id="f-request" name="request" rows="8" maxlength="4000" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
+          <textarea id="f-request" name="request" rows="5" maxlength="4000" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
           <span class="hint mono field-count" id="f-request-count">0 / 4000</span>
         </div>
         <div class="field team-only">
@@ -328,7 +361,10 @@
         </div>
         <fieldset class="exec workflow team-only" id="workflow-fields" aria-describedby="f-gates-summary">
           <legend>Workflow</legend>
-          <p class="hint gates-intro">The gates that check each developer turn. Gates with the same stage number run in parallel; stages run in ascending order.</p>
+          <details class="form-help">
+            <summary>How stages run</summary>
+            <p class="hint gates-intro">The gates check each developer turn. Gates with the same stage number run in parallel; stages run in ascending order.</p>
+          </details>
           <ul class="gate-list" id="f-gate-list" aria-label="Gates"></ul>
           <p class="hint gates-summary" id="f-gates-summary" aria-live="polite">Review + Security → Tests, after each developer turn</p>
           <p class="hint gates-config" id="f-gates-config" hidden></p>
@@ -338,11 +374,11 @@
           <div class="field">
             <label for="f-parallel">Parallel milestones</label>
             <input id="f-parallel" name="maxParallel" class="mono narrow" type="text" inputmode="numeric" aria-describedby="f-parallel-hint">
-            <span class="hint" id="f-parallel-hint">Independent milestones that may run at once, each in its own worktree (1-32).</span>
+            <span class="hint" id="f-parallel-hint">1-32 milestones, each in its own worktree</span>
           </div>
           <div class="field" role="radiogroup" aria-labelledby="f-sandbox-label" id="f-sandbox">
             <span class="field-label" id="f-sandbox-label">Sandbox</span>
-            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker" checked><span>Docker container <span class="hint">agents run inside the sandbox image; needs a working Docker engine</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker" checked><span>Docker container <span class="hint">requires Docker and a local sandbox image</span></span></label>
             <label class="check"><input type="radio" name="sandbox" value="host" id="f-sandbox-host"><span>Trusted host <span class="hint">no sandbox: agent commands run on this computer with your user rights</span></span></label>
           </div>
           <label class="check trust" id="f-trust-row" hidden><input type="checkbox" id="f-trusted" name="trustedHost"><span>I trust this request and workspace, and accept that the agents run without a sandbox</span></label>
@@ -359,6 +395,10 @@
               </select>
             </div>
           </div>
+          <details class="form-help">
+            <summary>Execution details</summary>
+            <p class="hint">Independent milestones may run at once, each in its own worktree.</p>
+          </details>
           <p class="hint" id="exec-note">Docker availability is checked when the run starts; run <code>scranton doctor</code> to check it first.</p>
         </fieldset>
         <fieldset class="exec models team-only" id="model-fields" hidden>
@@ -391,9 +431,12 @@
               <span class="hint" id="f-model-angela-note" hidden></span>
             </div>
           </div>
-          <p class="models-need" id="models-need" hidden></p>
+          <p class="models-need" id="models-need" hidden><span id="models-need-text"></span> <button type="button" class="link-btn" id="models-agents" hidden>Open Agents</button></p>
           <p class="hint" id="models-plan" hidden></p>
-          <p class="hint" id="models-note">Only models of signed-in accounts and configured API keys can be picked. pi default uses the model from the agent configuration.</p>
+          <details class="form-help">
+            <summary>Model selection help</summary>
+            <p class="hint" id="models-note">Only models of signed-in accounts and configured API keys can be picked. pi default uses the model from the agent configuration.</p>
+          </details>
           <p class="hint" id="models-docker-note" hidden></p>
           <p class="models-signin" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use.</span> <button type="button" class="link-btn" id="models-accounts">Open Accounts</button></p>
         </fieldset>
@@ -433,6 +476,7 @@
               <option value="replan">Re-planning</option>
               <option value="parallel">Parallel steps</option>
               <option value="evidence">Evidence checks</option>
+              <option value="answer">Direct answer</option>
             </select>
             <span class="hint" id="pf-scenario-hint">One bug, one step, both approvals.</span>
           </div>
@@ -565,7 +609,7 @@
         <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
       </header>
       <div class="drawer-body">
-        <p class="hint accounts-intro">Sign in with your Claude Pro/Max or ChatGPT subscription, or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers. Everything is stored in pi's own credential store on this computer; this page never shows a stored sign-in or key.</p>
+        <p class="hint accounts-intro">Sign in with your Claude Pro/Max or ChatGPT subscription or your Google account (Google Antigravity), or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers. Everything is stored in pi's own credential store on this computer; this page never shows a stored sign-in or key.</p>
         <p class="form-error" id="accounts-error" role="alert" hidden></p>
         <p class="accounts-status" id="accounts-status" role="status" aria-live="polite" tabindex="-1"></p>
         <p class="hint" id="accounts-empty">Loading accounts...</p>
@@ -591,7 +635,7 @@
           </div>
           <p class="login-device mono" id="login-device" hidden></p>
           <form class="login-code" id="login-code" hidden novalidate>
-            <label for="login-code-input">Code or page address <span class="hint">shown after you sign in</span></label>
+            <label for="login-code-input"><span id="login-code-label">Code or page address</span> <span class="hint" id="login-code-hint">shown after you sign in</span></label>
             <div class="login-code-row">
               <input id="login-code-input" class="mono" type="text" maxlength="4096" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="login-code-error">
               <button type="submit" class="btn btn-primary" id="login-code-submit">Submit</button>
@@ -691,7 +735,7 @@
         <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
       </header>
       <div class="drawer-body">
-        <p class="hint accounts-intro">Each agent's model, handoff instruction and system prompt. A saved change applies to runs started afterwards, in every project on this computer; a run in progress keeps what it started with.</p>
+        <p class="hint accounts-intro">Models, handoff instructions and system prompts for all projects. Saved changes apply to new runs; a run in progress keeps its original settings.</p>
         <p class="form-error" id="agents-error" role="alert" hidden></p>
         <p class="accounts-status" id="agents-status" role="status" aria-live="polite" tabindex="-1"></p>
         <ul class="hint agents-warnings" id="agents-warnings" aria-label="Skipped agent settings" hidden></ul>
@@ -863,8 +907,12 @@
       </div>
       <div class="field">
         <label for="p-folder">Folder <span class="hint">optional</span></label>
-        <input id="p-folder" class="mono" type="text" maxlength="1024" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="C:\Users\you\code\app" aria-describedby="p-folder-hint">
+        <div class="folder-row">
+          <input id="p-folder" class="mono" type="text" maxlength="1024" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="C:\Users\you\code\app" aria-describedby="p-folder-hint p-browse-status">
+          <button type="button" class="btn" id="p-browse" aria-describedby="p-browse-status">Browse...</button>
+        </div>
         <span class="hint" id="p-folder-hint">Absolute path of the folder the agents work in. Leave it empty to create a new folder under the default projects folder.</span>
+        <span class="hint form-status" id="p-browse-status" role="status" aria-live="polite"></span>
       </div>
       <label class="check" id="p-create-row"><input type="checkbox" id="p-create" checked><span>Create the folder if it does not exist</span></label>
       <p class="form-error" id="p-error" role="alert" hidden></p>

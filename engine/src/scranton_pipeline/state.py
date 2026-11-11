@@ -44,6 +44,7 @@ class PipelineState(TypedDict, total=False):
     replan_brief: dict[str, Any] | None
     plan_evidence: list[dict[str, Any]]
     plan_requests: list[dict[str, Any]]
+    answer: dict[str, Any]
     plan: dict[str, Any] | None
     plan_digest: str
     risk_flags: list[str]
@@ -67,6 +68,16 @@ class PipelineState(TypedDict, total=False):
     usage: dict[str, int]
     failure: Annotated[dict[str, str] | None, keep_first]
     outcome: Annotated[str, keep_first]
+
+
+def initial_planning(state: PipelineState) -> bool:
+    return (state.get("plan_revision", 0) == 0 and not counter(state, "replans")
+            and not state.get("steps_done") and state.get("step_index", -1) == -1
+            and not state.get("plan_approval") and not state.get("previous_plan")
+            and not state.get("replan_request") and not state.get("replan_brief")
+            and not state.get("wave") and not state.get("lanes")
+            and not any(v for k, v in state.get("counters", {}).items() if k.startswith(("attempts:", "repairs:", "context:", "waves")))
+            and not any(h.get("node") in {"select_step", "implement", "run_lane", "replan"} for h in state.get("history", [])))
 
 
 def get_plan(state: PipelineState) -> Plan | None:

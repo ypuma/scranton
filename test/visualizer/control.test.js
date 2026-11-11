@@ -52,9 +52,9 @@ test('absolute paths: Windows drive, UNC and POSIX', () => {
 
 test('buildRunRequest: a plain run sends the trimmed request and only the fields that were set', () => {
   const c = parseControl(doc());
-  assert.deepEqual(buildRunRequest({ request: '  Build it  ', workspace: '', maxCycles: '', noPlan: false, demo: false }, c), { body: { request: 'Build it' } });
+  assert.deepEqual(buildRunRequest({ request: '  Build it  ', workspace: '', maxCycles: '', noPlan: false, demo: false }, c), { body: { request: 'Build it', conversation: true } });
   assert.deepEqual(buildRunRequest({ request: 'x', workspace: ' D:\\w ', maxCycles: '5', noPlan: true }, c),
-    { body: { request: 'x', workspace: 'D:\\w', maxCycles: 5, noPlan: true } });
+    { body: { request: 'x', workspace: 'D:\\w', maxCycles: 5, noPlan: true, conversation: true } });
 });
 
 test('buildRunRequest: validation names the field', () => {
@@ -69,12 +69,12 @@ test('buildRunRequest: validation names the field', () => {
 
 test('buildRunRequest: a demo needs no request but a known scenario and a sane delay', () => {
   const c = parseControl(doc());
-  assert.deepEqual(buildRunRequest({ request: '', demo: true, scenario: 'breaker', delayMs: '250' }, c), { body: { demo: { scenario: 'breaker', delayMs: 250 } } });
-  assert.deepEqual(buildRunRequest({ request: 'Mine', demo: true, scenario: 'happy', delayMs: '' }, c), { body: { request: 'Mine', demo: { scenario: 'happy' } } });
+  assert.deepEqual(buildRunRequest({ request: '', demo: true, scenario: 'breaker', delayMs: '250' }, c), { body: { demo: { scenario: 'breaker', delayMs: 250 }, conversation: true } });
+  assert.deepEqual(buildRunRequest({ request: 'Mine', demo: true, scenario: 'happy', delayMs: '' }, c), { body: { request: 'Mine', demo: { scenario: 'happy' }, conversation: true } });
   assert.equal(buildRunRequest({ demo: true, scenario: 'nope' }, c).field, 'scenario');
   assert.equal(buildRunRequest({ demo: true, scenario: 'happy', delayMs: '5001' }, c).field, 'delayMs');
   // scenario fields are ignored when demo is off
-  assert.deepEqual(buildRunRequest({ request: 'x', demo: false, scenario: 'nope', delayMs: 'bad' }, c), { body: { request: 'x' } });
+  assert.deepEqual(buildRunRequest({ request: 'x', demo: false, scenario: 'nope', delayMs: 'bad' }, c), { body: { request: 'x', conversation: true } });
 });
 
 test('buildHitlRequest: decision must be offered; feedback needs text within 8000 chars', () => {

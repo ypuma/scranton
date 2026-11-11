@@ -35,11 +35,13 @@ def check(sandbox, argv, *, timeout=30, network=False, writable_state=False):
 
 
 def test_readonly_uid_workspace_network_and_contents(sandbox, monkeypatch):
+    expected_uid = 10001 if sys.platform == "win32" else (getattr(os, "getuid", lambda: 0)() or 10001)
+    assert expected_uid > 0
     monkeypatch.setenv("HOST_SECRET", "not-for-the-container")
     output = check(sandbox, ["python", "-c", ("import os,errno,json,pathlib,socket,subprocess; "
         "p=pathlib.Path('/usr/local/root-write-test'); "
         "exec(\"try:\\n p.write_text('bad')\\nexcept OSError as e:\\n assert e.errno == errno.EROFS\\nelse:\\n raise AssertionError('root writable')\"); "
-        "assert os.getuid()==10001; "
+        f"assert os.getuid()=={expected_uid}; "
         "assert os.listdir('/sys/class/net')==['lo']; "
         "pathlib.Path('created.txt').write_bytes(b'container\\n'); "
         "assert 'HOST_SECRET' not in os.environ; "
@@ -49,7 +51,7 @@ def test_readonly_uid_workspace_network_and_contents(sandbox, monkeypatch):
         "'npm':subprocess.check_output(['npm','--version'],text=True).strip(),"
         "'git':subprocess.check_output(['git','--version'],text=True).strip(),'pytest':pytest.__version__}))")])
     assert (sandbox.workspace / "created.txt").read_bytes() == b"container\n"
-    assert json.loads(output)["uid"] == 10001
+    assert json.loads(output)["uid"] == expected_uid
     print("image contents:", output.strip())
     check(sandbox, ["python", "-c", ("import os,socket; assert 'eth0' in os.listdir('/sys/class/net'); "
                    "s=socket.create_connection(('example.com',443),10); s.close(); print('network available')")], network=True, writable_state=True)

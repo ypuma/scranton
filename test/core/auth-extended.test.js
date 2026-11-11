@@ -22,7 +22,7 @@ const noKey = (v) => assert.ok(!JSON.stringify(v).includes(KEY));
 
 test('installed pi 1.5 API-key login stores key, accounts never disclose it, logout removes only selected provider', async (t) => {
   const { auth, file, notices } = fixture(t);
-  assert.deepEqual((await auth.listAccounts()).map((a) => a.id), ['anthropic', 'openai', 'google']);
+  assert.deepEqual((await auth.listAccounts()).map((a) => a.id), ['anthropic', 'openai', 'google', 'google-antigravity']);
   await auth.setApiKey('google', ` ${KEY} `);
   await auth.setApiKey('deepseek', KEY);
   const stored = JSON.parse(fs.readFileSync(file));

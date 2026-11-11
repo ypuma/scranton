@@ -74,7 +74,10 @@ function readRun(dir, fallbackId = null) {
     `Outcome: ${line(status).slice(0, 80)}${line(finish?.summary) ? ` — ${line(finish.summary).slice(0, 600)}` : ''}`,
     ...[...milestones.values()].map((m) => `- ${line(m.title).slice(0, 180)}: ${line(m.status) || 'pending'}`)
   ], 1500);
-  return remember({ runId, goal, status, startedAt: text(start?.ts) || null,
+  const stored = snapshot?.reply ?? events.findLast((e) => e.type === 'run_reply');
+  const reply = stored && ['answer', 'report', 'summary'].includes(stored.kind) && typeof stored.text === 'string'
+    ? { kind: stored.kind, text: stored.text.slice(0, 4000), ...(stored.truncated || stored.text.length > 4000 ? { truncated: true } : {}) } : null;
+  return remember({ runId, goal, status, reply, startedAt: text(start?.ts) || null,
     endedAt: text(finish?.ts) || (['finished', 'failed', 'aborted'].includes(status) ? text(snapshot?.updatedAt) || null : null), summary });
 }
 
@@ -104,7 +107,8 @@ export function formatThreadContext(runs, { maxChars = 8000 } = {}) {
     const lines = [
       `Run ${line(run.runId)} | ${line(run.status)}`,
       `Goal: ${line(run.goal)}`,
-      ...text(run.summary).split(/\r?\n/).map(line)
+      ...(run.reply ? [`Reply (${line(run.reply.kind)}): ${line(run.reply.text).slice(0, 1500)}`] : []),
+      ...(run.reply ? [`Summary: ${line(run.summary)}`] : text(run.summary).split(/\r?\n/).map(line))
     ];
     const block = linesWithin(lines, remaining);
     if (!block) break;

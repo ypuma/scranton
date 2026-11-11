@@ -13,7 +13,7 @@ dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use
 - Windows, commands run through cmd.exe. Project root: `C:\Users\pumas\Documents\Project_Scranton`.
 - Node v24.22.1. npm 11.19.1 - call it as `npm.cmd` from cmd (`npm` alone is not on PATH for tools).
 - Pi is installed (project dependency; user confirms installation). Do not infer credential availability from old notes. Never print credentials. Use fake pi for deterministic tests; any real-model smoke test must be explicitly scoped and reported separately.
-- Docker Desktop 29.9.2 (Linux engine) is installed since 2026-11-09, and the image `scranton-sandbox:1.5.0` is built locally. Do not install system software or build/pull other images unless the task says so. The Docker sandbox must fail closed; explicit trusted-host execution is not OS isolation. Docker mode needs an explicit provider+model for every role (pi default is refused).
+- Docker Desktop 29.9.2 (Linux engine) is installed since 2026-11-09, and the image `scranton-sandbox:1.5.0` is built locally. Do not install system software or build/pull other images unless the task says so. The Docker sandbox must fail closed; explicit trusted-host execution is not OS isolation. Docker mode needs a resolved provider+model default for every active agent (pi default is refused); New run uses Agents defaults and ignores per-run model picks, while trusted host keeps overrides.
 - Run the test suites one after another, not in parallel: some tests are timing-sensitive under load.
 - The npm registry is reachable.
 - Rust 1.99.1 (rustup, stable-x86_64-pc-windows-msvc) is in `%USERPROFILE%\.cargo\bin`, which is NOT on PATH

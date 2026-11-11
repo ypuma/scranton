@@ -5,7 +5,7 @@
 import { stripBidi, formatClock } from './format.js';
 import { AGENT_IDS, LEGACY_GATES, ROLE_ID_RE, own } from './state.js';
 
-export const PROVIDER_LABEL = { anthropic: 'Claude (Pro/Max)', openai: 'ChatGPT', google: 'Gemini' };
+export const PROVIDER_LABEL = { anthropic: 'Claude (Pro/Max)', openai: 'ChatGPT', 'google-antigravity': 'Google Antigravity', google: 'Gemini' };
 export const ACCOUNT_STATUSES = ['signed_in', 'signed_out', 'expired', 'error'];
 export const STATUS_LABEL = { signed_in: 'Signed in', signed_out: 'Signed out', expired: 'Expired', error: 'Error' };
 // a provider without a sign-in only has a key or none
@@ -13,21 +13,31 @@ export const KEY_STATUS_LABEL = { signed_in: 'Key set', signed_out: 'No key', ex
 export const KIND_LABEL = { oauth: 'OAuth', api_key: 'API key' };
 export const AUTH_METHODS = ['oauth', 'api_key'];
 // an older server sends no methods: its two accounts are subscription sign-ins
-const DEFAULT_METHODS = { anthropic: ['oauth'], openai: ['oauth'], google: ['api_key'] };
+const DEFAULT_METHODS = { anthropic: ['oauth'], openai: ['oauth'], 'google-antigravity': ['oauth'], google: ['api_key'] };
 export const GEMINI_NOTE = 'Gemini uses an API key from Google AI Studio.';
+export const ANTIGRAVITY = 'google-antigravity';
+// the Google sign-in; what it may use is up to Google, so nothing here promises models or quota. The refresh
+// credential stays on the host; a Docker run reaches it through a per-run host broker with temporary access.
+export const ANTIGRAVITY_SCOPE = 'Usable in trusted-host, Pipeline and Docker runs. The sign-in stays on this computer and is refreshed here; a Docker run only gets temporary access for that run.';
+export const ANTIGRAVITY_NOTE = `Sign in with your Google account, no API key needed. ${ANTIGRAVITY_SCOPE} Which models you can use depends on that account.`;
 export const KEY_MAX = 4096;
 export const LOGIN_STATES = ['starting', 'waiting_browser', 'waiting_code', 'completing', 'done', 'failed', 'cancelled'];
 export const LOGIN_TERMINAL = new Set(['done', 'failed', 'cancelled']);
 export const LOGIN_INPUT_MAX = 4096;
+// Antigravity takes only the whole loopback redirect (its state is checked), never a code on its own
+export const ANTIGRAVITY_CODE_TEXT = 'If this page does not update, copy the full address from the browser\'s address bar once Google has sent you on (it starts with http://localhost: and contains code= and state=) and paste it below. The code alone does not work.';
+export const ANTIGRAVITY_INPUT_ERROR = 'Paste the full address from the browser\'s address bar, starting with http://localhost: and containing code= and state=. The code alone does not work.';
 export const AUTH_POLL_MS = 1000;
 // the server opens the sign-in page again at most once per 2 s
 export const REOPEN_MS = 2000;
 export const MODEL_ROLES = AGENT_IDS;
 export const ROLE_LABEL = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela' };
 export const MODELS_KEY = 'scranton.models';
-export const DOCKER_NOTE = 'Subscriptions are passed to containers as short-lived access tokens.';
+// Claude and ChatGPT get a minted token; Antigravity only a run-scoped broker capability (.enma/antigravity-contract.md)
+export const DOCKER_NOTE = 'Claude and ChatGPT sign-ins are passed to containers as short-lived access tokens. A Google Antigravity sign-in stays on this computer; the agents in a container get a temporary permission to make model calls through it until that permission expires.';
 export const DOCKER_KEY_NOTE = 'API keys are passed as they are, so the agents in a container can read them.';
-export const DOCKER_MODELS_NOTE = 'The Docker sandbox needs a model for every role. Pick one (pi default only works on the trusted host).';
+export const DOCKER_MODELS_NOTE = 'The Docker sandbox runs every agent on its agent default, and this server does not report them. Set a model for each agent in Agents.';
+export const DOCKER_DEFAULTS_NOTE = 'In the Docker sandbox every agent runs on its agent default from Agents. Models picked here are kept for trusted-host runs.';
 export const PI_DEFAULT_NOTE = 'Agent default is the model set for the agent in the Agents drawer, scranton.config.json or SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL. A role without one uses pi default, pi\'s own model, which only works on the trusted host.';
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -112,7 +122,7 @@ export function nextLogin({ prev = null, server = null, accounts = [], cancelled
   return { ...prev, state: 'failed', error: prev.error ?? 'The sign-in ended without a result. Check the account status and try again.' };
 }
 
-// -> { title, text, tone: 'busy' | 'done' | 'error' | '', url, reopen, code, canCancel, finished }
+// -> { title, text, tone: 'busy' | 'done' | 'error' | '', url, reopen, code, codeLabel, codeHint, canCancel, finished }
 export function loginView(login, accounts = []) {
   const label = labelOf(accounts, login.provider);
   const reason = login.error || login.message || 'no reason given';
@@ -124,6 +134,8 @@ export function loginView(login, accounts = []) {
     url,
     reopen: Boolean(url) && loginActive(login),
     code: login.state === 'waiting_code',
+    codeLabel: login.provider === ANTIGRAVITY ? 'Address of the page after sign-in' : 'Code or page address',
+    codeHint: login.provider === ANTIGRAVITY ? 'the whole http://localhost address' : 'shown after you sign in',
     canCancel: loginActive(login),
     finished: LOGIN_TERMINAL.has(login.state),
   };
@@ -135,7 +147,9 @@ export function loginView(login, accounts = []) {
       view.text = `Finish signing in to ${label} in your browser. This page updates by itself.`;
       break;
     case 'waiting_code':
-      view.text = `Finish signing in to ${label} in your browser. If the page shows a code or does not return here, paste the code or the full address of that page below.`;
+      view.text = login.provider === ANTIGRAVITY
+        ? `Finish signing in to ${label} in your browser. ${ANTIGRAVITY_CODE_TEXT}`
+        : `Finish signing in to ${label} in your browser. If the page shows a code or does not return here, paste the code or the full address of that page below.`;
       break;
     case 'completing':
       view.text = `Finishing the ${label} sign-in...`;
@@ -157,6 +171,8 @@ export function statusLabel(a) {
   return (methodsOf(a).includes('oauth') ? STATUS_LABEL : KEY_STATUS_LABEL)[a.status];
 }
 
+const signInKind = (a) => (a.id === ANTIGRAVITY ? 'Google account sign-in' : 'Subscription sign-in');
+
 // What one Accounts row shows. busy = some login is running (one at a time).
 // -> { status, tone, kind, custom, detail, signIn, signInLabel, signInDisabled, signOut, addKey, keyLabel, removeKey, removeProvider }
 export function accountView(a, { busy = false } = {}) {
@@ -171,10 +187,12 @@ export function accountView(a, { busy = false } = {}) {
     else if (a.status === 'error') detail = 'The stored credential could not be read.';
     else if (a.custom) detail = [apiLabel(a.api), a.baseUrl].filter(Boolean).join(' · ');
     else if (a.id === 'google') detail = GEMINI_NOTE;
+    else if (a.id === ANTIGRAVITY && a.status === 'signed_out') detail = ANTIGRAVITY_NOTE;
     else if (a.status === 'signed_in' && a.kind === 'api_key') detail = methods.includes('oauth') ? 'Uses an API key. Sign in to use your subscription.' : 'Uses an API key.';
     // the past expiresAt of a renewable sign-in is not a problem, so it is not shown
-    else if (a.status === 'signed_in' && oauth && a.renewsOnUse === true) detail = 'Subscription sign-in. Renews automatically on next use.';
-    else if (a.status === 'signed_in') detail = 'Subscription sign-in, refreshed automatically.';
+    else if (a.status === 'signed_in' && oauth && a.renewsOnUse === true) detail = `${signInKind(a)}. Renews automatically on next use.`;
+    else if (a.status === 'signed_in') detail = `${signInKind(a)}, refreshed automatically.`;
+    if (a.id === ANTIGRAVITY && a.status === 'signed_in') detail = `${detail} ${ANTIGRAVITY_SCOPE}`;
   }
   return {
     status: statusLabel(a),
@@ -201,7 +219,7 @@ export function accountsSummary(accounts) {
 }
 
 export function signOutConfirm(a, { runActive = false } = {}) {
-  const detail = `Removes the ${a.label} sign-in from pi's credential store on this computer. Runs need a new sign-in or an API key to use it again.`;
+  const detail = `Removes the ${a.label} sign-in from pi's credential store on this computer. Runs need a new sign-in${methodsOf(a).includes('api_key') ? ' or an API key' : ''} to use it again.`;
   return {
     title: `Sign out of ${a.label}?`,
     detail: runActive ? `${detail} A run is in progress: its agents that use ${a.label} fail at their next model call.` : detail,
@@ -231,9 +249,20 @@ export function removeProviderConfirm(a, { runActive = false } = {}) {
 export function buildLoginInput(value, login) {
   if (!login || login.state !== 'waiting_code') return { error: 'The sign-in is not waiting for a code any more.' };
   const v = raw(value).trim();
-  if (!v) return { error: 'Paste the code or the address of the page first.' };
+  if (!v) return { error: login.provider === ANTIGRAVITY ? ANTIGRAVITY_INPUT_ERROR : 'Paste the code or the address of the page first.' };
   if (v.length > LOGIN_INPUT_MAX) return { error: `That is ${v.length} characters; the limit is ${LOGIN_INPUT_MAX}.` };
+  // only the shape is checked here; the server checks the exact callback and state
+  if (login.provider === ANTIGRAVITY && !isRedirect(v)) return { error: ANTIGRAVITY_INPUT_ERROR };
   return { body: { id: login.id, value: v } };
+}
+
+function isRedirect(v) {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' && Boolean(u.searchParams.get('code')) && Boolean(u.searchParams.get('state'));
+  } catch {
+    return false;
+  }
 }
 
 // POST /api/auth/login/open names the session only: the server opens the address it got from the provider.
@@ -513,20 +542,28 @@ export function runRoles({ noPlan = false, gates = LEGACY_GATES } = {}) {
 
 const roleLabel = (role, names) => own(ROLE_LABEL, role) ?? (names ? own(names, role) : undefined) ?? role;
 
-// The server refuses a Docker run with a role on pi default that has no agent default either
-// (src/core/sandbox.js validateDockerModels). A demo and the trusted host are not checked.
-// configured = GET /api/control defaults.models, which hold for every workspace: null (an older server: every
-// pi default is a gap) or { role: { provider, model } | null }, custom agents included.
-// run = { demo, host, noPlan, configured, gates } -> [role]
-export function dockerGaps(values, { demo = false, host = false, noPlan = false, configured = null, gates } = {}) {
-  if (demo || host) return [];
-  return runRoles({ noPlan, gates }).filter((role) => !own(values ?? {}, role) && !own(configured ?? {}, role));
+// A Docker run uses the agent defaults (GET /api/control defaults.models) and never a model picked in the drawer:
+// a stored pick is for the trusted host. A demo uses no model at all.
+export function usesAgentDefaults({ demo = false, host = false } = {}) {
+  return !demo && !host;
 }
 
-// The default option of a role select: what that role will actually use.
-export function piDefaultLabel(configured, role) {
+// The roles a Docker run would start without an agent default, which the server refuses
+// (src/core/sandbox.js validateDockerModels). A demo and the trusted host are not checked.
+// configured = GET /api/control defaults.models, which hold for every workspace: null (an older server: every
+// role is a gap) or { role: { provider, model } | null }, custom agents included.
+// run = { demo, host, noPlan, configured, gates } -> [role]
+export function dockerGaps({ demo = false, host = false, noPlan = false, configured = null, gates } = {}) {
+  if (!usesAgentDefaults({ demo, host })) return [];
+  return runRoles({ noPlan, gates }).filter((role) => !own(configured ?? {}, role));
+}
+
+// The default option of a role select: what that role will actually use. docker: pi default is no option there.
+export function piDefaultLabel(configured, role, docker = false) {
   const c = configured ? own(configured, role) : null;
-  return c ? `Agent default (${c.provider}/${c.model})` : 'pi default';
+  if (c) return `Agent default (${c.provider}/${c.model})`;
+  if (docker) return configured ? 'No agent default' : 'Agent default';
+  return 'pi default';
 }
 
 // What the drawer says about the roles dockerGaps names; an older server keeps DOCKER_MODELS_NOTE.
@@ -534,7 +571,8 @@ export function piDefaultLabel(configured, role) {
 export function dockerNote(gaps, configured = null, labels = null) {
   if (!gaps.length) return '';
   if (!configured) return DOCKER_MODELS_NOTE;
-  return `The Docker sandbox needs a model for ${names(gaps.map((r) => roleLabel(r, labels)))}. Scranton's configuration sets none, and pi's own default only works on the trusted host. Pick ${gaps.length > 1 ? 'one for each' : 'one'}.`;
+  const who = names(gaps.map((r) => roleLabel(r, labels)));
+  return `The Docker sandbox runs every agent on its agent default, and ${who} ${gaps.length > 1 ? 'have none. Set one for each' : 'has none. Set one'} in Agents.`;
 }
 
 const names = (list) => (list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : list[0] ?? '');
@@ -548,10 +586,16 @@ export function planNote(catalog, accounts) {
   return `Not every listed model is included in every ${plans.join(' or ')} plan. If a run reports a permission error, pick another model.`;
 }
 
-// values = { role: select value }, run = { demo, host, noPlan, gates, names } of the run to start (none: execution
-// not checked). -> { models } (only the roles that are not pi default; with gates, only the roles the run uses)
-// or { error, field, fields }
+// values = { role: select value }, run = { demo, host, noPlan, configured, gates, names } of the run to start (none:
+// execution not checked). -> { models } (only the roles that are not pi default; with gates, only the roles the run
+// uses; none for Docker) or { error, field, fields }
 export function buildModels(values, catalog, run = null) {
+  if (run?.demo) return { models: {} };
+  if (run && usesAgentDefaults(run)) {
+    const gaps = dockerGaps(run);
+    if (!gaps.length) return { models: {} };
+    return { error: dockerNote(gaps, run.configured, run.names), field: `models.${gaps[0]}`, fields: gaps.map((r) => `models.${r}`) };
+  }
   const models = {};
   const roles = run?.gates ? runRoles({ noPlan: run.noPlan, gates: run.gates }) : MODEL_ROLES;
   for (const role of roles) {
@@ -563,16 +607,6 @@ export function buildModels(values, catalog, run = null) {
       return { error: `${roleLabel(role, run?.names)}'s model is not available any more. Pick another one or pi default.`, field: `models.${role}` };
     }
     models[role] = { provider: c.provider, model: c.model };
-  }
-  const gaps = run ? dockerGaps(values, run) : [];
-  if (gaps.length) {
-    return {
-      error: run.configured
-        ? dockerNote(gaps, run.configured, run.names)
-        : `The Docker sandbox needs a model for ${names(gaps.map((r) => roleLabel(r, run.names)))}. Pick ${gaps.length > 1 ? 'one for each' : 'one'} (pi default only works on the trusted host).`,
-      field: `models.${gaps[0]}`,
-      fields: gaps.map((r) => `models.${r}`),
-    };
   }
   return { models };
 }

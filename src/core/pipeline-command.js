@@ -4,17 +4,54 @@ import { spawn } from 'node:child_process';
 import { PACKAGE_ROOT, parseCommandSpec } from './config.js';
 import { killTree } from './pi-command.js';
 
-export function resolvePipelineCommand({ env = process.env, root = PACKAGE_ROOT } = {}) {
-  if (env.SCRANTON_PIPELINE_COMMAND) {
-    const argv = parseCommandSpec(env.SCRANTON_PIPELINE_COMMAND, 'SCRANTON_PIPELINE_COMMAND');
-    if (!argv?.length || argv.some((a) => !a || a.includes('\0'))) throw Error('Invalid SCRANTON_PIPELINE_COMMAND');
+export function resolvePipelineCommand({ env = process.env, root = PACKAGE_ROOT, platform = process.platform, arch = process.arch } = {}) {
+  if (env.SCRANTON_PIPELINE_COMMAND !== undefined) {
+    const value = env.SCRANTON_PIPELINE_COMMAND;
+    if (typeof value !== 'string' && (!Array.isArray(value) || value.some((a) => typeof a !== 'string'))) throw Error('Invalid SCRANTON_PIPELINE_COMMAND');
+    const argv = parseCommandSpec(value, 'SCRANTON_PIPELINE_COMMAND');
+    if (!argv?.length || argv.some((a) => !a.trim() || a.includes('\0'))) throw Error('Invalid SCRANTON_PIPELINE_COMMAND');
     return { argv, source: 'env' };
   }
-  for (const [source, rel] of [['bundled', 'engine-runtime/python/python.exe'], ['dev', '.scratch/pipeline/venv/Scripts/python.exe']]) {
-    const exe = path.join(root, rel);
-    if (fs.existsSync(exe)) return { argv: [exe, '-m', 'scranton_pipeline'], source };
+  root = path.resolve(root);
+  const runtime = path.join(root, 'engine-runtime'), manifest = path.join(runtime, 'launch.json');
+  if (fs.lstatSync(runtime, { throwIfNoEntry: false }) || fs.existsSync(path.join(root, 'packaging-manifest.json'))) {
+    if (fs.lstatSync(manifest, { throwIfNoEntry: false })) {
+      let launch;
+      try { launch = JSON.parse(fs.readFileSync(manifest, 'utf8')); }
+      catch { throw Error('Invalid Pipeline launch.json: cannot read launch manifest'); }
+      if (!launch || Array.isArray(launch) || launch.schema !== 1 ||
+          Object.keys(launch).sort().join(',') !== 'arch,args,executable,platform,schema' ||
+          !['win32', 'darwin', 'linux'].includes(launch.platform) || !['x64', 'arm64'].includes(launch.arch)) throw Error('Invalid Pipeline launch.json: unsupported schema or target');
+      if (launch.platform !== platform || launch.arch !== arch) throw Error(`Pipeline runtime target mismatch: bundle ${launch.platform}/${launch.arch}, host ${platform}/${arch}`);
+      const expected = platform === 'win32' ? 'python/python.exe' : 'python/bin/python3';
+      if (launch.executable !== expected || !Array.isArray(launch.args) ||
+          JSON.stringify(launch.args) !== JSON.stringify(['-I', '-B', 'bootstrap.py'])) throw Error('Invalid Pipeline launch.json: executable or args');
+      const exe = bundledFile(runtime, launch.executable), bootstrap = bundledFile(runtime, launch.args[2]);
+      return { argv: [exe, '-I', '-B', bootstrap], source: 'bundled' };
+    }
+    // Old Windows bundles predate launch.json; never bypass a present invalid manifest.
+    const legacy = path.join(runtime, 'python/python.exe');
+    if (platform === 'win32' && arch === 'x64' && fs.statSync(legacy, { throwIfNoEntry: false })?.isFile()) {
+      return { argv: [bundledFile(runtime, 'python/python.exe'), '-m', 'scranton_pipeline'], source: 'bundled' };
+    }
+    throw Error('Pipeline runtime launch.json is missing; reinstall the packaged runtime');
+  }
+  if (!['win32', 'darwin', 'linux'].includes(platform) || !['x64', 'arm64'].includes(arch)) throw Error(`Unsupported Pipeline runtime target: ${platform}/${arch}`);
+  const suffix = platform === 'win32' ? 'Scripts/python.exe' : 'bin/python';
+  for (const venv of ['.scratch/pipeline/venv', 'engine/.venv']) {
+    const exe = path.join(root, venv, suffix);
+    if (fs.statSync(exe, { throwIfNoEntry: false })?.isFile()) return { argv: [exe, '-m', 'scranton_pipeline'], source: 'dev' };
   }
   throw Error('No bundled or development Pipeline runtime found');
+}
+
+function bundledFile(runtime, relative) {
+  const file = path.resolve(runtime, relative);
+  try {
+    const real = fs.realpathSync(file), base = fs.realpathSync(runtime), rel = path.relative(base, real);
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) || !fs.statSync(real).isFile()) throw Error();
+  } catch { throw Error('Invalid Pipeline launch.json: runtime file missing or outside engine-runtime'); }
+  return file;
 }
 
 export function pipelineChildEnv(env = process.env) {

@@ -30,3 +30,22 @@ test('doctor reports account metadata, uses no-refresh checks, and never prints 
   assert.doesNotMatch(output, /FAKE_ACCESS|FAKE_REFRESH|FAKE_KEY/);
   assert.deepEqual(fs.readFileSync(authPath), before);
 });
+
+test('doctor directs missing Docker models to active agent defaults in Agents', async (t) => {
+  const root = path.resolve('.scratch/docker-agent-defaults'); fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, 'doctor-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const previous = Object.fromEntries(['PATH', 'Path'].map((key) => [key, process.env[key]]));
+  for (const key of Object.keys(previous)) process.env[key] = '';
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const script = path.join(dir, 'fake-pi.mjs');
+  fs.writeFileSync(script, "console.log('fake-pi');\n");
+  const config = loadConfig({ cwd: dir, env: {}, fileConfig: {
+    pi: { command: [process.execPath, script] }, workflow: { gates: [['hank']] }, execution: { sandbox: { mode: 'docker' } }
+  } });
+  let output = '';
+  await runDoctor({ config, env: { SCRANTON_PIPELINE_COMMAND: JSON.stringify([path.join(dir, 'missing-engine')]) }, auth: { async listAccounts() { return []; } }, stdout: { write: (s) => output += s } });
+  assert.match(output, /Docker requires an explicit provider and model for michael, dwight, hank; set the agent default for each role in Agents/);
+  assert.doesNotMatch(output, /Options → Models/);
+  assert.match(output, /SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL/);
+});

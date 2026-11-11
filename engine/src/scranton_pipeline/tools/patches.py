@@ -2,6 +2,8 @@
 import ast
 import hashlib
 import json
+import os
+import stat
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +34,23 @@ def _writable(policy: PathPolicy, rel: str) -> Path:
     return path
 
 
+def _mode(path: Path) -> int | None:
+    if os.name == "nt":
+        return None
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    return metadata.st_mode & 0o777 if stat.S_ISREG(metadata.st_mode) else None
+
+
+def _write(path: Path, data: bytes, mode: int | None) -> None:
+    if mode is None:
+        write_bytes_atomic(path, data)
+    else:
+        write_bytes_atomic(path, data, mode=mode)
+
+
 def _newline(text: str, newline: str) -> bytes:
     return text.replace("\r\n", "\n").replace("\n", newline).encode("utf-8")
 
@@ -40,6 +59,7 @@ def validate_and_apply(edits: Sequence[FileEdit], *, workspace: Path, policy: Pa
                        scope: str, undeclared_budget: int, limits: Limits) -> ApplyOutcome:
     proposed: dict[str, bytes | None] = {}
     originals: dict[str, bytes | None] = {}
+    original_modes: dict[str, int | None] = {}
     rejected: list[str] = []
     undeclared: list[str] = []
     seen: set[str] = set()
@@ -62,6 +82,7 @@ def validate_and_apply(edits: Sequence[FileEdit], *, workspace: Path, policy: Pa
                 raise ValueError("file too large")
             old = path.read_bytes() if path.exists() else None
             originals[rel] = old
+            original_modes[rel] = _mode(path)
             if old is not None and len(old) > limits.max_file_bytes:
                 raise ValueError("file too large")
             if edit.action == "create":
@@ -121,7 +142,7 @@ def validate_and_apply(edits: Sequence[FileEdit], *, workspace: Path, policy: Pa
             if data is None:
                 (workspace / rel).unlink(missing_ok=True)
             else:
-                write_bytes_atomic(workspace / rel, data)
+                _write(_writable(policy, rel), data, original_modes[rel])
         raise EngineError(FailureClass.INFRASTRUCTURE, "edit_io_error", "Edits rolled back after I/O failure") from exc
     return ApplyOutcome(True, list(proposed), [], undeclared)
 
@@ -177,10 +198,11 @@ def apply_to_source(*, workspace: Path, source: Path, changes: Sequence[tuple[st
     if conflicts:
         return SourceApplyResult(applied=[], conflicts=conflicts, rolled_back=False)
     if journal is None or journal.get("state") == "rolled_back":
+        modes = {rel: _mode(_writable(policy, rel)) for rel in rows}
         for rel, row in rows.items():
             if row["before"] is not None:
-                write_bytes_atomic(backup_dir / rel, _writable(policy, rel).read_bytes())
-        journal = {"identity": identity, "state": "prepared", "done": []}
+                _write(backup_dir / rel, _writable(policy, rel).read_bytes(), modes[rel])
+        journal = {"identity": identity, "state": "prepared", "done": [], "modes": modes}
         write_bytes_atomic(journal_path, json.dumps(journal, sort_keys=True).encode())
     # Backups are verified before every write, including recovery after a hard crash.
     for rel, row in rows.items():
@@ -197,7 +219,9 @@ def apply_to_source(*, workspace: Path, source: Path, changes: Sequence[tuple[st
                 if data is None:
                     target.unlink(missing_ok=True)
                 else:
-                    write_bytes_atomic(target, data)
+                    permissions = (_mode(_writable(workspace_policy, rel)) if rows[rel]["action"] == "A"
+                                   else journal.get("modes", {}).get(rel))
+                    _write(target, data, permissions)
             journal["done"] = list(dict.fromkeys([*journal["done"], rel]))
             write_bytes_atomic(journal_path, json.dumps(journal, sort_keys=True).encode())
         journal["state"] = "complete"
@@ -208,7 +232,8 @@ def apply_to_source(*, workspace: Path, source: Path, changes: Sequence[tuple[st
             if row["before"] is None:
                 target.unlink(missing_ok=True)
             else:
-                write_bytes_atomic(target, (backup_dir / rel).read_bytes())
+                permissions = journal.get("modes", {}).get(rel, _mode(backup_dir / rel))
+                _write(target, (backup_dir / rel).read_bytes(), permissions)
         journal["state"] = "rolled_back"
         write_bytes_atomic(journal_path, json.dumps(journal, sort_keys=True).encode())
         return SourceApplyResult(applied=[], conflicts=[{"path": "", "reason": "I/O failure; delivery rolled back"}], rolled_back=True)

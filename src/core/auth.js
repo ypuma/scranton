@@ -6,13 +6,15 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { sleepSync } from './util.js';
+import { antigravityProvider } from './antigravity/provider.js';
 
 export const AUTH_PROVIDERS = Object.freeze([
   { id: 'anthropic', label: 'Claude (Pro/Max)', methods: ['oauth', 'api_key'] },
   { id: 'openai', label: 'ChatGPT', methods: ['oauth', 'api_key'] },
-  { id: 'google', label: 'Gemini', methods: ['api_key'] }
+  { id: 'google', label: 'Gemini', methods: ['api_key'] },
+  { id: 'google-antigravity', label: 'Google Antigravity', methods: ['oauth'] }
 ]);
-const hosts = { anthropic: ['claude.ai'], openai: ['auth.openai.com'] };
+const hosts = { anthropic: ['claude.ai'], openai: ['auth.openai.com'], 'google-antigravity': ['accounts.google.com'] };
 const terminal = new Set(['done', 'failed', 'cancelled']);
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const cancelled = () => new Error('Login cancelled');
@@ -38,6 +40,7 @@ function isRefreshRejection(provider, error) {
       /^OpenAI OAuth token request failed \((?:400|401)\):/.test(message) ||
       /^Stored OpenAI OAuth credential does not contain an issued client ID; reconnect ChatGPT\b/.test(message) ||
       /^OpenAI OAuth grant did not include chatgpt\.tokens\.use\.direct\b/.test(message))) return true;
+    if (provider === 'google-antigravity' && /^Antigravity token refresh rejected \((?:400|401)\)$/.test(message)) return true;
     if (provider === 'anthropic' && /^Anthropic token refresh request failed\. url=https:\/\/platform\.claude\.com\/v1\/oauth\/token; details=Error: HTTP request failed\. status=(?:400|401);/.test(message)) return true;
   }
   return false;
@@ -56,7 +59,9 @@ export async function openAuthBrowser(provider, value, { platform = process.plat
 
 async function defaultRuntime(options) {
   const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
-  return ModelRuntime.create(options);
+  const runtime = await ModelRuntime.create(options);
+  runtime.registerNativeProvider(antigravityProvider());
+  return runtime;
 }
 
 export function createAuthService({ env = process.env, authPath, runtimeFactory = defaultRuntime,
@@ -93,7 +98,7 @@ export function createAuthService({ env = process.env, authPath, runtimeFactory 
   const snapshot = () => session ? { ...session } : null;
   const update = (fields) => { Object.assign(session, fields); onChange(snapshot()); };
   const providerId = (id) => {
-    if (!['anthropic', 'openai'].includes(id)) throw failure(400, 'Unknown provider');
+    if (!['anthropic', 'openai', 'google-antigravity'].includes(id)) throw failure(400, 'Unknown provider');
     return id;
   };
   async function store() {
@@ -180,7 +185,7 @@ export function createAuthService({ env = process.env, authPath, runtimeFactory 
         const cancel = () => finish(null, cancelled());
         pending = { finish };
         signal.addEventListener('abort', cancel, { once: true });
-        update({ state: 'waiting_code', message: 'Complete sign-in in your browser, or paste the authorization code / redirect URL' });
+        update({ state: 'waiting_code', message: provider === 'google-antigravity' ? 'Complete sign-in in your browser, or paste the complete redirect URL including code and state (not a bare code)' : 'Complete sign-in in your browser, or paste the authorization code / redirect URL' });
         if (signal.aborted) cancel();
       });
     };
@@ -202,10 +207,11 @@ export function createAuthService({ env = process.env, authPath, runtimeFactory 
         clearRenewal(provider);
         // A successful Pi login has already saved the credential, even after a late abort.
         update({ state: 'done', message: 'Signed in' });
-      } catch {
+      } catch (error) {
+        const setup = provider === 'google-antigravity' && error?.code === 'SCRANTON_ANTIGRAVITY_SETUP';
         update({ state: timedOut ? 'failed' : controller.signal.aborted ? 'cancelled' : 'failed',
           message: timedOut ? 'Sign-in timed out' : controller.signal.aborted ? 'Sign-in cancelled' : 'Sign-in failed',
-          error: timedOut ? 'Sign-in timed out; try again' : controller.signal.aborted ? undefined : 'Sign-in failed; try again' });
+          error: timedOut ? 'Sign-in timed out; try again' : controller.signal.aborted ? undefined : setup ? 'Google Antigravity project unavailable; complete account setup in Antigravity and sign in again' : 'Sign-in failed; try again' });
       } finally {
         clearTimeout(timer);
         pending?.finish(null, cancelled());
@@ -252,7 +258,7 @@ export function createAuthService({ env = process.env, authPath, runtimeFactory 
     const custom = providerStore.list().map(({ id, label, methods }) => ({ id, label, methods }));
     return { providers: [...builtinCatalog.filter((p) => p.id !== 'openai-codex').map((p) => ({ id: p.id,
       label: AUTH_PROVIDERS.find((a) => a.id === p.id)?.label ?? p.name ?? p.id,
-      methods: [...(p.auth.oauth ? ['oauth'] : []), ...(p.auth.apiKey?.login ? ['api_key'] : [])] })).filter((p) => p.methods.length), ...custom] };
+      methods: [...(p.auth.oauth ? ['oauth'] : []), ...(p.auth.apiKey?.login ? ['api_key'] : [])] })).filter((p) => p.methods.length), AUTH_PROVIDERS.find((p) => p.id === 'google-antigravity'), ...custom] };
   }
   async function saveKey(provider, key) {
     const r = await runtime();
@@ -313,6 +319,7 @@ export function createAuthService({ env = process.env, authPath, runtimeFactory 
     finally { keyOperation = false; }
   }
   async function resolveDockerCredential(provider, { minExpiryMs } = {}) {
+    if (provider === 'google-antigravity') throw new Error('Google Antigravity credentials stay on the host; Docker must use the run-scoped inference broker.');
     try {
       const data = await store();
       const custom = providerStore.list().find((p) => p.id === provider);
@@ -398,7 +405,7 @@ export function createAuthService({ env = process.env, authPath, runtimeFactory 
   function checkRenewals(accounts) {
     if (closed || operation || keyOperation) return;
     for (const account of accounts) {
-      if (!['anthropic', 'openai'].includes(account.id) || !account.renewsOnUse) continue;
+      if (!['anthropic', 'openai', 'google-antigravity'].includes(account.id) || !account.renewsOnUse) continue;
       const previous = renewals.get(account.id);
       if (previous?.pending || previous && now() - previous.startedAt < 5 * 60 * 1000) continue;
       const entry = { startedAt: now(), pending: true };

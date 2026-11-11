@@ -12,18 +12,19 @@ export function summaryLine(text, max = 110) {
   return '';
 }
 
-export function planRequestBody(request) {
+export function planRequestBody(request, conversation = false) {
   return [
     '# Planning request',
     '',
     'Break the following request into 1-7 small, independently testable milestones with explicit dependsOn prerequisite IDs. Use [] only for genuinely independent, non-overlapping work.',
     'Inspect the workspace (your current directory) first if it already contains code.',
     '',
+    ...(conversation ? ['## Direct answer', '', 'If the request is a question, inquiry about the codebase, or needs no file changes, inspect the workspace with your read tools, answer directly, and end with [ANSWER_READY] on its own last line. Do NOT output a milestones JSON block. If changes are needed, plan milestones as normal and end with [PLAN_READY]. Never create or modify files while answering.', ''] : []),
     '## Request',
     '',
     request,
     '',
-    '## Required answer',
+    conversation ? '## Required answer when changes are needed' : '## Required answer',
     '',
     'Reply with ONE ```json block of this exact shape, then the keyword on its own last line:',
     '',

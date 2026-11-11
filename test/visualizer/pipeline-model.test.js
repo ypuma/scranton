@@ -196,7 +196,7 @@ test('buildRunBody: a pipeline run sends exactly the fields of the contract', ()
       task: 'Fix the parser', delivery: 'apply', sandbox: { mode: 'docker' },
       setup: [{ id: 'deps', command: 'npm ci', network: true }],
       checks: [{ id: 'tests', kind: 'test', command: 'python -m pytest -q', required: true }],
-      models: MODELS, approvals: { plan: 'always' }, replans: 1, parallelSteps: 2, grounding: 'enforce', guidance: false,
+      models: MODELS, approvals: { plan: 'always' }, replans: 1, parallelSteps: 2, grounding: 'enforce', guidance: false, conversation: true,
     },
   });
   assert.deepEqual(buildRunBody({ ...FORM, image: 'scranton-sandbox:1.5.0', approvals: 'auto_low_risk', delivery: 'patch' }).body.sandbox, { mode: 'docker', image: 'scranton-sandbox:1.5.0' });
@@ -205,9 +205,9 @@ test('buildRunBody: a pipeline run sends exactly the fields of the contract', ()
 
 test('buildRunBody: a demo needs no checks or models and sends only task, demo, scenario, delivery and sandbox', () => {
   assert.deepEqual(buildRunBody({ demo: true, task: '', delivery: 'apply', sandbox: 'host', trustHost: false, models: {} }),
-    { body: { task: DEMO_TASK, demo: true, demoScenario: 'basic', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: false } });
+    { body: { task: DEMO_TASK, demo: true, demoScenario: 'basic', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: false, conversation: true } });
   assert.deepEqual(buildRunBody({ demo: true, task: 'Try it', delivery: 'patch', sandbox: 'docker' }),
-    { body: { task: 'Try it', demo: true, demoScenario: 'basic', delivery: 'patch', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false } });
+    { body: { task: 'Try it', demo: true, demoScenario: 'basic', delivery: 'patch', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false, conversation: true } });
 });
 
 // section 19. Guards `demoScenario: demoScenario(form.demoScenario).id` and `sandbox: sb.sandbox` in the demo body,
@@ -216,7 +216,7 @@ test('buildRunBody: a demo sends its scenario and sandbox; the host needs no ack
   const demo = { demo: true, task: '', delivery: 'apply', image: '', trustHost: false, checks: 'ignored', models: {} };
   for (const id of ['basic', 'replan', 'parallel']) {
     assert.deepEqual(buildRunBody({ ...demo, demoScenario: id, sandbox: 'docker' }).body,
-      { task: DEMO_TASK, demo: true, demoScenario: id, delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false }, id);
+      { task: DEMO_TASK, demo: true, demoScenario: id, delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false, conversation: true }, id);
     assert.deepEqual(buildRunBody({ ...demo, demoScenario: id, sandbox: 'host' }).body.sandbox, { mode: 'host' }, `${id} on the host`);
   }
   assert.equal(buildRunBody({ ...demo, demoScenario: '', sandbox: 'host' }).body.demoScenario, 'basic', 'an empty or unknown choice is the default');
@@ -233,7 +233,7 @@ test('buildRunBody: a demo sends its scenario and sandbox; the host needs no ack
 test('buildRunBody: the evidence demo is accepted and always sends enforce; the other scenarios and real runs keep the choice', () => {
   const demo = { demo: true, task: '', delivery: 'apply', sandbox: 'host', guidance: true };
   assert.deepEqual(buildRunBody({ ...demo, demoScenario: 'evidence', grounding: 'observe' }),
-    { body: { task: DEMO_TASK, demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: true } });
+    { body: { task: DEMO_TASK, demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: true, conversation: true } });
   assert.equal(buildRunBody({ ...demo, demoScenario: 'evidence' }).body.grounding, 'enforce');
   for (const id of ['basic', 'replan', 'parallel']) assert.equal(buildRunBody({ ...demo, demoScenario: id, grounding: 'observe' }).body.grounding, 'observe', id);
   const real = buildRunBody({ ...FORM, demoScenario: 'evidence', grounding: 'observe' }).body;
@@ -246,6 +246,7 @@ test('demoScenario: one quiet line per scenario, the basic fix by default', () =
     ['replan', 'Re-planning', 'The first plan gets stuck; you approve a revised plan.'],
     ['parallel', 'Parallel steps', 'Two independent fixes run side by side and are merged.'],
     ['evidence', 'Evidence checks', 'Ungrounded output is rejected and repaired; at delivery one criterion is shown by checks, one passed before the change too.'],
+    ['answer', 'Direct answer', 'A question about the sample project: the planner reads the code and answers. Nothing is changed and no approval is asked.'],
   ]);
   assert.deepEqual(DEMO_SCENARIOS.filter((s) => s.enforce).map((s) => s.id), ['evidence'], 'only the evidence demo needs Enforce');
   assert.equal(demoScenario('parallel').id, 'parallel');
@@ -807,7 +808,7 @@ test('runLine: guidance names its situation once, only while it is enabled and h
 test('buildRunBody: grounding and guidance are always sent, enforce and off unless chosen, for the demo too', () => {
   const pick = (r) => [r.body.grounding, r.body.guidance];
   assert.deepEqual(pick(buildRunBody({ ...FORM, grounding: 'observe', guidance: true })), ['observe', true]);
-  for (const odd of [{}, { grounding: 'Observe', guidance: 'true' }, { grounding: null, guidance: 1 }, { grounding: 'enforce', guidance: false }]) {
+  for (const odd of [{}, { grounding: 'Observe', guidance: 'true' }, { grounding: null, guidance: 1 }, { grounding: 'enforce', guidance: false, conversation: true }]) {
     assert.deepEqual(pick(buildRunBody({ ...FORM, ...odd })), ['enforce', false], JSON.stringify(odd));
   }
   assert.deepEqual(pick(buildRunBody({ demo: true, task: '', delivery: 'apply', sandbox: 'docker', grounding: 'observe', guidance: true })), ['observe', true]);

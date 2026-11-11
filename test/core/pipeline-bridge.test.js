@@ -62,3 +62,40 @@ for (const selection of [{ provider: '--tools' }, { model: '--extensions' }, { m
     assert.equal((await invoke(t, 'ok', selection)).code, 1);
   });
 }
+
+// Status fixtures exercise the bridge without starting an engine or model.
+test('Pipeline conversation list bounds replies and inspect preserves reply/event envelopes', async (t) => {
+  const { createPipelineSupervisor } = await import('../../src/core/pipeline-supervisor.js');
+  const base = path.resolve('.scratch/pipeline/chat-node/tests'); fs.mkdirSync(base, { recursive: true });
+  const dataDir = fs.mkdtempSync(path.join(base, 'list-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const supervisor = createPipelineSupervisor({ dataDir, env: {} });
+  const chat = { projectId: 'project1', id: 'chat0001' };
+  const runs = path.join(dataDir, 'projects/project1/chats/chat0001/pipeline/runs');
+  const reply = { from: 'pipeline', kind: 'answer', text: 'A'.repeat(4001), truncated: false, citations: ['E-1234567890'] };
+  const status = (id, reply) => ({ schema: 1, run_id: id, status: 'succeeded', phase: 'done', task: 'Question', created_at: '2026-11-11T00:00:00Z', updated_at: '2026-11-11T00:01:00Z', ...(reply ? { reply } : {}) });
+  for (const [id, value] of [['answer01', status('answer01', reply)], ['normal01', status('normal01')]]) {
+    fs.mkdirSync(path.join(runs, id), { recursive: true });
+    fs.writeFileSync(path.join(runs, id, 'status.json'), JSON.stringify(value));
+  }
+  const events = [
+    { seq: 1, ts: '2026-11-11T00:00:30Z', run_id: 'answer01', type: 'agent_message', node: null, data: { role: 'planner', text: 'A valid turn', context: 'Revision 0', final: true, truncated: false } },
+    { seq: 2, ts: '2026-11-11T00:00:31Z', run_id: 'answer01', type: 'run_reply', node: null, data: reply }
+  ];
+  fs.writeFileSync(path.join(runs, 'answer01/events.jsonl'), events.map(JSON.stringify).join('\n') + '\n');
+  const list = supervisor.list(chat);
+  assert.deepEqual(list, { active: null, runs: [
+    { runId: 'answer01', status: 'succeeded', phase: 'done', task: 'Question', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-11T00:01:00Z', reply: { kind: 'answer', text: 'A'.repeat(4000), truncated: true, citations: ['E-1234567890'] } },
+    { runId: 'normal01', status: 'succeeded', phase: 'done', task: 'Question', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-11T00:01:00Z' }
+  ] });
+  assert.equal(Object.hasOwn(list.runs[1], 'reply'), false);
+  const inspected = await supervisor.inspect(chat, 'answer01');
+  assert.deepEqual(inspected.status.reply, reply);
+  assert.deepEqual(inspected.events, events);
+  assert.deepEqual((await supervisor.inspect(chat, 'answer01', 1)).events, [events[1]]);
+  for (const truncated of [false, true]) {
+    const short = { ...reply, kind: 'result', text: 'Done', truncated, citations: [] };
+    fs.writeFileSync(path.join(runs, 'answer01/status.json'), JSON.stringify(status('answer01', short)));
+    assert.deepEqual(supervisor.list(chat).runs[0].reply, { kind: 'result', text: 'Done', truncated, citations: [] });
+  }
+});

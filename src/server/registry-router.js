@@ -19,7 +19,7 @@ function currentId(hive) {
 }
 function runsFor(hive) {
   const current = currentId(hive);
-  return listRuns(hive).map(({ summary, ...run }) => ({ ...run, current: run.runId === current }));
+  return listRuns(hive).map((run) => ({ ...run, current: run.runId === current }));
 }
 function replay(hive, runId) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(runId)) throw fail(400, 'Invalid run ID');
@@ -167,8 +167,10 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       const projectsRoute = ['/api/projects', '/api/projects/rename', '/api/projects/remove'].includes(pathname);
       const alias = registry && ['/events', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname);
       const detectPath = /^\/api\/projects\/([^/]+)\/pipeline\/detect$/.exec(pathname);
-      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath) return false;
+      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath) return false;
+      if (!registry && !scopedPath && !chatRoute && !projectsRoute && pathname === '/api/runs' && req.method !== 'GET') return false;
       authorize(req);
+      if (!registry && pathname === '/api/runs' && req.method === 'GET') { json(res, 200, { runs: runsFor(defaultChat().hiveDir) }); return true; }
       if (closing) throw fail(409, 'Server is closing');
       recoverGone();
       if (pathname === '/api/pipeline' && req.method === 'GET') { json(res, 200, await pipeline.capability()); return true; }

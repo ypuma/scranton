@@ -7,6 +7,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from scranton_pipeline.agents.prompts import build_implementer_prompt, build_reviewer_prompt
+from scranton_pipeline.conversation import agent_message
 from scranton_pipeline.errors import EngineError, FailureClass, SuspendRequested
 from scranton_pipeline.grounding import check_id, digest, recompute_summary, register, registry_row
 from scranton_pipeline.models import ContextRequest, ImplementerTurn, Review
@@ -179,6 +180,8 @@ def implement(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
             return {**invalid(state, deps, "implement", key, str(evaluation.violations) + " Valid IDs: " + str(prompt.shown)),
                 "step_evidence": repair_evidence(state, deps, evaluation, "step_evidence")}
         if turn.kind == "blocked":
+            if not evaluation.reject(deps):
+                agent_message(state, deps, "implementer", turn.model_dump(mode="json"))
             update = request_replan(state, deps, EngineError(FailureClass.IMPLEMENTATION, "step_blocked", turn.blocked_reason), "implement")
             if update.get("replan_request"):
                 prior = [r for r in _rows(deps.run_dir / "grounding.jsonl") if r.get("scope") == scope_id(state) and r.get("lane") == state.get("lane", {}).get("step_id")]
@@ -188,7 +191,9 @@ def implement(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         if turn.kind == "need_context":
             if counter(state, f"context:{scope_id(state)}") >= deps.cfg.limits.max_step_context_rounds:
                 raise ValueError("No step context rounds remain")
+            agent_message(state, deps, "implementer", turn.model_dump(mode="json"))
             return {"step_requests": [r.model_dump(mode="json") for r in turn.context_requests], "pending_edits": None}
+        agent_message(state, deps, "implementer", turn.model_dump(mode="json"))
         return {"pending_edits": turn.model_dump(mode="json"), "feedback": None, "step_requests": []}
     except ValueError as exc:
         return invalid(state, deps, "implement", key, str(exc))
@@ -297,6 +302,7 @@ def review(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
                 raw["findings"].append({"severity": "major", "category": "tests", "path": "", "description": "Criterion " + criterion["id"] + " not met: " + detail, "suggestion": "Satisfy the named checks", "citations": [r["evidence_id"] for r in failed if r.get("evidence_id")]})
         for finding in raw["findings"]:
             finding["path"] = "".join(c for c in finding["path"].replace("\\", "/") if c.isprintable())
+        agent_message(state, deps, "reviewer", raw)
         json_write(deps.run_dir / "artifacts" / f"review-{state.get('review_round', 0)}.json", raw)
         if raw["verdict"] == "approve":
             return {"review": raw, "feedback": None}

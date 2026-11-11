@@ -1,7 +1,7 @@
 // Projects and chats sidebar (.enma/multiproject-contract.md): GET /api/projects every few seconds, status per chat,
 // a badge on background chats that need a human, and the New project / rename / remove dialogs. Switching chats
 // only changes what this page shows; nothing on the server is stopped.
-import { CLIENT_HEADERS } from './control.js';
+import { CLIENT_HEADERS, isAbsolutePath, clip } from './control.js';
 import { postJson, store } from './control-panel.js';
 import {
   PROJECTS_POLL_MS, parseProjects, sidebarModel, capacityText, hashFor, findProject, findChat, scopedUrl,
@@ -13,6 +13,14 @@ const NARROW = '(max-width: 899px)';
 const OPEN_KEY = 'scranton.nav';
 const COLLAPSED_KEY = 'scranton.navCollapsed';
 const enc = encodeURIComponent;
+// the maxlength of #p-folder
+const FOLDER_MAX = 1024;
+
+// The desktop app's folder picker (Tauri dialog plugin). A browser never hands out an absolute path, so it has none.
+function dialogInvoke() {
+  const invoke = globalThis.__TAURI__?.core?.invoke;
+  return typeof invoke === 'function' ? invoke : null;
+}
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -46,6 +54,7 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce })
     behind: [document.querySelector('.topbar'), $('main-col')],
     pDialog: $('project-dialog'), pForm: $('project-form'), pName: $('p-name'), pFolder: $('p-folder'), pCreate: $('p-create'),
     pCreateRow: $('p-create-row'), pError: $('p-error'), pCancel: $('p-cancel'), pSubmit: $('p-submit'),
+    pBrowse: $('p-browse'), pBrowseStatus: $('p-browse-status'),
     rnDialog: $('rename-dialog'), rnForm: $('rename-form'), rnTitle: $('rn-title'), rnLabel: $('rn-label'), rnInput: $('rn-input'),
     rnError: $('rn-error'), rnCancel: $('rn-cancel'), rnSubmit: $('rn-submit'),
     rmDialog: $('remove-dialog'), rmForm: $('remove-form'), rmTitle: $('rm-title'), rmDetail: $('rm-detail'), rmHistoryRow: $('rm-history-row'),
@@ -390,12 +399,86 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce })
   e.pFolder.addEventListener('input', syncCreate);
   e.pForm.addEventListener('input', (ev) => ev.target.removeAttribute?.('aria-invalid'));
 
+  // the folder picker request still on its way; a closed or reopened dialog drops it, so its answer is ignored
+  let picking = null;
+  const pickNote = (text, tone = '') => {
+    e.pBrowseStatus.textContent = text;
+    e.pBrowseStatus.dataset.tone = tone;
+  };
+  const syncBrowse = () => {
+    const can = Boolean(dialogInvoke());
+    e.pBrowse.setAttribute('aria-disabled', String(!can || Boolean(picking)));
+    e.pBrowse.title = can ? 'Choose the project folder' : 'Choosing a folder needs the desktop app';
+  };
+  syncBrowse();
+  e.pDialog.addEventListener('close', () => {
+    if (e.pDialog.open || !picking) return;
+    picking = null;
+    e.pSubmit.disabled = false;
+    syncBrowse();
+  });
+
+  e.pBrowse.addEventListener('click', async () => {
+    const invoke = dialogInvoke();
+    // a submit on its way disables Create project; the picker waits for its answer too
+    if (!e.pDialog.open || picking || e.pSubmit.disabled) return;
+    if (!invoke) return pickNote('Choosing a folder needs the Scranton desktop app. Type the absolute path instead.');
+    const ticket = {};
+    picking = ticket;
+    e.pSubmit.disabled = true;
+    syncBrowse();
+    pickNote('Waiting for the folder picker...', 'busy');
+    const options = { directory: true, multiple: false, title: 'Choose project folder' };
+    const current = e.pFolder.value.trim();
+    if (current.length <= FOLDER_MAX && isAbsolutePath(current)) options.defaultPath = current;
+    let result;
+    let failed = null;
+    try {
+      result = await invoke('plugin:dialog|open', { options });
+    } catch (err) {
+      failed = { why: clip(typeof err === 'string' ? err : err?.message, 160) };
+    }
+    if (picking !== ticket) return;
+    picking = null;
+    e.pSubmit.disabled = false;
+    syncBrowse();
+    if (failed) {
+      pickNote(`The folder picker did not open${failed.why ? ` (${failed.why})` : ''}. Type the absolute path instead.`, 'error');
+      return e.pFolder.focus();
+    }
+    // cancelled: every field stays as it was
+    if (result === null || result === undefined) {
+      pickNote('');
+      return e.pBrowse.focus();
+    }
+    if (typeof result !== 'string' || !result.trim()) {
+      pickNote('The folder picker returned no folder. Type the absolute path instead.', 'error');
+      return e.pFolder.focus();
+    }
+    // cut to the field's limit it would name another folder
+    if (result.length > FOLDER_MAX) {
+      pickNote(`The path of that folder has ${result.length} characters; at most ${FOLDER_MAX} fit. Choose a folder with a shorter path.`, 'error');
+      return e.pBrowse.focus();
+    }
+    e.pFolder.value = result;
+    syncCreate();
+    if (e.pFolder.getAttribute('aria-invalid') === 'true') {
+      e.pFolder.removeAttribute('aria-invalid');
+      formError(e.pError, '');
+    }
+    pickNote('');
+    e.pFolder.focus();
+  });
+
   function newProject() {
     if (!model?.canCreate) return;
     e.pName.value = '';
     e.pFolder.value = '';
     e.pCreate.checked = true;
     syncCreate();
+    picking = null;
+    syncBrowse();
+    pickNote('');
     formError(e.pError, '');
     for (const f of [e.pName, e.pFolder]) f.removeAttribute('aria-invalid');
     openDialog(e.pDialog, async () => {

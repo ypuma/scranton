@@ -1,6 +1,7 @@
 """Copy a bounded, secret-free byte snapshot without modifying the source."""
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from ..config import DEFAULT_PROTECTED, DEFAULT_WRITE_PROTECTED, Limits, Policy
@@ -28,6 +29,7 @@ def snapshot_source(source: Path, workspace: Path, *, policy: Policy, limits: Li
     path_policy = PathPolicy(source, (*DEFAULT_PROTECTED, *policy.protected_paths), DEFAULT_WRITE_PROTECTED)
     skipped: list[dict[str, str]] = []
     payload: dict[str, bytes] = {}
+    modes: dict[str, int] = {}
     total = 0
     for rel in paths:
         path_policy.normalize(rel)
@@ -43,6 +45,8 @@ def snapshot_source(source: Path, workspace: Path, *, policy: Policy, limits: Li
             continue
         with path.open("rb") as stream:
             data = stream.read(limits.max_file_bytes + 1)
+            if os.name != "nt":
+                modes[rel] = os.fstat(stream.fileno()).st_mode & 0o777
         if len(data) > limits.max_file_bytes:
             skipped.append({"path": rel, "reason": "file_too_large"})
             continue
@@ -53,8 +57,9 @@ def snapshot_source(source: Path, workspace: Path, *, policy: Policy, limits: Li
     workspace.mkdir(parents=True, exist_ok=True)
     manifest = {}
     for rel, data in payload.items():
-        write_bytes_atomic(workspace / rel, data)
-        manifest[rel] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+        write_bytes_atomic(workspace / rel, data, mode=modes.get(rel))
+        manifest[rel] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+                         **({"mode": modes[rel]} if rel in modes else {})}
     write_bytes_atomic(manifest_path, json.dumps(manifest, sort_keys=True).encode())
     return SnapshotResult(files=len(payload), total_bytes=total, used_git=used_git,
                           skipped=skipped, manifest_path=str(manifest_path.resolve()))

@@ -4,6 +4,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from scranton_pipeline.conversation import terminal_reply
 from scranton_pipeline.grounding import recompute_summary
 from scranton_pipeline.guidance import status as procedure_status
 from scranton_pipeline.models import RunStatus
@@ -48,7 +49,7 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
                  "diff": delivery.get("diff_path") if delivery else None,
                  "report_md": str(deps.run_dir / "delivery" / "report.md") if (deps.run_dir / "delivery" / "report.md").exists() else None,
                  "report_json": str(deps.run_dir / "delivery" / "report.json") if (deps.run_dir / "delivery" / "report.json").exists() else None}
-    return RunStatus.model_validate({"procedure": procedure_status(deps.run_dir, deps.cfg.procedure.enabled, metadata.get("procedure", {})), "grounding": recompute_summary(deps.run_dir), "run_id": state["run_id"], "status": status, "phase": phase, "node": node,
+    return RunStatus.model_validate({**({"reply": terminal_reply(state, deps, status)} if deps.cfg.conversation and status in {"succeeded", "failed", "rejected", "cancelled"} else {}),"procedure": procedure_status(deps.run_dir, deps.cfg.procedure.enabled, metadata.get("procedure", {})), "grounding": recompute_summary(deps.run_dir), "run_id": state["run_id"], "status": status, "phase": phase, "node": node,
         "task": deps.redactor.redact(state["task"])[:500], "source_dir": state["source_dir"], "delivery_mode": state["delivery_mode"],
         "progress": {"step_index": index, "step_count": len(plan.steps) if plan else 0,
                      "step_title": step.title if step else "", "attempt": state.get("counters", {}).get("attempts:" + scope_id(visible_state), 0),
@@ -111,6 +112,27 @@ def write_report(state: PipelineState, deps: Dependencies, *, status: str) -> No
     write_bytes_atomic(deps.run_dir / "delivery" / "report.md", markdown.encode())
 
 
+def complete_reply(status: RunStatus, deps: Dependencies) -> RunStatus:
+    receipt = deps.run_dir / "delivery" / "final-status.json"
+    if receipt.exists():
+        status = RunStatus.model_validate_json(receipt.read_text(encoding="utf-8"))
+    else:
+        write_bytes_atomic(receipt, status.model_dump_json(by_alias=True).encode())
+    rows = _rows(deps.run_dir / "events.jsonl")
+    recorded = next((r["data"] for r in rows if r["type"] == "run_reply"), None)
+    path = deps.run_dir / "delivery" / "reply.json"
+    reply = recorded or status.reply or (json.loads(path.read_text(encoding="utf-8")) if path.exists() else None)
+    if reply is None:
+        raise ValueError("Terminal conversation reply missing")
+    # The event is the commit record; replay repairs files without another reply.
+    write_bytes_atomic(path, json.dumps(reply, ensure_ascii=True).encode())
+    if recorded is None:
+        deps.events.emit("run_reply", **reply)
+    if not any(r["type"] == "run_finished" for r in rows):
+        deps.events.emit("run_finished", status=status.status)
+    return status.model_copy(update={"reply": reply})
+
+
 def finalize_out_of_band(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     from scranton_pipeline.nodes.workflow import cleanup_sandbox, diff_info
     from scranton_pipeline.observability import write_status
@@ -135,8 +157,12 @@ def finalize_out_of_band(state: PipelineState, deps: Dependencies) -> dict[str, 
                               "files": files, "applied": None, "conflicts": (state.get("delivery") or {}).get("conflicts", [])}
     merged = cast(PipelineState, {**state, **update})
     write_report(merged, deps, status=outcome)
-    write_status(deps.run_dir, make_status(merged, deps, status=outcome, node="finalize"))
-    deps.events.emit("run_finished", status=outcome)
+    status = make_status(merged, deps, status=outcome, node="finalize")
+    if deps.cfg.conversation:
+        status = complete_reply(status, deps)
+    write_status(deps.run_dir, status)
+    if not deps.cfg.conversation:
+        deps.events.emit("run_finished", status=outcome)
     return update
 
 

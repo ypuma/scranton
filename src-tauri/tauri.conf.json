@@ -18,23 +18,22 @@
       "minWidth": 900,
       "minHeight": 600,
       "visible": false,
+      "decorations": false,
+      "resizable": true,
+      "shadow": true,
       "backgroundColor": "#0b0b0b",
       "url": "index.html"
     }],
     "security": {
-      "capabilities": ["dashboard-notifications"],
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "capabilities": ["dashboard-notifications", "dashboard-folder-picker", "dashboard-window-controls"],
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "externalBin": ["binaries/node"],
+    "targets": "all",
+    "externalBin": ["binaries/scranton-node"],
     "resources": { "staged/app/": "app/" },
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "windows": {
-      "nsis": { "installMode": "currentUser", "displayLanguageSelector": false },
-      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
-    }
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }

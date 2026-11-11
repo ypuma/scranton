@@ -3,6 +3,7 @@ import fnmatch
 import hashlib
 import os
 import re
+import stat
 import tempfile
 import time
 from collections.abc import Sequence
@@ -71,13 +72,26 @@ def read_text(path: Path, max_bytes: int) -> tuple[str, bool]:
     return text, truncated
 
 
-def write_bytes_atomic(path: Path, data: bytes) -> None:
+def write_bytes_atomic(path: Path, data: bytes, *, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        mode = None
+    elif mode is None:
+        try:
+            existing = path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISREG(existing.st_mode):
+                mode = existing.st_mode & 0o777
     fd, name = tempfile.mkstemp(prefix=".pipeline-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
+            # Apply after writing (which can clear mode bits), only to our private inode.
+            if mode is not None:
+                os.fchmod(stream.fileno(), mode & 0o777)
             os.fsync(stream.fileno())
         first: PermissionError | None = None
         for attempt in range(41):

@@ -3,6 +3,9 @@ import path from 'node:path';
 import { JsonlSplitter } from '../src/core/jsonl.js';
 import agentChat from './pi-agent-chat.js';
 
+if (process.env.SCRANTON_CONVERSATION === '1' && !process.env.FAKE_RPC_MODE) {
+  await import('./fake-pi.js');
+} else {
 const args = process.argv.slice(2);
 const flag = (name) => args[args.indexOf(name) + 1];
 const send = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
@@ -34,6 +37,7 @@ const ctx = { mode: 'rpc', ui: { input: (title, placeholder, opts) => new Promis
 }) } };
 const ack = (r, success = true, data) => send({ type: 'response', id: r.id, command: r.type, success, data, ...(!success ? { error: 'Rejected by fixture' } : {}) });
 const settle = (text) => {
+  if (process.env.SCRANTON_CONVERSATION === '1' && process.env.SCRANTON_AGENT === 'michael') text = /kind: report_request/.test(prompt) ? 'Report complete.\n[REPORT_READY]' : process.env.FAKE_PI_SCENARIO === 'question' ? 'Question answered.\n[ANSWER_READY]' : text;
   const keyword = process.env.FAKE_RPC_KEYWORD ?? (process.env.SCRANTON_PASS_KEYWORD || ({ oscar: 'REVIEW_APPROVED', hank: 'SECURITY_PASSED' }[process.env.SCRANTON_AGENT]));
   if (keyword) text = text.replace(/\[TASK_COMPLETE\]/g, `[${keyword}]`);
   send({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop', usage: { input: 2, output: 3, cost: { total: 0.01 } } } });
@@ -68,6 +72,7 @@ async function handle(r) {
   const file = path.join(dir, `${flag('--session-id')}.jsonl`);
   const previous = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').length : 0;
   fs.appendFileSync(file, `${JSON.stringify({ prompt })}\n`);
+  if (process.env.SCRANTON_CONVERSATION === '1') send({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Sending an agent coordination message.' }], stopReason: 'stop' } });
   send({ type: 'tool_execution_start', toolName: 'agent_chat', args: {} });
   if (mode === 'hang' || mode === 'no-ack' || mode === 'wait-chat' || mode === 'reject-steer') return;
   if (mode === 'chat' || mode === 'chat-replay' || mode === 'forge') {
@@ -85,3 +90,5 @@ const startupDelay = Number(process.env.FAKE_RPC_STARTUP_DELAY_MS);
 if (Number.isFinite(startupDelay) && startupDelay > 0) await new Promise((resolve) => setTimeout(resolve, startupDelay));
 process.stdin.on('data', (chunk) => { for (const line of splitter.push(chunk)) void handle(JSON.parse(line)); });
 process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
+
+}

@@ -36,7 +36,11 @@ class RunAborted extends Error {
 export class Orchestrator {
   constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startPi, prepareExecution = prepareSandbox, threadContext = '' }) {
     this.config = config;
+    this.conversation = config.execution?.conversation === true;
     this.roles = structuredClone(config.roles ?? BUILTIN_ROLES);
+    if (this.conversation) this.roles.find((r) => r.id === 'michael').keywords = ['PLAN_READY', 'ANSWER_READY', 'REPORT_READY'];
+    this.reports = new Map();
+    this.milestoneReasons = new Map();
     this.roleMap = Object.fromEntries(this.roles.map((r) => [r.id, r]));
     this.names = Object.fromEntries(this.roles.map((r) => [r.id, r.name]));
     this.passes = Object.fromEntries(this.roles.map((r) => [r.id, r.passKeyword]));
@@ -76,6 +80,11 @@ export class Orchestrator {
   }
 
   emit(type, fields) {
+    if (this.conversation && fields?.milestoneId && fields.reason && ['cycle_result', 'hitl_request', 'milestone_finished'].includes(type)) this.milestoneReasons.set(fields.milestoneId, String(fields.reason).slice(0, 1000));
+    if (type === 'run_started' && !this.conversation) {
+      fields = { ...fields, execution: { ...fields.execution } };
+      delete fields.execution.conversation;
+    }
     return this.rec.emit(type, fields);
   }
 
@@ -108,6 +117,7 @@ export class Orchestrator {
     try {
       const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan);
       this.promptSnapshot = Object.fromEntries(roles.map((id) => [id, resolvePrompt(config, id)]));
+      if (this.conversation && this.promptSnapshot.michael) this.promptSnapshot.michael.text += '\n\n## Conversation mode\n\nThe "Required answer" section of each request decides between a plan ([PLAN_READY]), a direct answer ([ANSWER_READY]) and a report ([REPORT_READY]). This overrides any earlier rule to always reply with a plan.';
       this.emit('run_started', { request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow }, roles: roles.map((id) => auditRole({ ...this.roleMap[id], tools: config.agents[id].tools })), prompts: promptAudit(config, this.promptSnapshot) });
       started = true;
       stopTimer = pollStop(this.hive.dir, this.runId, (reason) => this.abort(reason), (level, message) => this.log(level, message));
@@ -131,6 +141,10 @@ export class Orchestrator {
       const plan = this.noPlan ? this.#planWithoutMichael() : await this.#plan();
       this.chat.finish('michael');
       this.setStatus('michael', 'done', 'Planning complete', this.config.pi.transport === 'rpc' && this.instances.has('michael') ? 'michael' : undefined);
+      if (plan.answer !== undefined) {
+        this.reply = this.#reply('michael', 'answer', plan.answer);
+        result = { status: 'success', summary: 'Answered by Michael' };
+      } else {
       for (const m of plan.milestones) for (const role of ['dwight', ...this.workflow.gates.flat()]) this.chat.register(`${role}-${m.id}`);
       const outcomes = await runDag(plan.milestones, {
         maxParallel: config.execution?.maxParallel ?? 1,
@@ -156,6 +170,7 @@ export class Orchestrator {
         summary: incomplete === 0 ? `All ${passed} milestone${passed === 1 ? '' : 's'} passed` : counts.map(([status, count]) => `${count} ${status}`).join(', ')
       };
       }
+      }
     } catch (err) {
       if (!started) this.emit('run_started', { roles: [], request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow } });
       if (err instanceof RunAborted) {
@@ -165,6 +180,10 @@ export class Orchestrator {
         result = { status: 'failed', summary: err.message, signaled: false };
       }
     }
+    if (this.conversation && !this.reply && !this.noPlan && !this.standaloneAgent && !this.aborting && ['success', 'partial'].includes(result.status) && this.rec.state.milestones.some((m) => m.cycle > 0)) {
+      try { await this.#report(result); }
+      catch (err) { this.log('warn', `Report unavailable: ${err.message}`); }
+    }
     clearInterval(stopTimer);
     clearInterval(this.chatTimer);
     await Promise.allSettled([...this.active.values()].map(async (runner) => { await runner.kill('user'); await runner.done; }));
@@ -172,6 +191,7 @@ export class Orchestrator {
     await this.worktrees?.close();
     const idle = result.status === 'success' || result.status === 'partial' ? ['done', 'Done for this run'] : ['idle', 'Idle'];
     for (const id of activeRoles(this.config)) this.setStatus(id, ...idle);
+    if (this.conversation && this.rec.state.execution?.conversation === true) this.emit('run_reply', this.reply ?? this.#reply('system', 'summary', this.#digest(result)));
     this.emit('run_finished', { status: result.status, summary: result.summary });
     return { runId: this.runId, signaled: false, ...result, cleanupComplete: this.cleanupComplete };
   }
@@ -204,7 +224,7 @@ export class Orchestrator {
       if (context.length + line.length + 1 > 8000) break;
       context += `${line}\n`;
     }
-    const planningInput = (context.trim() ? `## Earlier runs in this chat - context only; the new goal below takes precedence\n\n<earlier-runs>\n${context.replace(/<\/?earlier-runs\s*>/gi, '[earlier-runs]')}</earlier-runs>\n\n` : '') + planRequestBody(this.request);
+    const planningInput = (context.trim() ? `## Earlier runs in this chat - context only; the new goal below takes precedence\n\n<earlier-runs>\n${context.replace(/<\/?earlier-runs\s*>/gi, '[earlier-runs]')}</earlier-runs>\n\n` : '') + planRequestBody(this.request, this.conversation);
     let body = planningInput;
     let kind = 'plan_request';
     let from = 'human';
@@ -229,6 +249,7 @@ export class Orchestrator {
         }
         continue;
       }
+      if (this.conversation && result.keyword === 'ANSWER_READY') return { answer: result.text };
       if (result.keyword !== 'PLAN_READY') this.log('warn', "Michael's answer did not end with [PLAN_READY]; using the plan it contains");
       const parsed = parsePlan(result.text);
       if (parsed.error) {
@@ -238,6 +259,30 @@ export class Orchestrator {
       this.#publishPlan(parsed);
       return parsed;
     }
+  }
+
+  #reply(from, kind, text) {
+    const clean = String(text).replace(/\[(?:ANSWER_READY|REPORT_READY)\]\s*$/, '').trim();
+    return { from, kind, text: clean.slice(0, 16000), ...(clean.length > 16000 ? { truncated: true } : {}) };
+  }
+
+  #digest(result) {
+    const statuses = this.rec.state.milestones.map((m) => `- ${m.id} ${m.title}: ${m.status} (cycle ${m.cycle})${this.milestoneReasons.has(m.id) ? `: ${this.milestoneReasons.get(m.id)}` : ''}`);
+    return `Run finished with status "${result.status}": ${result.summary}\n${statuses.join('\n')}\nRequest: ${this.request}`.slice(0, 8000);
+  }
+
+  async #report(result) {
+    try {
+      const instruction = '\n\nWrite the closing report from this digest only. Do not inspect or change files. End with [REPORT_READY] on its own last line.';
+      const reports = [...this.reports].map(([id, text]) => `${id}: ${text.slice(0, 1000)}`).join('\n');
+      const body = (this.#digest(result) + '\nLast agent reports:\n' + reports).slice(0, 8000 - instruction.length) + instruction;
+      this.setStatus('michael', 'thinking', 'Writing the report...');
+      this.#deliver({ to: 'michael', from: 'human', kind: 'report_request', body, summary: 'Closing report' });
+      this.chat.register('michael');
+      if (this.instances.has('michael')) this.instances.get('michael').sessionId = randomUUID();
+      const report = await this.#runAgent('michael', { milestone: null, cycle: null, report: true });
+      if (!this.aborting && report.ok && report.keyword === 'REPORT_READY') this.reply = this.#reply('michael', 'report', report.text);
+    } finally { this.chat.finish('michael'); }
   }
 
   // ---- milestones -----------------------------------------------------------------------
@@ -463,13 +508,13 @@ export class Orchestrator {
   #deliver({ to, from, kind, body, summary, milestone = null, cycle = null }) {
     this.#checkAbort();
     const instanceId = milestone && ['dwight', ...this.workflow.gates.flat()].includes(to) ? `${to}-${milestone}` : to;
-    if (this.config.pi.transport === 'rpc' && to !== 'human') body += `\n\n## Instance coordination\n\nYou are ${instanceId}. Exact recipient IDs: ${[...(this.chat?.instances.keys() ?? [])].join(', ')}. Use agent_chat for short coordination; queued is not delivered.\n`;
+    if (this.config.pi.transport === 'rpc' && to !== 'human' && kind !== 'report_request') body += `\n\n## Instance coordination\n\nYou are ${instanceId}. Exact recipient IDs: ${[...(this.chat?.instances.keys() ?? [])].join(', ')}. Use agent_chat for short coordination; queued is not delivered.\n`;
     const file = this.hive.deliver({ to: this.config.pi.transport === 'rpc' ? instanceId : to, from, kind, runId: this.runId, milestone, cycle, body });
     this.emit('hive_write', { from, to, file, kind, summary, instanceId, milestoneId: milestone, cycle });
   }
 
   /** Runs one pi process; always emits agent_finished and a final agent_status. */
-  async #runAgent(agentId, { milestone, cycle }) {
+  async #runAgent(agentId, { milestone, cycle, report = false }) {
     this.#checkAbort();
     const rpc = this.config.pi.transport === 'rpc';
     const instanceId = milestone ? `${agentId}-${milestone}` : agentId;
@@ -493,7 +538,17 @@ export class Orchestrator {
         env: staged.env, provider: this.config.agents[agentId].provider,
         agentTimeoutMinutes: this.config.agentTimeoutMinutes, instanceId, runId: this.runId });
     } : undefined;
+    let pending = '';
+    const message = (text, final) => {
+      if (!this.conversation || !text.trim()) return;
+      this.emit('agent_message', { agent: agentId, instanceId, milestoneId: milestone, cycle, text: text.slice(0, 16000), final, ...(text.length > 16000 ? { truncated: true } : {}) });
+    };
     const runner = this.startRunner({
+      onAssistantMessage: this.conversation ? (text, tools) => {
+        if (pending) message(pending, false);
+        pending = text;
+        if (tools) { message(pending, false); pending = ''; }
+      } : undefined,
       transport: this.config.pi.transport,
       instanceId, sessionId: instance.sessionId, execution,
       onMessage: (message) => this.chat.send(instanceId, message),
@@ -507,9 +562,10 @@ export class Orchestrator {
       milestone,
       cycle,
       systemPromptFile: this.prompts[rpc ? instanceId : agentId],
-      extraEnv: { ...this.extraEnv, SCRANTON_AGENT: agentId, SCRANTON_ROLE_KIND: this.roleMap[agentId].kind, SCRANTON_PASS_KEYWORD: this.roleMap[agentId].passKeyword ?? '', SCRANTON_FAIL_KEYWORD: this.roleMap[agentId].failKeyword ?? '', SCRANTON_INSTANCE_ID: instanceId, SCRANTON_RUN_ID: this.runId, SCRANTON_MILESTONE: milestone ?? '', SCRANTON_CYCLE: cycle == null ? '' : String(cycle) },
-      timeoutMs: Math.round(this.config.agentTimeoutMinutes * 60000),
+      extraEnv: { ...this.extraEnv, SCRANTON_CONVERSATION: this.conversation ? '1' : '0', SCRANTON_AGENT: agentId, SCRANTON_ROLE_KIND: this.roleMap[agentId].kind, SCRANTON_PASS_KEYWORD: this.roleMap[agentId].passKeyword ?? '', SCRANTON_FAIL_KEYWORD: this.roleMap[agentId].failKeyword ?? '', SCRANTON_INSTANCE_ID: instanceId, SCRANTON_RUN_ID: this.runId, SCRANTON_MILESTONE: milestone ?? '', SCRANTON_CYCLE: cycle == null ? '' : String(cycle) },
+      timeoutMs: report ? 120000 : Math.round(this.config.agentTimeoutMinutes * 60000),
       onTool: ({ tool, activity, detail }) => {
+        if (pending) { message(pending, false); pending = ''; }
         this.emit('agent_tool', { agent: agentId, instanceId, tool, detail });
         this.setStatus(agentId, 'working', activity, rpc ? instanceId : undefined);
       },
@@ -519,7 +575,8 @@ export class Orchestrator {
     if (rpc) void this.chat.attach(instanceId, runner).catch((err) => this.log('warn', err.message));
     if (this.aborting) void runner.kill('user');
     if (agentId !== 'michael') this.setStatus(agentId, 'thinking', 'Thinking...', rpc ? instanceId : undefined);
-    const result = await runner.done;
+    const settled = await runner.done;
+    const result = this.conversation && !settled.text && pending ? { ...settled, text: pending } : settled;
     if (result.cleanupComplete === false || result.failure?.kind === 'cleanup') {
       this.cleanupComplete = false;
       this.cleanupReason = result.failure?.message ?? 'Container cleanup could not be verified';
@@ -527,6 +584,10 @@ export class Orchestrator {
     this.active.delete(instanceId);
     this.chat.detach(instanceId);
 
+    const publishedReply = this.conversation && agentId === 'michael' && !this.aborting && result.ok
+      && result.keyword === (report ? 'REPORT_READY' : 'ANSWER_READY');
+    if (result.text && !publishedReply) message(result.text, true);
+    if (result.text && milestone) this.reports.set(`${agentId}-${milestone}`, result.text);
     if (result.text) {
       const to = { michael: 'dwight', dwight: 'angela', oscar: 'dwight', hank: 'dwight', angela: 'dwight' }[agentId] ?? 'dwight';
       this.hive.writeOutbox({ agent: rpc ? instanceId : agentId, to, runId: this.runId, milestone, cycle, keyword: result.keyword, body: result.text });
@@ -538,13 +599,13 @@ export class Orchestrator {
     if (result.failure) {
       this.setStatus(agentId, 'error', `Failed: ${result.failure.message.split('\n')[0]}`, rpc ? instanceId : undefined);
       this.log('error', `${agentId}: ${result.failure.message}`);
-      if (result.failure.kind === 'interrupted') this.#checkAbort();
+      if (!report && result.failure.kind === 'interrupted') this.#checkAbort();
     } else if (result.keyword === 'BLOCKED') {
       this.setStatus(agentId, 'blocked', `Blocked: ${summaryLine(result.text, 300)}`, rpc ? instanceId : undefined);
     } else {
       this.setStatus(agentId, 'idle', 'Idle', rpc ? instanceId : undefined);
     }
-    this.#checkAbort();
+    if (!report) this.#checkAbort();
     return result;
   }
 

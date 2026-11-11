@@ -3,8 +3,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseCommandSpec } from '../src/core/config.js';
-import { resolvePiCommand, spawnPi, killTree } from '../src/core/pi-command.js';
+import { resolvePiCommand, spawnPi, killTree, providerExtensionArgs } from '../src/core/pi-command.js';
 import { JsonlSplitter, parseJsonLine } from '../src/core/jsonl.js';
 
 const transient = (text) => /\b(408|429|5\d\d)\b|rate.?limit|timeout|timed? out|network|fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|overloaded|connection/i.test(text);
@@ -32,11 +33,20 @@ async function main() {
     const command = parseCommandSpec(process.env.SCRANTON_PI_COMMAND, 'SCRANTON_PI_COMMAND');
     const spec = resolvePiCommand({ config: command ? { pi: { command, commandSource: 'env' } } : undefined });
     const args = ['--mode', 'json', '-p', '--no-tools', '--no-extensions', '--no-mcp', '--no-skills', '--no-context-files', '--no-prompt-templates', '--no-themes', '--no-session', '--no-approve', '--provider', options.provider, '--model', options.model];
+    args.push(...providerExtensionArgs(options.provider));
     if (options.thinking) args.push('--thinking', options.thinking);
     args.push('--system-prompt', 'Return only the requested completion. Do not use tools.', '--append-system-prompt', system, `@${user}`);
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^SCRANTON_PIPELINE_KEY_/i.test(k)));
-    // Stay in the engine's process group on POSIX so its deadline owns pi too.
-    const child = process.platform === 'win32' ? spawnPi(spec, args, { cwd, env }) : spawn(spec.argv[0], [...spec.argv.slice(1), ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Only the adapter holds the lease writer; even SIGKILL closes it in the kernel.
+    const child = process.platform === 'win32' ? spawnPi(spec, args, { cwd, env }) : spawn(process.execPath, [fileURLToPath(new URL('./pipeline-pi-complete.js', import.meta.url)), '--lifecycle-owner'], { cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+    let ownedCode = null;
+    if (process.platform !== 'win32') {
+      let status = '';
+      child.stdio[3].on('data', (data) => { status = (status + data).slice(0, 128); });
+      child.stdio[3].on('end', () => { try { ownedCode = JSON.parse(status).code; } catch {} });
+      child.stdin.on('error', () => {});
+      child.stdin.write(JSON.stringify({ argv: [...spec.argv, ...args] }) + '\n');
+    }
     const splitter = new JsonlSplitter();
     let last = null, usage = null, errors = '', aborted = false, tool = false;
     const handle = (line) => {
@@ -58,10 +68,14 @@ async function main() {
     child.stderr.on('data', (data) => { errors = (errors + data).slice(-8192); });
     let timedOut = false;
     const timeoutMs = Math.min(600000, Math.max(1, Number(process.env.SCRANTON_PIPELINE_PI_TIMEOUT_MS) || 600000));
-    const timer = setTimeout(() => { timedOut = true; void killTree(child); }, timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (process.platform === 'win32') void killTree(child);
+      else child.stdin.end();
+    }, timeoutMs);
     const code = await new Promise((resolve) => {
       child.on('error', () => resolve(null));
-      child.on('close', (exit) => resolve(exit));
+      child.on('close', (exit) => resolve(process.platform === 'win32' ? exit : ownedCode));
     });
     clearTimeout(timer);
     if (timedOut) return 75;
@@ -81,5 +95,36 @@ async function main() {
   }
 }
 
-// The engine also owns the per-call deadline and whole-tree termination.
-process.exitCode = await main();
+// POSIX group owner: stdin is a lease held only by the completion adapter.
+function runGroupOwner() {
+  function terminate() {
+    // Stay alive until the kill: our PID cannot be reused as a foreign PGID.
+    try { process.kill(-process.pid, 'SIGKILL'); } catch { process.exit(1); }
+  }
+  let started = false, input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('end', terminate);
+  process.stdin.on('error', terminate);
+  process.on('SIGTERM', terminate);
+  process.on('SIGINT', terminate);
+  process.stdin.on('data', (chunk) => {
+    if (started) return terminate();
+    input += chunk;
+    if (input.length > 1048576) return terminate();
+    if (!input.endsWith('\n')) return;
+    started = true;
+    try {
+      const { argv } = JSON.parse(input);
+      if (!Array.isArray(argv) || !argv.length || argv.some((arg) => typeof arg !== 'string' || arg.includes('\0'))) return terminate();
+      const child = spawn(argv[0], argv.slice(1), { detached: false, stdio: ['ignore', 'inherit', 'inherit'] });
+      child.once('error', terminate);
+      child.once('exit', (code) => {
+        // Status is separate because cleanup deliberately kills the owner too.
+        try { fs.writeSync(3, JSON.stringify({ code }) + '\n'); } finally { terminate(); }
+      });
+    } catch { terminate(); }
+  });
+}
+
+if (process.platform !== 'win32' && process.argv.length === 3 && process.argv[2] === '--lifecycle-owner') runGroupOwner();
+else process.exitCode = await main();

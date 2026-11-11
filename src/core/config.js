@@ -152,7 +152,11 @@ export function loadConfig({
   };
 
   if (file.execution?.maxReplans) warnings.push('execution.maxReplans is unsupported and ignored; the published DAG is immutable');
+  const conversation = pick(flags.conversation, env.SCRANTON_CONVERSATION, file.execution?.conversation, false);
+  const conversationFromEnv = blank(flags.conversation) && !blank(env.SCRANTON_CONVERSATION);
+  if (conversationFromEnv ? !['1', '0'].includes(conversation) : typeof conversation !== 'boolean') throw new ConfigError('execution.conversation must be boolean (SCRANTON_CONVERSATION: 1 or 0)');
   const execution = {
+    conversation: conversation === true || conversation === '1',
     maxParallel: toPositiveInt(pick(flags.parallel, env.SCRANTON_PARALLEL, file.execution?.maxParallel, 3), 'execution.maxParallel'),
     isolation: file.execution?.isolation ?? 'worktree',
     persistentSessions: file.execution?.persistentSessions !== false,

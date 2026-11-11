@@ -2,6 +2,7 @@
 import math
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -17,6 +18,17 @@ from .secrets import Redactor
 
 def default_image() -> str:
     return f"scranton-pipeline-sandbox:{__version__}"
+
+
+def _container_user() -> str:
+    if sys.platform == "win32":
+        return "10001:10001"
+    # Match the team sandbox on POSIX, including Docker Desktop on macOS; never run as root.
+    uid = getattr(os, "getuid", lambda: 0)() or 10001
+    gid = getattr(os, "getgid", lambda: 0)() or uid
+    if uid < 0 or gid < 0:
+        raise EngineError(FailureClass.INFRASTRUCTURE, "invalid_sandbox_user", "Invalid host UID/GID")
+    return f"{uid}:{gid}"
 
 
 CONTAINER_ENV = {
@@ -171,6 +183,7 @@ class DockerSandbox:
             writable_state: bool = False) -> ProcResult:
         if not argv or not argv[0]:
             raise EngineError(FailureClass.INVALID_INPUT, "invalid_process", "Command argv is empty")
+        user = _container_user()
         state = self.state_dir
         if state.is_symlink() or state.is_junction() or state.resolve().is_relative_to(self.workspace):
             raise EngineError(FailureClass.SECURITY, "unsafe_state", "Sandbox state must be a local directory")
@@ -183,7 +196,7 @@ class DockerSandbox:
                    "--memory", f"{docker.memory_mb}m", "--memory-swap", f"{docker.memory_mb}m",
                    "--pids-limit", str(docker.pids),
                    "--read-only", "--tmpfs", f"/tmp:rw,exec,nosuid,nodev,size={docker.tmpfs_mb}m",
-                   "--user", "10001:10001", "--label", f"scranton.pipeline.run={self.run_id}",
+                   "--user", user, "--label", f"scranton.pipeline.run={self.run_id}",
                    "--label", f"scranton.pipeline.deadline={math.ceil(time.time() + timeout_s + 30)}",
                    "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                    *[part for key, value in CONTAINER_ENV.items() for part in ("--env", f"{key}={value}")],

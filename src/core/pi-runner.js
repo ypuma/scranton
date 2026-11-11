@@ -79,7 +79,7 @@ export function startPi(options) {
   return startPiJson(options);
 }
 
-function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milestone = null, cycle = null, systemPromptFile, extraEnv = {}, timeoutMs, onTool, onToolEnd, onSpawn }) {
+function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milestone = null, cycle = null, systemPromptFile, extraEnv = {}, timeoutMs, onTool, onToolEnd, onSpawn, onAssistantMessage }) {
   fs.mkdirSync(hive.sessionDir(agentId), { recursive: true });
   const args = buildPiArgs({
     agent: agentConfig,
@@ -120,6 +120,7 @@ function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milesto
           break;
         case 'message_end':
           if (r.message?.role === 'assistant') {
+            onAssistantMessage?.(assistantText(r.message), Boolean((r.message.content ?? []).some?.((b) => b?.type === 'toolCall')));
             rec.last = r.message;
             const u = r.message.usage;
             if (u) {

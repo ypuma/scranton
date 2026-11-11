@@ -8,7 +8,7 @@ import { startVisualizerServer } from '../../src/server/visualizer-server.js';
 
 const key = 'test-pipeline-key-never-expose-79cc48';
 async function setup(t, { cap = 2, slow = 0, command, suspend = false, fail = false, env = {} } = {}) {
-  const base = path.resolve('.scratch/pipeline/n3/tests'); fs.mkdirSync(base, { recursive: true });
+  const base = path.resolve('.scratch/pipeline/chat-node/tests'); fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'http-'));
   const changes = { SCRANTON_PIPELINE_COMMAND: command ?? JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(dir, 'workspaces'), FAKE_PIPELINE_SLOW_MS: String(slow), FAKE_PIPELINE_SUSPEND: suspend ? '1' : '0', FAKE_PIPELINE_FAIL: fail ? '1' : '0', PYTHONPYCACHEPREFIX: path.join(dir, 'bytecode'), TEMP: path.join(dir, 'tmp'), TMP: path.join(dir, 'tmp'), TMPDIR: path.join(dir, 'tmp'), ...env };
   fs.mkdirSync(changes.TEMP);
@@ -668,4 +668,60 @@ test('Pipeline fake evidence enforce grounding repairs survive both HTTP gates',
   const done = await f.wait(id, 'succeeded');
   assert.deepEqual(done.status.grounding, expected);
   assert.deepEqual(done.events.filter((e) => e.type === 'gate_waiting').map((e) => e.data.gate), ['plan', 'delivery']);
+});
+
+test('Pipeline conversation field validates strict booleans before creating a request', async (t) => {
+  const f = await setup(t);
+  for (const conversation of [null, 0, 1, 'true', 'false', [], {}]) {
+    const r = await f.req(f.route() + '/pipeline/runs', { task: 'Question', demo: true, conversation });
+    assert.equal(r.code, 400);
+    assert.equal(r.value.error, 'conversation: Expected boolean');
+  }
+  assert.deepEqual((await f.req(f.route() + '/pipeline')).value.runs, []);
+});
+
+test('Pipeline conversation config is opt-in, byte-compatible off, and list replies use task redaction', async (t) => {
+  const f = await setup(t);
+  const expected = { schema: 1, models: Object.fromEntries(['planner', 'implementer', 'reviewer'].map((role) => [role, { provider: 'openai_compatible', model: 'test-model', base_url: 'https://api.openai.com/v1', api_key_env: `SCRANTON_PIPELINE_KEY_${role.toUpperCase()}` }])), limits: { max_replans: 1 }, execution: { max_parallel_steps: 1 }, sandbox: { mode: 'host' }, checks: [], setup: [], allow_no_checks: true, approvals: { plan: 'always' }, review: { enabled: true } };
+  for (const fields of [{}, { conversation: false }, { conversation: true }]) {
+    const id = await f.start({ ...hostRun, ...fields }), gate = await f.wait(id, 'awaiting_approval');
+    const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
+    const bytes = fs.readFileSync(path.join(base, 'requests', id + '.json'), 'utf8');
+    const cfg = fields.conversation ? { schema: 1, conversation: true, ...Object.fromEntries(Object.entries(expected).filter(([name]) => name !== 'schema')) } : expected;
+    assert.equal(bytes, JSON.stringify(cfg, null, 2) + '\n');
+    await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
+    const file = path.join(base, 'runs', id, 'status.json'), status = JSON.parse(fs.readFileSync(file));
+    status.task = key;
+    status.reply = { from: 'pipeline', kind: 'result', text: key + 'x'.repeat(4100), truncated: false, citations: ['E-1234567890'] };
+    fs.writeFileSync(file, JSON.stringify(status));
+    const row = (await f.req(f.route() + '/pipeline')).value.runs.find((r) => r.runId === id);
+    assert.equal(row.task, '[REDACTED]');
+    assert.equal(row.reply.text, ('[REDACTED]' + 'x'.repeat(4100)).slice(0, 4000));
+    assert.equal(row.reply.truncated, true);
+    assert.deepEqual(row.reply.citations, ['E-1234567890']);
+  }
+});
+
+test('Pipeline conversation demos pass the switch only when enabled and accept answer scenario', async (t) => {
+  const base = path.resolve('.scratch/pipeline/chat-node/tests'); fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, 'demo-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // The existing fake predates answer; extend only its scenario allowlist in a private copy.
+  const { pathToFileURL } = await import('node:url');
+  const file = path.join(dir, 'fake.mjs');
+  fs.writeFileSync(file, fs.readFileSync('tools/fake-pipeline.js', 'utf8').replace("'../src/core/util.js'", JSON.stringify(pathToFileURL(path.resolve('src/core/util.js')).href)).replace("['basic', 'replan', 'parallel', 'evidence']", "['basic', 'replan', 'parallel', 'evidence', 'answer']"));
+  const f = await setup(t, { command: JSON.stringify([process.execPath, file]) });
+  for (const fields of [{}, { conversation: false }, { conversation: true }, { conversation: true, demoScenario: 'answer' }]) {
+    const id = await f.start({ task: 'Demo question', demo: true, ...fields });
+    const gate = await f.wait(id, 'awaiting_approval');
+    const runRoot = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runRoot, id, 'argv.json'))), [
+      'demo', '--run-root', runRoot, '--run-id', id, '--workspace-root', path.join(f.dir, 'workspaces'), '--delivery', 'apply',
+      '--scenario', fields.demoScenario ?? 'basic', '--sandbox', 'host', ...(fields.conversation ? ['--conversation'] : []), '--parent-guard'
+    ]);
+    await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
+  }
+  for (const demo of [undefined, false]) {
+    const r = await f.req(f.route() + '/pipeline/runs', { task: 'x', demo, demoScenario: 'answer', conversation: true });
+    assert.equal(r.code, 400); assert.match(r.value.error, /^demoScenario:/);
+  }
 });

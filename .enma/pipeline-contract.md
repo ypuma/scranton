@@ -640,9 +640,15 @@ New modules: `src/core/pipeline-command.js` (command resolution + capability pro
 `withFsRetry` (util.js), `validateId`, `readBody`/`json`, `parseCommandSpec`. Zero new npm dependencies.
 
 Engine command resolution (first hit wins): (1) env `SCRANTON_PIPELINE_COMMAND` (JSON array of strings, same
-parsing as `SCRANTON_PI_COMMAND`); (2) bundled runtime `<PACKAGE_ROOT>/engine-runtime/python/python.exe` ->
-`[python.exe, "-m", "scranton_pipeline"]`; (3) dev checkout: `<PACKAGE_ROOT>/.scratch/pipeline/venv/Scripts/python.exe`
--> same argv. Capability = `version` subcommand succeeds within 15 s (cached; re-probed when it failed).
+parsing as `SCRANTON_PI_COMMAND`); (2) bundled runtime `<PACKAGE_ROOT>/engine-runtime/launch.json` schema 1:
+`{schema:1,platform,arch,executable,args}` with native Node platform/arch, executable `python/python.exe` on
+Windows or `python/bin/python3` on POSIX, args exactly `["-I","-B","bootstrap.py"]`. Node validates the manifest
+and resolves interpreter and bootstrap to absolute paths inside the runtime; malformed/present manifests fail
+closed, never fall through to another interpreter. Legacy Windows packages WITHOUT a manifest retain
+`engine-runtime/python/python.exe -m scranton_pipeline`; (3) dev checkout:
+`<PACKAGE_ROOT>/.scratch/pipeline/venv/Scripts/python.exe` (Windows) or `venv/bin/python` (POSIX), with
+`-m scranton_pipeline`. No automatic end-user system-Python fallback. Capability = `version` subcommand
+succeeds within 15 s (cached; re-probed when it failed).
 
 Storage: `<dataDir>/projects/<projectId>/chats/<chatId>/pipeline/runs/<runId>/` is the engine run dir (passed as
 `--run-root .../pipeline/runs --run-id <runId>`, runId = 12 lowercase hex). The generated operator config goes
@@ -712,7 +718,7 @@ failed -> `failed`, suspended/rejected/cancelled -> `stopped`, no run -> `idle`.
 Tests (node:test, fixtures under `.scratch/`): a deterministic fake engine `tools/fake-pipeline.js` that speaks
 section 6 (status.json, events.jsonl, exit codes, gates, cancel, suspend, env knobs for failure paths) driven via
 `SCRANTON_PIPELINE_COMMAND`; plus ONE real-engine test that runs `demo` end to end over HTTP and is skipped
-when `.scratch/pipeline/venv/Scripts/python.exe` is missing. Suites to keep green (run one after another):
+when the native development venv interpreter (`Scripts/python.exe` on Windows, `bin/python` on POSIX) is missing. Suites to keep green (run one after another):
 `node --test "test/server/*.test.js"` (114), `node --test "test/core/*.test.js"` (396 + 1 skip).
 
 ---------------------------------------------------------------------------------------------------
@@ -755,16 +761,31 @@ dynamic text via `textContent`. Vanilla ES modules, no build step, no new depend
 ## 11. Packaging (lane K, after the Python lanes)
 
 Staged layout (inside `src-tauri/staged/app/`, i.e. `<PACKAGE_ROOT>` at runtime):
-`engine-runtime/python/` = official Windows x64 embeddable CPython 3.14 (same minor as the wheels),
-`engine-runtime/site-packages/` = the pinned runtime closure (wheels only, `--only-binary=:all:`) plus the
-`scranton_pipeline` package copied from `engine/src`. `python314._pth` lists `python314.zip`, `.`,
-`..\site-packages` (isolated: ignores PYTHONPATH and user site). No dev tools, no tests, no `__pycache__`.
-`engine/requirements.lock` pins the runtime closure with hashes; `engine/runtime-lock.json` pins the
-embeddable archive (version, URL, sha256); downloads are cached under `.scratch/pipeline/cache` and verified.
-`scripts/prepare-desktop.mjs` stages and then VERIFIES with the staged interpreter and an empty PATH:
-`python -m scranton_pipeline version` and `graph`. `packaging-manifest.json` gains a `pipeline` entry
-(engine version, python version, file count, bytes, lock hash). `test/packaging` asserts the staged runtime
-exists, has no forbidden files, and that the staged engine runs `demo` to the plan gate (exit 3).
+`engine-runtime/python/` = official Windows x64 embeddable CPython **3.14.8**, or native macOS/Linux
+Astral python-build-standalone CPython **3.14.10**, pinned release **20261110** (same minor as the wheels).
+`engine-runtime/site-packages/` = private pinned runtime closure (wheels only, `--require-hashes
+--only-binary=:all: --no-compile`) plus `scranton_pipeline` copied from `engine/src`. No system installation,
+no shipped pip/dev tools/tests/`__pycache__`. Windows keeps its isolated `python314._pth`; all platforms use
+`-I -B` and `engine-runtime/bootstrap.py` to bind private site packages, launched through the manifest in §9.
+Windows retains `engine/requirements.lock` and `engine/runtime-lock.json`; POSIX runtime/requirements locks
+are separate per native platform/architecture. Exact selection: `scripts/desktop-runtime.mjs`. Archive URLs,
+versions and SHA-256 and wheel hashes are pinned; caches under `.scratch/pipeline/` are verified before reuse.
+`scripts/prepare-desktop.mjs` stages and VERIFIES using the staged interpreter/absolute bootstrap and empty
+PATH: `version` and `graph --format mermaid`. `packaging-manifest.json` records platform/arch/target and a
+`pipeline` entry (launch manifest, runtime/requirements lock identity, engine/Python version, files/bytes/tree
+hash). `test/packaging` checks forbidden files, native executable identity and staged `demo` to the plan gate
+(exit 3), offline. It must not globally skip POSIX platforms. Staging/smokes are not an installed-app proof.
+
+Native desktop scope: Windows x64, macOS arm64/x64, Linux glibc arm64/x64. No universal, musl or cross builds.
+`scripts/desktop-platform.mjs:desktopPlatform(platform,arch)` returns `{platform,arch,target,nodeFile}`;
+Node sidecars are `binaries/scranton-node-<RustTARGET>[.exe]`, bundled as `scranton-node[.exe]` (not `/usr/bin/node`).
+Automatic Tauri overlays: `tauri.windows.conf.json` (nsis), `tauri.macos.conf.json` (app+dmg),
+`tauri.linux.conf.json` (deb+appimage). Node 24 component floors: macOS >=13.5, Linux glibc >=2.28;
+Python/wheels/WebKitGTK/build-linked libraries may raise the complete application's minimum. Do not claim
+oldest-OS compatibility without native target testing. CI builds native hosts, serial portable/packaging/Rust
+gates and uploads unsigned OS/arch-labelled artifacts; no automatic release, push, OAuth/model call or image
+build. Missing signing/notarization secrets must never fail unsigned jobs. Windows source verification is not
+macOS/Linux runtime evidence; docs must call those unverified build targets until actual native runs exist.
 If Python 3.14 or the download is unavailable at build time the preparation FAILS with a clear message unless
 `SCRANTON_SKIP_PIPELINE=1` is set, in which case nothing is staged, the manifest records `pipeline: null` and
 the app reports the engine as unavailable. Git must be on the target machine (already required).

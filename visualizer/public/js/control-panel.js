@@ -896,12 +896,18 @@ export function createControlPanel({
     if (!input) return;
     input.setAttribute('aria-invalid', 'true');
     if (e.advanced.contains(input)) e.advanced.open = true;
-    input.focus();
+    if (!input.disabled) return input.focus();
+    // a select locked to its agent default (Docker) cannot take focus: Agents fixes it, else the message is read
+    const fix = models?.fix?.();
+    if (fix) return fix.focus();
+    e.runError.setAttribute('tabindex', '-1');
+    e.runError.focus();
   }
 
   // opts: { title, request, onStarted, target: { title, workspace, project, start(body) -> postJson result,
   //         startPipeline(body), cancel() }, engine: 'pipeline' for a pipeline chat (the target then has only
-  //         startPipeline), problem: { error, field, fields } to show on the inputs it is about }
+  //         startPipeline), task: the pipeline task to start from, problem: { error, field, fields } to show on
+  //         the inputs it is about }
   function openRun(opts = {}) {
     runTarget = opts.target ?? null;
     onStarted = opts.onStarted ?? null;
@@ -927,11 +933,13 @@ export function createControlPanel({
     clearRunError();
     renderButtons();
     models?.open();
-    pipelineForm?.open({ choice: Boolean(runTarget?.startPipeline), fixed: opts.engine === 'pipeline', project: runTarget?.project ?? null });
+    pipelineForm?.open({ choice: Boolean(runTarget?.startPipeline), fixed: opts.engine === 'pipeline', project: runTarget?.project ?? null, task: opts.task ?? '' });
     e.runDialog.showModal();
     if (pipelineForm?.active()) pipelineForm.focus();
     else e.fRequest.focus();
-    if (opts.problem) runError(opts.problem.error, opts.problem.field, opts.problem.fields);
+    if (!opts.problem) return;
+    if (!pipelineForm?.active()) runError(opts.problem.error, opts.problem.field, opts.problem.fields);
+    else if (!pipelineForm.markInvalid(opts.problem.field, opts.problem.error)) runError(opts.problem.error);
   }
 
   e.newRun.addEventListener('click', () => {
@@ -1067,6 +1075,32 @@ export function createControlPanel({
     if (document.activeElement === document.body || !document.activeElement) fallbackFocus().focus();
   }
 
+  // The Chat composer of a pipeline chat: the next run with the Pipeline form's choices as a freshly opened form
+  // has them (the detected checks, the stored models, the sandbox the probe allows), never a demo.
+  // target: { project, startPipeline(body) }.
+  // -> { ok, status, data } | { error, field: 'request' } | { error, field, options } (the fix is in the drawer)
+  async function startPipelineFollowUp(task, target) {
+    if (!pipelineForm || !target?.startPipeline || !gates().on || submitting) return { error: 'A run cannot be started here right now.' };
+    const to = pin('control');
+    await pipelineForm.open({ fixed: true, project: target.project ?? null });
+    if (to.stale()) return { error: MOVED };
+    const built = pipelineForm.build({ task, demo: false });
+    if (built.error) return built.field === 'task' ? { error: built.error, field: 'request' } : { error: built.error, field: built.field ?? null, options: true };
+    submitting = true;
+    renderButtons();
+    const r = await target.startPipeline(built.body);
+    submitting = false;
+    renderButtons();
+    if (!r.ok) {
+      const field = r.status === 400 ? pipelineForm.errorField(r.error) : null;
+      if (field === 'task') return { error: startError(r), field: 'request' };
+      // what the form can fix: a field the server named, or a sandbox it refused
+      return { error: startError(r), field, options: Boolean(field) || (r.status === 409 && /\bimage\b|docker/i.test(r.error ?? '')) };
+    }
+    say('Pipeline run started');
+    return r;
+  }
+
   // The follow-up composer: a new run in the chat on screen with the drawer's execution and model choices.
   // -> { ok } | { error, field } | { error, field, fields, options } (the fix is in the drawer: openRun({ problem }))
   async function startFollowUp(goal) {
@@ -1159,5 +1193,5 @@ export function createControlPanel({
     return { control, mode, gates: g, gone: g.on && runInterrupted(control, getState()) };
   }
 
-  return { render, setMode, onEvent, refresh, snapshot, confirm, reset, setReadOnly, openRun, startFollowUp };
+  return { render, setMode, onEvent, refresh, snapshot, confirm, reset, setReadOnly, openRun, startFollowUp, startPipelineFollowUp };
 }

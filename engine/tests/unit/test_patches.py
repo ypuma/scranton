@@ -84,12 +84,12 @@ def test_source_io_failure_rolls_back_all_bytes(tmp_path, monkeypatch):
     original = patches.write_bytes_atomic
     failed = False
 
-    def fail_once(path, data):
+    def fail_once(path, data, **kwargs):
         nonlocal failed
         if path == args["source"] / "c" and not failed:
             failed = True
             raise OSError("injected disk fault")
-        original(path, data)
+        original(path, data, **kwargs)
 
     monkeypatch.setattr(patches, "write_bytes_atomic", fail_once)
     result = patches.apply_to_source(**args)
@@ -105,9 +105,9 @@ def test_source_crash_after_write_recovers_idempotently(tmp_path, monkeypatch):
     original = patches.write_bytes_atomic
     crashed = False
 
-    def crash_after_write(path, data):
+    def crash_after_write(path, data, **kwargs):
         nonlocal crashed
-        original(path, data)
+        original(path, data, **kwargs)
         if path == args["source"] / "a" and not crashed:
             crashed = True
             raise SystemExit("simulated hard crash before journal done entry")
@@ -139,12 +139,12 @@ def test_workspace_io_failure_rolls_back_validated_set(tmp_path, monkeypatch):
     original = patches.write_bytes_atomic
     failed = False
 
-    def fail_once(path, data):
+    def fail_once(path, data, **kwargs):
         nonlocal failed
         if path.name == "b" and not failed:
             failed = True
             raise OSError("injected workspace write failure")
-        original(path, data)
+        original(path, data, **kwargs)
 
     monkeypatch.setattr(patches, "write_bytes_atomic", fail_once)
     with pytest.raises(EngineError) as raised:

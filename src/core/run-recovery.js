@@ -65,7 +65,13 @@ async function recover(hive, runId, summary, dockerDependencies, automatic) {
     rejectResponse(hive, () => {});
     if (!recorder.seq) recorder.emit('run_started', { request: lease.request ?? '', workspace: lease.workspace ?? null, maxFailedCycles: 3, roles: [] });
     if (!['finished', 'aborted', 'failed'].includes(recorder.state.status)) {
-      recorder.emit('run_finished', { status: 'aborted', summary: [summary, ...warnings].join('\n') });
+      const outcome = [summary, ...warnings].join('\n');
+      if (state.execution?.conversation === true && !state.reply) {
+        for (const role of state.roles ?? []) recorder.emit('agent_status', { agent: role.id, status: 'idle', activity: 'Idle' });
+        const text = `Run finished with status "aborted": ${outcome}\nRequest: ${state.request ?? ''}`;
+        recorder.emit('run_reply', { from: 'system', kind: 'summary', text: text.slice(0, 16000), ...(text.length > 16000 ? { truncated: true } : {}) });
+      }
+      recorder.emit('run_finished', { status: 'aborted', summary: outcome });
     }
     recorder.persist();
     withFsRetry(() => fs.rmSync(path.join(hive, 'control', 'stop.json'), { force: true }));

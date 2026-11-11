@@ -239,6 +239,11 @@ function workflowGates(raw, roles = DISPLAY_AGENTS) {
   return raw;
 }
 
+function normalizeReply(raw) {
+  if (!raw || !['answer', 'report', 'summary'].includes(raw.kind) || typeof raw.text !== 'string') return null;
+  return { kind: raw.kind, text: sanitize(raw.text.slice(0, 16000)) };
+}
+
 function normalizeState(state, events) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
   if (!state.runId || state.status === 'idle' || !has(RUN_BADGE, state.status)) return null;
@@ -286,6 +291,7 @@ function normalizeState(state, events) {
     activeMilestoneIds: (Array.isArray(state.activeMilestoneIds) ? state.activeMilestoneIds : []).filter((id) => known.has(id)),
     instances,
     chat: normalizeChat(state.chat),
+    reply: normalizeReply(state.reply) || normalizeReply(lastEvent(events, (e) => e.type === 'run_reply' && e.runId === state.runId)),
     cycle: num(state.cycle),
     failedCycles: num(state.failedCycles),
     maxFailedCycles: num(state.maxFailedCycles, 3),
@@ -432,6 +438,10 @@ function alertLines(st, events, ctx) {
     } else {
       const text = `Run ${st.status}${result === st.status ? '' : `: ${result}`}${summary}`;
       lines.push(fitSegments(loud(text, g.failed), ctx.cw, ctx.ell));
+    }
+    if (st.reply) {
+      lines.push([[`${g.h.repeat(2)} Reply (${st.reply.kind}) ${g.h.repeat(2)}`, 'bold']]);
+      lines.push(fitSegments([[st.reply.text, null]], ctx.cw, ctx.ell));
     }
     return lines;
   }
@@ -813,6 +823,12 @@ function eventSegments(e, st, ctx) {
     case 'hitl_response':
       return [['human', 'bold'], ['  decided ', null], [sanitize(e.decision), 'bold'],
         ...(e.feedback ? [[`  "${sanitize(e.feedback)}"`, MUTED]] : [])];
+    case 'agent_message':
+      return null;
+    case 'run_reply': {
+      const reply = normalizeReply(e);
+      return reply ? [['reply [', 'bold'], [reply.kind, MUTED], ['] ', 'bold'], [truncate(reply.text, 80, ctx.ell), null]] : null;
+    }
     case 'run_finished':
       return [['run finished  ', 'bold'], resultLabel(sanitize(e.status), ctx), ['  ' + sanitize(e.summary), null]];
     case 'log': {

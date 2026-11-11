@@ -49,7 +49,7 @@ test('parseStoredWorkflow: whole stage numbers only, and the three-box choice of
 
 test('buildRunRequest and buildFollowUp send the workflow as the contract says, never for a demo', () => {
   assert.deepEqual(buildRunRequest({ request: 'Build', workflow: WORKFLOW_DEFAULT }, parseControl(CONTROL)).body,
-    { request: 'Build', workflow: { gates: [['oscar', 'hank'], ['angela']] } });
+    { request: 'Build', workflow: { gates: [['oscar', 'hank'], ['angela']] }, conversation: true });
   assert.deepEqual(buildRunRequest({ request: 'Build', workflow: stages({}) }, parseControl(CONTROL)), { error: WORKFLOW_ERROR, field: 'workflow' });
   const demo = buildRunRequest({ demo: true, scenario: 'happy', workflow: WORKFLOW_DEFAULT }, parseControl(CONTROL));
   assert.equal(demo.body.workflow, undefined, 'a demo replays its scripted agents');
@@ -66,26 +66,29 @@ test('parseControl reads defaults.workflow and defaults.models for every role', 
 });
 
 test('runRoles and dockerGaps cover exactly the roles of the workflow', () => {
-  const none = Object.fromEntries(ROLES5.map((r) => [r, '']));
+  const some = { michael: PICK, dwight: PICK, oscar: null, hank: null, angela: null };
   assert.deepEqual(runRoles({ gates: [['oscar', 'hank'], ['angela']] }), ROLES5);
   assert.deepEqual(runRoles({ noPlan: true, gates: [['hank']] }), ['dwight', 'hank']);
   assert.deepEqual(runRoles(), ['michael', 'dwight', 'angela'], 'no gates given: the engine default');
-  assert.deepEqual(dockerGaps(none, { gates: [['oscar', 'hank'], ['angela']] }), ROLES5);
-  assert.deepEqual(dockerGaps({ ...none, michael: GPT, dwight: GPT }, { gates: [['oscar']] }), ['oscar'], 'Hank and Angela do not run');
-  assert.deepEqual(dockerGaps(none, { gates: [['oscar']], configured: { michael: PICK, dwight: PICK, oscar: PICK, hank: null, angela: null } }), []);
-  assert.deepEqual(dockerGaps(none, { gates: [['oscar', 'hank']], host: true }), []);
+  assert.deepEqual(dockerGaps({ gates: [['oscar', 'hank'], ['angela']] }), ROLES5);
+  assert.deepEqual(dockerGaps({ gates: [['oscar']], configured: some }), ['oscar'], 'Hank and Angela do not run');
+  assert.deepEqual(dockerGaps({ gates: [['oscar']], configured: { ...some, oscar: PICK } }), []);
+  assert.deepEqual(dockerGaps({ gates: [['oscar', 'hank']], host: true }), []);
 });
 
-test('buildModels sends only the roles the run uses', () => {
+test('buildModels sends only the roles the run uses on the trusted host, and none in Docker', () => {
   const cat = parseModels(CATALOG);
   const all = Object.fromEntries(ROLES5.map((r) => [r, GPT]));
-  assert.deepEqual(Object.keys(buildModels(all, cat, { gates: [['hank']] }).models), ['michael', 'dwight', 'hank']);
-  assert.deepEqual(Object.keys(buildModels(all, cat, { gates: [['oscar', 'hank'], ['angela']] }).models), ROLES5);
-  assert.deepEqual(Object.keys(buildModels(all, cat, { noPlan: true, gates: [['angela']] }).models), ['dwight', 'angela']);
-  const r = buildModels({ ...all, oscar: '', hank: '' }, cat, { gates: [['oscar', 'hank'], ['angela']] });
+  const host = { host: true };
+  assert.deepEqual(Object.keys(buildModels(all, cat, { ...host, gates: [['hank']] }).models), ['michael', 'dwight', 'hank']);
+  assert.deepEqual(Object.keys(buildModels(all, cat, { ...host, gates: [['oscar', 'hank'], ['angela']] }).models), ROLES5);
+  assert.deepEqual(Object.keys(buildModels(all, cat, { ...host, noPlan: true, gates: [['angela']] }).models), ['dwight', 'angela']);
+  const configured = { michael: PICK, dwight: PICK, oscar: null, hank: null, angela: PICK };
+  const r = buildModels(all, cat, { gates: [['oscar', 'hank'], ['angela']], configured });
   assert.equal(r.field, 'models.oscar');
   assert.deepEqual(r.fields, ['models.oscar', 'models.hank']);
-  assert.match(r.error, /needs a model for Oscar and Hank\./);
+  assert.match(r.error, /Oscar and Hank have none\./);
+  assert.deepEqual(buildModels(all, cat, { gates: [['angela']], configured }), { models: {} });
 });
 
 test('the server 400 about models maps onto the Oscar and Hank selects', () => {
@@ -99,8 +102,8 @@ test('the server 400 about models maps onto the Oscar and Hank selects', () => {
 
 // ------------------------------------------------------------ the drawer
 
-test('drawer: a new user gets review and security side by side, then the tests, and every role needs a model in Docker', async (t) => {
-  const h = harness();
+test('drawer: a new user gets review and security side by side, then the tests, and every role needs an agent default in Docker', async (t) => {
+  const h = harness({ control: { ...CONTROL, defaults: { models: { michael: PICK, dwight: PICK, oscar: null, hank: null, angela: PICK } } } });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.deepEqual(h.ids(), ['oscar', 'hank', 'angela'], 'an older server: the built-in gates');
@@ -108,21 +111,23 @@ test('drawer: a new user gets review and security side by side, then the tests, 
   assert.deepEqual(['oscar', 'hank', 'angela'].map((id) => h.row(id).name.textContent), ['Oscar', 'Hank', 'Angela']);
   assert.equal(h.$('f-gates-summary').textContent, 'Review + Security \u2192 Tests, after each developer turn');
   for (const role of ROLES5) assert.equal(h.$(`model-row-${role}`).hidden, false, role);
-  assert.match(h.$('models-need').textContent, /^The Docker sandbox needs a model for every role/, 'an older server: the general note');
-
-  await h.pick({ michael: GPT, dwight: GPT, angela: GPT });
-  await h.$('run-form').fire('submit');
-  assert.deepEqual(h.posts, []);
-  assert.match(h.$('run-error').textContent, /needs a model for Oscar and Hank\./);
-  assert.equal(h.$('f-model-oscar').getAttribute('aria-invalid'), 'true');
-  assert.equal(h.$('f-model-hank').getAttribute('aria-invalid'), 'true');
-  assert.equal(globalThis.document.activeElement, h.$('f-model-oscar'));
+  assert.match(h.$('models-need-text').textContent, /Oscar and Hank have none\./);
 
   await h.pick({ oscar: GPT, hank: GPT });
   await h.$('run-form').fire('submit');
+  assert.deepEqual(h.posts, [], 'a pick does not fill a missing agent default');
+  assert.match(h.$('run-error').textContent, /Oscar and Hank have none\./);
+  assert.equal(h.$('f-model-oscar').getAttribute('aria-invalid'), 'true');
+  assert.equal(h.$('f-model-hank').getAttribute('aria-invalid'), 'true');
+  assert.equal(h.$('f-model-oscar').disabled, true, 'Docker keeps the select locked');
+  assert.equal(h.$('run-error').getAttribute('tabindex'), '-1');
+  assert.equal(globalThis.document.activeElement, h.$('run-error'), 'the message, never the locked select');
+
+  await h.sandbox(true);
+  await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
   assert.deepEqual(h.posts[0].body.workflow, { gates: [['oscar', 'hank'], ['angela']] });
-  assert.deepEqual(Object.keys(h.posts[0].body.models), ROLES5);
+  assert.deepEqual(Object.keys(h.posts[0].body.models), ['oscar', 'hank'], 'the trusted host sends the picks');
 });
 
 test('drawer: a stage number of its own runs a gate after the others, and the selects follow the gates', async (t) => {
@@ -142,6 +147,7 @@ test('drawer: a stage number of its own runs a gate after the others, and the se
   await h.toggle('angela', false);
   assert.deepEqual(ROLES5.map((r) => h.$(`model-row-${r}`).hidden), [false, false, true, false, true]);
 
+  await h.sandbox(true);
   await h.pick({ michael: GPT, dwight: GPT, hank: GPT });
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1, 'the inactive roles need no model');
@@ -153,6 +159,7 @@ test('drawer: no gate at all is a field error, and nothing is sent', async (t) =
   const h = harness();
   t.after(() => h.panel.setMode('demo'));
   await h.open();
+  await h.sandbox(true);
   await h.pick(Object.fromEntries(ROLES5.map((r) => [r, GPT])));
   for (const id of ['oscar', 'hank', 'angela']) await h.toggle(id, false);
   assert.equal(h.$('f-gates-summary').dataset.tone, 'error');
@@ -225,6 +232,7 @@ test('drawer: the server 400 for Oscar and Hank marks their selects', async (t) 
   const h = harness({ reject: SERVER('oscar, hank') });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
+  await h.sandbox(true);
   await h.pick(Object.fromEntries(ROLES5.map((r) => [r, GPT])));
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
@@ -242,7 +250,7 @@ test('follow-up: the drawer\'s gates go along, and the Docker check covers them'
   const r = await h.panel.startFollowUp('Next step');
   assert.deepEqual(h.posts, []);
   assert.equal(r.options, true);
-  assert.match(r.error, /needs a model for every role|Michael, Dwight, Oscar, Hank and Angela/);
+  assert.match(r.error, /does not report them\. Set a model for each agent in Agents\./);
 
   await h.toggle('oscar', false);
   await h.toggle('hank', false);
@@ -259,7 +267,7 @@ test('follow-up: the drawer\'s gates go along, and the Docker check covers them'
 
 // ------------------------------------------------------------ the server's configured workflow
 
-const configured = (gates) => ({ ...CONTROL, defaults: { workflow: { gates } } });
+const configured = (gates) => ({ ...CONTROL, defaults: { workflow: { gates }, models: Object.fromEntries(ROLES5.map((r) => [r, PICK])) } });
 const ALL = Object.fromEntries(ROLES5.map((r) => [r, GPT]));
 
 test('configuredChoice: the engine default means nothing is configured; other gates become the stages', () => {

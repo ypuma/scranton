@@ -55,6 +55,7 @@ export function reduce(state, event) {
         updatedAt: event.ts,
         agents: emptyAgents(event.ts)
       });
+      delete s.reply;
       s.roles = structuredClone(event.roles ?? []);
       for (const role of s.roles) if (!s.agents[role.id]) s.agents[role.id] = structuredClone(s.agents.angela);
       break;
@@ -135,6 +136,9 @@ export function reduce(state, event) {
       for (const i of Object.values(s.instances)) if (i.milestoneId === event.milestoneId) { i.status = 'done'; i.tool = null; }
       s.breaker = 'closed';
       s.failedCycles = 0;
+      break;
+    case 'run_reply':
+      s.reply = { from: event.from, kind: event.kind, text: event.text, ...(event.truncated ? { truncated: true } : {}) };
       break;
     case 'run_finished':
       s.activeMilestoneIds = [];

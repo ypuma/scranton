@@ -5,7 +5,7 @@ export const EVENT_TYPES = new Set([
   'run_started', 'plan_ready', 'milestone_started', 'hive_write', 'agent_status', 'agent_tool',
   'agent_finished', 'cycle_result', 'circuit_breaker', 'hitl_request', 'hitl_response',
   'milestone_finished', 'run_finished', 'log', 'instance_started', 'chat_message', 'chat_delivery', 'milestone_integrated',
-  'chat_command_rejected', 'gate_result',
+  'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply',
 ]);
 
 function isEvent(ev) {
@@ -83,11 +83,13 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
   let gateInode = null;
   let gateDropping = false;
   const gateResults = new Map();
+  let conversationEvents = [];
 
   // Gate verdicts must survive tool traffic scrolling out of the log tail.
   async function readGateResults(handle, info, runId) {
     if (gateRun !== runId || gateInode !== info.ino || gateOffset > info.size) {
       gateResults.clear();
+      conversationEvents = [];
       gateOffset = 0;
       gateDropping = false;
     }
@@ -118,6 +120,10 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
         continue;
       }
       for (const ev of parseEventLines(pending.subarray(0, end + 1).toString('utf8'))) {
+        if (ev.runId === runId && ev.type !== 'agent_message') {
+          conversationEvents.push(ev);
+          if (conversationEvents.length > Math.max(1, maxEvents)) conversationEvents.shift();
+        }
         if (ev.type !== 'gate_result' || ev.runId !== runId || !(/^[a-z][a-z0-9]{1,19}$/).test(ev.agent)) continue;
         const key = `${ev.milestoneId}:${ev.agent}`;
         if (!gateResults.has(key) || ev.seq > gateResults.get(key).seq) gateResults.set(key, ev);
@@ -160,6 +166,7 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
       tail = [];
       head = null;
       gateResults.clear();
+      conversationEvents = [];
       gateRun = null;
       gateOffset = 0;
       tailKey = 'missing';
@@ -190,11 +197,14 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
     }
     if (!length) {
       gateResults.clear();
+      conversationEvents = [];
       gateRun = null;
       gateOffset = 0;
       gateDropping = false;
     }
-    tail = next;
+    // Assistant bodies do not consume the visible event budget in conversation mode.
+    tail = state?.execution?.conversation === true || (nextHead ?? next.find((ev) => ev.type === 'run_started') ?? head)?.execution?.conversation === true
+      ? conversationEvents.slice() : next;
     head = nextHead;
     tailKey = key;
     return true;

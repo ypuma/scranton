@@ -50,13 +50,13 @@ function fakeFactory(authPath, { url = 'https://claude.ai/oauth/authorize?state=
 
 test('status is read-only for signed-out, OAuth, expired, API-key, env and malformed store; no secrets', async (t) => {
   const f = fixture(t);
-  assert.deepEqual((await f.service.listAccounts()).map((a) => a.status), ['signed_out', 'signed_out', 'signed_out']);
+  assert.deepEqual((await f.service.listAccounts()).map((a) => a.status), ['signed_out', 'signed_out', 'signed_out', 'signed_out']);
   assert.equal(fs.existsSync(f.authPath), false);
   const data = { anthropic: credential(), openai: { type: 'api_key', key: KEY } };
   fs.writeFileSync(f.authPath, JSON.stringify(data));
   const before = fs.readFileSync(f.authPath);
   const accounts = await f.service.listAccounts(); noSecrets(accounts);
-  assert.deepEqual(accounts.map((a) => [a.status, a.kind]), [['signed_in', 'oauth'], ['signed_in', 'api_key'], ['signed_out', null]]);
+  assert.deepEqual(accounts.map((a) => [a.status, a.kind]), [['signed_in', 'oauth'], ['signed_in', 'api_key'], ['signed_out', null], ['signed_out', null]]);
   assert.deepEqual(fs.readFileSync(f.authPath), before);
   data.anthropic.expires = 1; fs.writeFileSync(f.authPath, JSON.stringify(data));
   assert.equal((await f.service.listAccounts())[0].status, 'signed_in');

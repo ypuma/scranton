@@ -269,9 +269,9 @@ test('buildModels: only roles that are not pi default, and only models of signed
 test('buildRunRequest sends models for a real run only', () => {
   const c = parseControl({ v: 1, enabled: true, workspace: 'C:\\ws', scenarios: ['happy'] });
   const models = { dwight: { provider: 'openai', model: 'gpt-a' } };
-  assert.deepEqual(buildRunRequest({ request: 'x', models }, c), { body: { request: 'x', models } });
-  assert.deepEqual(buildRunRequest({ request: 'x', models: {} }, c), { body: { request: 'x' } });
-  assert.deepEqual(buildRunRequest({ request: '', demo: true, scenario: 'happy', models }, c), { body: { demo: { scenario: 'happy' } } });
+  assert.deepEqual(buildRunRequest({ request: 'x', models }, c), { body: { request: 'x', models, conversation: true } });
+  assert.deepEqual(buildRunRequest({ request: 'x', models: {} }, c), { body: { request: 'x', conversation: true } });
+  assert.deepEqual(buildRunRequest({ request: '', demo: true, scenario: 'happy', models }, c), { body: { demo: { scenario: 'happy' }, conversation: true } });
 });
 
 test('server errors about models point at the model selects', () => {
@@ -287,7 +287,7 @@ test('the sign-in hint needs both: no signed-in account and no provider with a k
   assert.equal(credentialHint({ accounts: parseAuth({ accounts: SIGNED_OUT }).accounts, catalog: cat }), false, 'openai has a credential');
   assert.equal(credentialHint({ catalog: { providers: [{ ...cat.providers[0] }] } }), true);
   assert.equal(credentialHint({ accounts: [{ id: 'openai', status: 'signed_in', kind: 'api_key' }], catalog: { providers: [] } }), false);
-  assert.equal(DOCKER_NOTE, 'Subscriptions are passed to containers as short-lived access tokens.');
+  assert.equal(DOCKER_NOTE, 'Claude and ChatGPT sign-ins are passed to containers as short-lived access tokens. A Google Antigravity sign-in stays on this computer; the agents in a container get a temporary permission to make model calls through it until that permission expires.');
 });
 
 // ------------------------------------------------------------ API keys and custom providers (addendum 2026-11-08 18:10)

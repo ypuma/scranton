@@ -34,7 +34,7 @@ export function validateBaseUrl(value) {
   return url.href.replace(/\/+$/, '');
 }
 export function validateProvider(value) {
-  if (!object(value) || Object.keys(value).some((k) => !['id', 'label', 'baseUrl', 'api', 'models'].includes(k)) || typeof value.id !== 'string' || !/^[a-z][a-z0-9-]{1,31}$/.test(value.id) || builtinCatalog.some((p) => p.id === value.id)) throw failure(400, 'Invalid or built-in provider ID');
+  if (!object(value) || Object.keys(value).some((k) => !['id', 'label', 'baseUrl', 'api', 'models'].includes(k)) || typeof value.id !== 'string' || !/^[a-z][a-z0-9-]{1,31}$/.test(value.id) || (value.id === 'google-antigravity' || builtinCatalog.some((p) => p.id === value.id))) throw failure(400, 'Invalid or built-in provider ID');
   if (!apis.includes(value.api)) throw failure(400, 'Unsupported provider API');
   const label = value.label ?? value.id;
   if (typeof label !== 'string' || !label.trim() || label.length > 120 || /[\x00-\x1f\x7f]/.test(label)) throw failure(400, 'Invalid provider label');

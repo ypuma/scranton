@@ -2,11 +2,11 @@
 
 Python-Engine 0.1.0: feste LangGraph-Zustandsmaschine mit Planner, Implementer und optionalem Reviewer, privaten Snapshot-Dateien und menschlicher Plan-/Lieferfreigabe. Sie ist eigenständig per CLI nutzbar. [Architektur](docs/ARCHITECTURE.md) · [Desktop/HTTP](../docs/PIPELINE.md) · [Projekt](../README.md).
 
-## Voraussetzungen und Installation (Windows cmd)
+## Voraussetzungen und Installation (Windows cmd; POSIX unten)
 
 Paketanforderung: Python >=3.12; geprüft wurde hier die vorhandene Windows-Python-3.14-Umgebung. Git muss als ausführbares Programm auf PATH liegen; für Dockerchecks zusätzlich eine erreichbare Linux-Docker-Engine und das **bereits lokal vorhandene** konfigurierte Image. Die Engine installiert weder Docker noch Git. `sandbox build` baut das paketierte Image ausdrücklich auf Anforderung; beim normalen Lauf wird kein Image gebaut oder gepullt. Keine echten Provider sind für die Demo nötig.
 
-Abhängigkeiten: LangGraph/Checkpoint/SQLite, LangChain Core/OpenAI und Pydantic, exakt gepinnt in `pyproject.toml`; pytest/Ruff/mypy als Extra `dev`. Das `langchain`-Metapaket ist nicht erforderlich. `requirements.lock` beschreibt die hashgesperrte Runtime-Closure; die editierbare Entwicklerinstallation unten ist nicht gleichbedeutend mit einem vollständig reproduzierten Desktoppaket.
+Abhängigkeiten: LangGraph/Checkpoint/SQLite, LangChain Core/OpenAI und Pydantic, exakt gepinnt in `pyproject.toml`; pytest/Ruff/mypy als Extra `dev`. Das `langchain`-Metapaket ist nicht erforderlich. Die plattformspezifischen Requirements-Locks beschreiben die hashgesperrte Runtime-Closure (Windows weiterhin `requirements.lock`); die editierbare Entwicklerinstallation unten ist nicht gleichbedeutend mit einem vollständig reproduzierten Desktoppaket.
 
 Vom Projektroot, Beispielpfad dieses Checkouts (für eine andere Installation `ROOT` anpassen):
 
@@ -412,3 +412,52 @@ Die Desktopintegration verwendet diesen Adapter mit `node` und `tools/pipeline-p
 ## Separater realer pi-Bridge-Lauf
 
 Ein echter Lauf wurde am **2026-11-09 um 22:37** über die Desktop-HTTP-API auf dem Drei-Dateien-Projekt `.scratch/pipeline/real-smoke/project` ausgeführt: alle drei Rollen `openai/gpt-6.1-sol` **via pi**, ChatGPT-Subscription des Benutzers, Trusted-Host-Sandbox. Planner: 2 Aufrufe (ein Kontextzug), Implementer: 1, Reviewer: 1; pi meldete **7647 Input-/601 Outputtokens**. Baselinecheck rot, finaler Check grün, Ein-Zeilen-Diff; die Quelldatei änderte sich erst nach Lieferfreigabe; Abschluss **`succeeded`**. Dieser eine Lauf belegt **nicht** andere Provider, größere Repositories, Reparatur-/Revisionsschleifen mit echten Modellen oder Dockerbetrieb mit echten Modellen.
+
+## Conversation-Modus (opt-in)
+
+`EngineConfig.conversation` ist ein striktes Boolean am Konfigurationsroot, Default **false**. Aktivierung: `{"conversation":true,...}` in der Operator-Konfiguration oder `run --conversation` zusätzlich zu den bisherigen Argumenten. Die CLI-Option aktiviert denselben Schalter; `resume` verwendet ausschließlich die gepinnte Konfigurationskopie. Ohne Aktivierung bleiben Plannerprompt/-schema, Events, Statusfelder und Dateimenge unverändert; `answer` ist dann kein gültiger Plannerturn. Auch die Core-Evals bleiben standardmäßig im bisherigen Modus.
+
+```cmd
+"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\chat\demo" --scenario answer --conversation
+```
+
+`answer` liest `calculator.py` und beantwortet die Frage nach `add(a,b)`, ohne Plan-/Liefer-Gate oder Edits (Exit 0, `succeeded`, `delivery:null`). Ohne `--conversation` wird dieses neue Szenario vor Runanlage mit Exit 2 (`conversation_required`) verweigert. Auch `basic|replan|parallel|evidence` lassen sich mit `--conversation` starten; ihre normalen Freigaben bleiben bestehen.
+
+Aktiviert emittiert nur ein nach semantischer Validierung und Grounding angenommener Rollenoutput ein `agent_message` in `events.jsonl`: `data:{role,text,context,final:true,truncated:boolean}`. Grundlage sind Planzusammenfassung/Kontextrationale, Implementerzusammenfassung/Blockadegrund und Reviewzusammenfassung, niemals Rohcompletion oder Editinhalt. Redaktion erfolgt vor dem 16.000-Zeichen-Cap; leere Texte werden unterdrückt. Abgewiesene Outputs erscheinen nur in bestehenden Validierungs-/Groundingereignissen; Python-Reparaturfeedback ist keine Rollenmessage. Lanes behalten `data.lane`. Es gibt **kein** `messages.jsonl`.
+
+Der Planner kann `kind:"answer",answer:{text,citations:[],summary:""}` liefern. `text` hat das bisherige Textbudget (32.768 Zeichen, nicht leer), `summary` höchstens 1.024, `citations` höchstens 100 E-/K-/H-IDs. Vorherige begrenzte Kontextzüge sind erlaubt. Jede Citation muss im tatsächlich gezeigten Prompt vorkommen: `enforce` repariert innerhalb von `max_output_repairs`, `observe` zeichnet Verstöße nur auf. Der Router geht mit Grund `direct_answer` direkt nach `finalize`; alle nachgelagerten Gates, Schreib-, Verifikations-, Review-, Groundingabschluss- und Lieferknoten entfallen. Snapshot, Setup und Baseline **vor** der Planung bleiben bestehen; Betreiberrezepte und Trusted host sind deshalb weiterhin eine Vertrauensentscheidung, keine allgemeine read-only Sandbox.
+
+Jeder terminale Run bekommt ohne weiteren Modellaufruf eine Antwort mit exakt `{from:"pipeline",kind:"answer"|"result",text,citations:[],truncated:boolean}`: in `status.json.reply`, `delivery/reply.json` und als `run_reply` direkt vor `run_finished`. Erfolgreiche direkte Antworten verwenden Plannertext/Citations; sonst beschreibt `result` deterministisch Outcome, Grund bei Fehler/Ablehnung/Abbruch, Schritte, Dateien, finale Checks, Review und Lieferung. Antworttext maximal 16.000 Zeichen nach Redaktion. `running`, `awaiting_approval` und `suspended` erhalten noch keine Antwort. Vor terminalem Status werden ein interner Abschlussreceipt (`delivery/final-status.json`), die Replydatei und die beiden Abschlussereignisse geschrieben. Resume und wiederholtes Finalisieren ergänzen fehlende Kopien aus Receipt/Event, ohne ein zweites `run_reply` zu emittieren. Andere Rollen-/Nodeereignisse können bei Replay weiterhin wiederholt werden; keine globale Exactly-once-Zusage. Multi-Run-Historie wird nicht automatisch als Promptkontext importiert.
+
+Die Node-/UI-Anbindung dieses Schalters folgt separat; der aktuelle Engine-Code allein fügt der Desktopform keine Chatansicht hinzu. Der Supervisor muss bei echten Runs das Requestboolean `conversation` in das gleichnamige Rootfeld der generierten Konfiguration schreiben, bei Demos `--conversation` übergeben.
+
+Direkte Antworten sind nur in der initialen Planungsrunde möglich: Planrevision 0, noch kein abgeschlossener oder versuchter Schritt, keine Neuplanung. Kontextzüge und Outputreparaturen dieser initialen Runde bleiben möglich. Spätere Plannerprompts und -schemas bieten `answer` nicht an; trotzdem zurückgegebene Antworten nutzen die normale begrenzte Outputreparatur. **Citations sind optional**, auch wenn Evidenz gezeigt wurde; jede angegebene ID wird gegen genau den erzeugenden Prompt geprüft. Das garantiert keine inhaltliche Stützung der Aussage.
+
+## macOS/Linux-Entwicklung und portable Desktop-Runtime
+
+Native Buildziele sind macOS arm64 und x64 sowie Linux **glibc** arm64 und x64, zusätzlich zu Windows x64. Dies ist kein Nachweis ausgeführter macOS-/Linux-Releases; native CI und separater installierter Lifecycle müssen die jeweiligen Artefakte noch bestätigen. Keine musl-/Universal-/Cross-Builds. [Native Desktopmatrix, Abhängigkeiten und Artefakte](../docs/DESKTOP.md#native-builds-und-ci-matrix).
+
+Die eigenständige Entwicklerinstallation verlangt weiterhin selbst bereitgestelltes Python und Git. Beispiel auf einem nativen POSIX-Host mit Python 3.14, vom Repositoryroot (eine vorhandene venv nicht während anderer Läufe ersetzen):
+
+```sh
+mkdir -p .scratch/pipeline/tmp .scratch/pipeline/pip-cache
+export TMPDIR="$PWD/.scratch/pipeline/tmp"
+export PIP_CACHE_DIR="$PWD/.scratch/pipeline/pip-cache"
+export PYTHONPYCACHEPREFIX="$PWD/.scratch/pipeline/bytecode"
+python3.14 -m venv .scratch/pipeline/venv
+.scratch/pipeline/venv/bin/python -m pip install -e 'engine[dev]'
+.scratch/pipeline/venv/bin/python -m scranton_pipeline version
+.scratch/pipeline/venv/bin/python -m scranton_pipeline demo --run-root "$PWD/.scratch/pipeline/posix-demo" --delivery patch
+```
+
+Am Plan-Gate ist **Exit 3 erwartet**. Den aktuellen Digest lesen und `resume` wie in den Windows-Beispielen mit demselben nativen Interpreter aufrufen; keine fremden Beispieldigests übernehmen. Tests seriell vom Ordner `engine`:
+
+```sh
+../.scratch/pipeline/venv/bin/python -m pytest tests -q -p no:cacheprovider --basetemp ../.scratch/pipeline/pytest-posix
+../.scratch/pipeline/venv/bin/python -m ruff check src tests --cache-dir ../.scratch/pipeline/ruff-posix
+../.scratch/pipeline/venv/bin/python -m mypy src --cache-dir ../.scratch/pipeline/mypy-posix
+```
+
+Diese editable Installation ist **nicht** die Endnutzerinstallation. Das Desktoppaket liefert Windows-Embed-CPython 3.14.8 beziehungsweise Astral python-build-standalone **3.14.10, Release 20261110**, plus plattformspezifisch hashgesperrte Wheels unter privaten `engine-runtime/site-packages`. Die Lockauswahl steht in `scripts/desktop-runtime.mjs`; Windows behält `requirements.lock`/`runtime-lock.json`, POSIX hat getrennte Locks. Keine Installation in System-Sitepakete, kein pip für Endnutzer erforderlich.
+
+`engine-runtime/launch.json`: Schema 1, native `platform`/`arch`, `executable:"python/python.exe"` (Windows) oder `"python/bin/python3"` (POSIX), `args:["-I","-B","bootstrap.py"]`. Der Node-Resolver macht den Bootstrappfad absolut; der Bootstrap lädt die privaten Sitepakete. Ein Manifestfehler ist kein stiller Fallback. Windows-Legacypakete ohne Manifest dürfen weiter ihren bisherigen Embed-`-m scranton_pipeline`-Pfad nutzen. Entwicklungsvenv-Auflösung: `Scripts/python.exe` unter Windows, `bin/python` unter POSIX; ein Endnutzer bekommt keine zufällige Systemruntime. Runtime-/Wheelfloors können über Nodes macOS-13.5-/glibc-2.28-Komponentenuntergrenze liegen; keine ungemessene Mindest-OS-Kompatibilität behaupten.

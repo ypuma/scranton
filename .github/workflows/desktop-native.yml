@@ -1,0 +1,145 @@
+name: Native desktop builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.platform }}-${{ matrix.arch }} (unsigned)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-2022, platform: win32, arch: x64, target: x86_64-pc-windows-msvc }
+          - { runner: macos-15, platform: darwin, arch: arm64, target: aarch64-apple-darwin }
+          - { runner: macos-15-intel, platform: darwin, arch: x64, target: x86_64-apple-darwin }
+          - { runner: ubuntu-22.04, platform: linux, arch: x64, target: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: '13.5'
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+      SCRANTON_SKIP_PIPELINE: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          architecture: ${{ matrix.arch }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Assert native host and target
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          assert.equal(process.platform, process.env.EXPECTED_PLATFORM);
+          assert.equal(process.arch, process.env.EXPECTED_ARCH);
+          assert.match(execFileSync('rustc', ['-vV'], { encoding: 'utf8' }), new RegExp('host: ' + process.env.EXPECTED_TARGET + '(?:\\r?\\n|$)'));
+          JS
+      - name: Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file desktop-file-utils xdg-utils
+      - name: Project-local Python scratch
+        run: |
+          mkdir -p .scratch/pipeline/tmp .scratch/pipeline/pip-cache .scratch/ci-platform
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const tmp = path.resolve('.scratch/pipeline/tmp');
+          fs.appendFileSync(process.env.GITHUB_ENV, ['TEMP', 'TMP', 'TMPDIR'].map(key => `${key}=${tmp}\n`).join('') + `PIP_CACHE_DIR=${path.resolve('.scratch/pipeline/pip-cache')}\n`);
+          JS
+      - run: npm ci
+      - name: Portable core and runtime contracts (serial)
+        run: node --test --test-concurrency=1 test/core/keywords.test.js test/core/plan.test.js test/core/pipeline-command.test.js test/core/sandbox-posix.test.js test/core/worktree-platform.test.js test/core/pipeline-pi-process.test.js test/server/desktop-csp.test.js
+      - name: Python portable filesystem and sandbox gates (serial)
+        run: |
+          python -m pip install -e "engine[dev]"
+          python -m pytest engine/tests/unit/test_fs_modes.py engine/tests/unit/test_snapshot_modes.py engine/tests/unit/test_sandbox_user.py -q -p no:cacheprovider --basetemp .scratch/pipeline/pytest-ci
+      - name: Prepare native resources and offline smoke
+        run: npm run app:prepare
+      - name: Require prepared Pipeline and native manifest
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import { desktopPlatform, launchManifest } from './scripts/desktop-platform.mjs';
+          const manifest = JSON.parse(fs.readFileSync('src-tauri/staged/app/packaging-manifest.json', 'utf8'));
+          const host = desktopPlatform();
+          for (const key of ['platform', 'arch', 'target']) assert.equal(manifest[key], host[key]);
+          assert.ok(manifest.pipeline, 'CI must not skip the portable Pipeline runtime');
+          const launch = JSON.parse(fs.readFileSync('src-tauri/staged/app/engine-runtime/launch.json', 'utf8'));
+          assert.deepEqual(launch, launchManifest(host));
+          JS
+      - name: Packaging gates (serial, no platform-wide skips)
+        run: node --test --test-concurrency=1 "test/packaging/*.test.js"
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build unsigned native bundles
+        run: npm run app:build
+      - name: Archive macOS app preserving permissions and links
+        if: runner.os == 'macOS'
+        run: tar -czf ".scratch/ci-platform/Scranton-macos-${{ matrix.arch }}.app.tar.gz" -C src-tauri/target/release/bundle/macos Scranton.app
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: Scranton-windows-${{ matrix.arch }}-unsigned-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: Scranton-macos-${{ matrix.arch }}-unsigned-app
+          path: .scratch/ci-platform/*.app.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: Scranton-macos-${{ matrix.arch }}-unsigned-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: Scranton-linux-${{ matrix.arch }}-unsigned-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: Scranton-linux-${{ matrix.arch }}-unsigned-appimage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14

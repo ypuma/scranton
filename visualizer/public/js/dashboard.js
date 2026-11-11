@@ -41,7 +41,9 @@ function segments(container, fills) {
   }));
 }
 
-export function createDashboard() {
+// hasRun(): whether the chat on screen has a run, for a chat whose runs the reducer state does not hold (a
+// pipeline chat); null: the state says.
+export function createDashboard({ hasRun = () => null } = {}) {
   const e = {
     runline: $('runline'), more: $('run-more'), moreToggle: $('run-more-toggle'), request: $('run-request'),
     runId: $('run-id'), pill: $('run-status'), elapsed: $('elapsed'), conn: $('conn'), connLabel: $('conn-label'),
@@ -93,10 +95,10 @@ export function createDashboard() {
     if (humanNeeded(s) && humanWhere === 'exited') {
       a = { tone: 'critical', title: 'Run process exited while waiting for a human', detail: s.hitl?.reason ?? '' };
     } else if (humanNeeded(s) && s.breaker === 'tripped') {
-      a = { tone: 'critical', title: `Circuit breaker tripped - human input required${where}`,
+      a = { tone: 'critical', kind: 'human', title: `Circuit breaker tripped - human input required${where}`,
         detail: s.hitl?.reason ?? `${s.failedCycles}/${s.maxFailedCycles} consecutive failed cycles` };
     } else if (humanNeeded(s)) {
-      a = { tone: 'critical', title: `Paused - human input required${where}`, detail: s.hitl?.reason ?? '' };
+      a = { tone: 'critical', kind: 'human', title: `Paused - human input required${where}`, detail: s.hitl?.reason ?? '' };
     } else if (s?.status === 'exited') {
       const code = s.exit?.exitCode;
       a = { tone: 'critical', title: `Run process exited${code === null || code === undefined ? '' : ` with code ${code}`} before the run finished`,
@@ -104,7 +106,8 @@ export function createDashboard() {
     } else if (s?.result === 'aborted' || s?.result === 'failed') {
       a = { tone: 'critical', title: `Run ${s.result}`, detail: s.summary ?? '' };
     } else if (s?.result) {
-      a = { tone: 'info', title: `Run finished - ${s.result}`, detail: s.summary ?? '' };
+      // the Chat view leaves this one out: its reply and the run line already say it
+      a = { tone: 'info', kind: s.result === 'success' ? 'finished' : 'attention', title: `Run finished - ${s.result}`, detail: s.summary ?? '' };
     } else if (s?.breaker === 'tripped') {
       a = { tone: 'info', title: 'Circuit breaker tripped - resuming', detail: s.lastDecision ? `Decision: ${s.lastDecision.decision}` : '' };
     } else if (modeInfo.error) {
@@ -113,6 +116,7 @@ export function createDashboard() {
     e.alert.hidden = !a;
     if (!a) return;
     e.alert.dataset.tone = a.tone;
+    e.alert.dataset.kind = a.kind ?? 'attention';
     e.alert.setAttribute('role', a.tone === 'critical' ? 'alert' : 'status');
     e.alertTitle.textContent = a.title;
     e.alertDetail.textContent = a.detail;
@@ -282,7 +286,7 @@ export function createDashboard() {
     e.request.textContent = s?.request || '-';
     e.runline.hidden = !s?.runId && QUIET_MODES.has(mode);
     e.runline.dataset.run = String(Boolean(s?.runId));
-    document.body.dataset.run = s?.runId ? 'yes' : 'none';
+    document.body.dataset.run = (hasRun() ?? Boolean(s?.runId)) ? 'yes' : 'none';
     e.empty.hidden = Boolean(s?.runId) || mode === 'demo';
     const lanes = s?.runId ? lanesOf(s) : [];
     const activeAgents = !s?.runId ? 0 : lanes.length ? lanes.filter(isBusy).length

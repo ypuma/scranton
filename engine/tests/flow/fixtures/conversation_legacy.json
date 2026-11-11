@@ -1,0 +1,1987 @@
+{
+  "basic": {
+    "files": [
+      "artifacts/grounding.json",
+      "artifacts/implementer.json",
+      "artifacts/logs/baseline-unit.log",
+      "artifacts/logs/main-r0-step-0-R0-1-unit.log",
+      "artifacts/plan-r0.json",
+      "artifacts/plan.json",
+      "artifacts/planner.json",
+      "artifacts/repo_index.json",
+      "artifacts/review-0.json",
+      "artifacts/reviewer.json",
+      "artifacts/source_manifest.json",
+      "checkpoints.sqlite",
+      "config.json",
+      "delivery/candidate.diff",
+      "delivery/report.json",
+      "delivery/report.md",
+      "demo-source/calculator.py",
+      "demo-source/test_calculator.py",
+      "events.jsonl",
+      "events.lock",
+      "evidence.jsonl",
+      "evidence.lock",
+      "grounding.jsonl",
+      "grounding.lock",
+      "lock",
+      "run.json",
+      "status.json",
+      "usage.jsonl",
+      "usage.lock",
+      "workspace/calculator.py",
+      "workspace/test_calculator.py"
+    ],
+    "status_keys": [
+      "artifacts",
+      "checks",
+      "created_at",
+      "delivery",
+      "delivery_mode",
+      "engine_version",
+      "failure",
+      "grounding",
+      "node",
+      "pending",
+      "phase",
+      "pid",
+      "procedure",
+      "progress",
+      "resumable",
+      "run_id",
+      "sandbox",
+      "schema",
+      "source_dir",
+      "status",
+      "task",
+      "updated_at",
+      "usage"
+    ],
+    "progress_keys": [
+      "attempt",
+      "lanes",
+      "plan_revision",
+      "replans_left",
+      "review_round",
+      "step_count",
+      "step_index",
+      "step_title",
+      "steps_done"
+    ],
+    "events": [
+      [
+        "run_started",
+        null
+      ],
+      [
+        "node_started",
+        "prepare_workspace"
+      ],
+      [
+        "node_finished",
+        "prepare_workspace"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan_context"
+      ],
+      [
+        "context",
+        null
+      ],
+      [
+        "node_finished",
+        "plan_context"
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_waiting",
+        null
+      ],
+      [
+        "run_resumed",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_decided",
+        null
+      ],
+      [
+        "node_finished",
+        "approve_plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "apply_edits"
+      ],
+      [
+        "edits_applied",
+        null
+      ],
+      [
+        "node_finished",
+        "apply_edits"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "verify"
+      ],
+      [
+        "node_finished",
+        "verify"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "review"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "review"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "ground"
+      ],
+      [
+        "criteria_decided",
+        null
+      ],
+      [
+        "probe_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "ground"
+      ],
+      [
+        "node_started",
+        "package"
+      ],
+      [
+        "node_finished",
+        "package"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "finalize"
+      ],
+      [
+        "run_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "finalize"
+      ]
+    ],
+    "status": {
+      "grounding": {
+        "mode": "enforce",
+        "answer": 1.0,
+        "trajectory": 1.0,
+        "unadjusted": 1.0,
+        "violation_rate": 0.0,
+        "adjusted": 1.0,
+        "tier": "clean",
+        "outputs": 4,
+        "violations": {},
+        "criteria": [
+          {
+            "id": "sum",
+            "verified_by": "checks",
+            "state": "demonstrated",
+            "by": "baseline",
+            "checks": [
+              "unit"
+            ]
+          }
+        ],
+        "probe": {
+          "status": "not_needed"
+        }
+      },
+      "procedure": {
+        "enabled": false,
+        "name": null,
+        "digest": null,
+        "situation": null
+      },
+      "schema": 1,
+      "run_id": "basebasic",
+      "status": "succeeded",
+      "phase": "done",
+      "node": "finalize",
+      "task": "Fix addition so the unit test passes.",
+      "source_dir": "<run>\\demo-source",
+      "delivery_mode": "patch",
+      "progress": {
+        "plan_revision": 0,
+        "replans_left": 1,
+        "steps_done": 1,
+        "lanes": [],
+        "step_index": 0,
+        "step_count": 1,
+        "step_title": "Correct addition",
+        "attempt": 1,
+        "review_round": 0
+      },
+      "pending": null,
+      "failure": null,
+      "resumable": false,
+      "usage": {
+        "calls": 4,
+        "input_tokens": 400,
+        "output_tokens": 400,
+        "estimated_cost": null
+      },
+      "checks": [
+        {
+          "id": "unit",
+          "kind": "test",
+          "status": "passed",
+          "required": true,
+          "duration_s": 0,
+          "output_tail": ""
+        }
+      ],
+      "delivery": {
+        "applied": false,
+        "diff_sha256": "bc6b90f72f1b97b14cb8696fef0f75747c7efea74ea78988be2e1ba331ce4261",
+        "files": 1,
+        "conflicts": []
+      },
+      "artifacts": {
+        "plan": "<run>\\artifacts\\plan.json",
+        "diff": "<run>\\delivery\\candidate.diff",
+        "report_md": "<run>\\delivery\\report.md",
+        "report_json": "<run>\\delivery\\report.json"
+      },
+      "sandbox": {
+        "isolation": "No OS isolation.",
+        "image": null,
+        "mode": "host",
+        "isolated": false,
+        "setup_network": false
+      },
+      "pid": null,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "engine_version": "0.1.0"
+    }
+  },
+  "evidence": {
+    "files": [
+      "artifacts/grounding.json",
+      "artifacts/implementer.json",
+      "artifacts/logs/baseline-syntax.log",
+      "artifacts/logs/baseline-unit.log",
+      "artifacts/logs/main-r0-step-0-R0-1-syntax.log",
+      "artifacts/logs/main-r0-step-0-R0-1-unit.log",
+      "artifacts/plan-r0.json",
+      "artifacts/plan.json",
+      "artifacts/planner.json",
+      "artifacts/repo_index.json",
+      "artifacts/review-0.json",
+      "artifacts/reviewer.json",
+      "artifacts/source_manifest.json",
+      "checkpoints.sqlite",
+      "config.json",
+      "delivery/candidate.diff",
+      "delivery/report.json",
+      "delivery/report.md",
+      "demo-source/calculator.py",
+      "demo-source/test_calculator.py",
+      "events.jsonl",
+      "events.lock",
+      "evidence.jsonl",
+      "evidence.lock",
+      "grounding.jsonl",
+      "grounding.lock",
+      "lock",
+      "run.json",
+      "status.json",
+      "usage.jsonl",
+      "usage.lock",
+      "workspace/calculator.py",
+      "workspace/test_calculator.py"
+    ],
+    "status_keys": [
+      "artifacts",
+      "checks",
+      "created_at",
+      "delivery",
+      "delivery_mode",
+      "engine_version",
+      "failure",
+      "grounding",
+      "node",
+      "pending",
+      "phase",
+      "pid",
+      "procedure",
+      "progress",
+      "resumable",
+      "run_id",
+      "sandbox",
+      "schema",
+      "source_dir",
+      "status",
+      "task",
+      "updated_at",
+      "usage"
+    ],
+    "progress_keys": [
+      "attempt",
+      "lanes",
+      "plan_revision",
+      "replans_left",
+      "review_round",
+      "step_count",
+      "step_index",
+      "step_title",
+      "steps_done"
+    ],
+    "events": [
+      [
+        "run_started",
+        null
+      ],
+      [
+        "node_started",
+        "prepare_workspace"
+      ],
+      [
+        "node_finished",
+        "prepare_workspace"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_waiting",
+        null
+      ],
+      [
+        "run_resumed",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_decided",
+        null
+      ],
+      [
+        "node_finished",
+        "approve_plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "absence_refuted",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "apply_edits"
+      ],
+      [
+        "edits_applied",
+        null
+      ],
+      [
+        "node_finished",
+        "apply_edits"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "verify"
+      ],
+      [
+        "node_finished",
+        "verify"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "review"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "review"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "ground"
+      ],
+      [
+        "criteria_decided",
+        null
+      ],
+      [
+        "probe_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "ground"
+      ],
+      [
+        "node_started",
+        "package"
+      ],
+      [
+        "node_finished",
+        "package"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "finalize"
+      ],
+      [
+        "run_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "finalize"
+      ]
+    ],
+    "status": {
+      "grounding": {
+        "mode": "enforce",
+        "answer": 1.0,
+        "trajectory": 0.3889,
+        "unadjusted": 0.6944,
+        "violation_rate": 0.4,
+        "adjusted": 0.25,
+        "tier": "failing",
+        "outputs": 5,
+        "violations": {
+          "false_absence": 1,
+          "unseen_target": 1
+        },
+        "criteria": [
+          {
+            "id": "sum",
+            "verified_by": "checks",
+            "state": "demonstrated",
+            "by": "baseline",
+            "checks": [
+              "unit"
+            ]
+          },
+          {
+            "id": "syntax",
+            "verified_by": "checks",
+            "state": "met_not_demonstrated",
+            "by": "none",
+            "checks": [
+              "syntax"
+            ]
+          }
+        ],
+        "probe": {
+          "status": "not_needed"
+        }
+      },
+      "procedure": {
+        "enabled": false,
+        "name": null,
+        "digest": null,
+        "situation": null
+      },
+      "schema": 1,
+      "run_id": "baseevidence",
+      "status": "succeeded",
+      "phase": "done",
+      "node": "finalize",
+      "task": "Fix addition so the unit test passes.",
+      "source_dir": "<run>\\demo-source",
+      "delivery_mode": "patch",
+      "progress": {
+        "plan_revision": 0,
+        "replans_left": 1,
+        "steps_done": 1,
+        "lanes": [],
+        "step_index": 0,
+        "step_count": 1,
+        "step_title": "Correct addition",
+        "attempt": 1,
+        "review_round": 0
+      },
+      "pending": null,
+      "failure": null,
+      "resumable": false,
+      "usage": {
+        "calls": 5,
+        "input_tokens": 500,
+        "output_tokens": 500,
+        "estimated_cost": null
+      },
+      "checks": [
+        {
+          "id": "unit",
+          "kind": "test",
+          "status": "passed",
+          "required": true,
+          "duration_s": 0,
+          "output_tail": ""
+        },
+        {
+          "id": "syntax",
+          "kind": "syntax",
+          "status": "passed",
+          "required": true,
+          "duration_s": 0,
+          "output_tail": ""
+        }
+      ],
+      "delivery": {
+        "applied": false,
+        "diff_sha256": "bc6b90f72f1b97b14cb8696fef0f75747c7efea74ea78988be2e1ba331ce4261",
+        "files": 1,
+        "conflicts": []
+      },
+      "artifacts": {
+        "plan": "<run>\\artifacts\\plan.json",
+        "diff": "<run>\\delivery\\candidate.diff",
+        "report_md": "<run>\\delivery\\report.md",
+        "report_json": "<run>\\delivery\\report.json"
+      },
+      "sandbox": {
+        "isolation": "No OS isolation.",
+        "image": null,
+        "mode": "host",
+        "isolated": false,
+        "setup_network": false
+      },
+      "pid": null,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "engine_version": "0.1.0"
+    }
+  },
+  "parallel": {
+    "files": [
+      "artifacts/grounding.json",
+      "artifacts/implementer.json",
+      "artifacts/logs/baseline-syntax.log",
+      "artifacts/logs/baseline-unit.log",
+      "artifacts/logs/int-1-r0-step-0-R0-0-syntax.log",
+      "artifacts/logs/int-1-r0-step-0-R0-0-unit.log",
+      "artifacts/logs/l1-0-r0-step-0-R0-1-syntax.log",
+      "artifacts/logs/l1-1-r0-step-1-R0-1-syntax.log",
+      "artifacts/plan-r0.json",
+      "artifacts/plan.json",
+      "artifacts/planner.json",
+      "artifacts/repo_index.json",
+      "artifacts/review-0.json",
+      "artifacts/reviewer.json",
+      "artifacts/source_manifest.json",
+      "artifacts/wave-1.json",
+      "checkpoints.sqlite",
+      "config.json",
+      "delivery/candidate.diff",
+      "delivery/report.json",
+      "delivery/report.md",
+      "demo-source/calculator.py",
+      "demo-source/multiplier.py",
+      "demo-source/test_calculator.py",
+      "demo-source/test_multiplier.py",
+      "events.jsonl",
+      "events.lock",
+      "evidence.jsonl",
+      "evidence.lock",
+      "grounding.jsonl",
+      "grounding.lock",
+      "lock",
+      "run.json",
+      "status.json",
+      "usage.jsonl",
+      "usage.lock",
+      "workspace/calculator.py",
+      "workspace/multiplier.py",
+      "workspace/test_calculator.py",
+      "workspace/test_multiplier.py"
+    ],
+    "status_keys": [
+      "artifacts",
+      "checks",
+      "created_at",
+      "delivery",
+      "delivery_mode",
+      "engine_version",
+      "failure",
+      "grounding",
+      "node",
+      "pending",
+      "phase",
+      "pid",
+      "procedure",
+      "progress",
+      "resumable",
+      "run_id",
+      "sandbox",
+      "schema",
+      "source_dir",
+      "status",
+      "task",
+      "updated_at",
+      "usage"
+    ],
+    "progress_keys": [
+      "attempt",
+      "lanes",
+      "plan_revision",
+      "replans_left",
+      "review_round",
+      "step_count",
+      "step_index",
+      "step_title",
+      "steps_done"
+    ],
+    "events": [
+      [
+        "run_started",
+        null
+      ],
+      [
+        "node_started",
+        "prepare_workspace"
+      ],
+      [
+        "node_finished",
+        "prepare_workspace"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan_context"
+      ],
+      [
+        "context",
+        null
+      ],
+      [
+        "node_finished",
+        "plan_context"
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_waiting",
+        null
+      ],
+      [
+        "run_resumed",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_decided",
+        null
+      ],
+      [
+        "node_finished",
+        "approve_plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "wave_started",
+        null
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "lane_prepare"
+      ],
+      [
+        "node_started",
+        "lane_prepare"
+      ],
+      [
+        "lane_started",
+        null
+      ],
+      [
+        "lane_started",
+        null
+      ],
+      [
+        "node_finished",
+        "lane_prepare"
+      ],
+      [
+        "node_finished",
+        "lane_prepare"
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "node_started",
+        "apply_edits"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "apply_edits"
+      ],
+      [
+        "edits_applied",
+        null
+      ],
+      [
+        "edits_applied",
+        null
+      ],
+      [
+        "node_finished",
+        "apply_edits"
+      ],
+      [
+        "node_finished",
+        "apply_edits"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "verify"
+      ],
+      [
+        "node_started",
+        "verify"
+      ],
+      [
+        "node_finished",
+        "verify"
+      ],
+      [
+        "node_finished",
+        "verify"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "lane_finish"
+      ],
+      [
+        "node_started",
+        "lane_finish"
+      ],
+      [
+        "lane_finished",
+        null
+      ],
+      [
+        "lane_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "lane_finish"
+      ],
+      [
+        "node_finished",
+        "lane_finish"
+      ],
+      [
+        "node_started",
+        "merge_wave"
+      ],
+      [
+        "wave_merged",
+        null
+      ],
+      [
+        "node_finished",
+        "merge_wave"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "verify"
+      ],
+      [
+        "node_finished",
+        "verify"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "review"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "review"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "ground"
+      ],
+      [
+        "criteria_decided",
+        null
+      ],
+      [
+        "probe_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "ground"
+      ],
+      [
+        "node_started",
+        "package"
+      ],
+      [
+        "node_finished",
+        "package"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "finalize"
+      ],
+      [
+        "run_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "finalize"
+      ]
+    ],
+    "status": {
+      "grounding": {
+        "mode": "enforce",
+        "answer": 1.0,
+        "trajectory": 1.0,
+        "unadjusted": 1.0,
+        "violation_rate": 0.0,
+        "adjusted": 1.0,
+        "tier": "clean",
+        "outputs": 5,
+        "violations": {},
+        "criteria": [
+          {
+            "id": "sum",
+            "verified_by": "checks",
+            "state": "demonstrated",
+            "by": "baseline",
+            "checks": [
+              "unit"
+            ]
+          },
+          {
+            "id": "product",
+            "verified_by": "checks",
+            "state": "demonstrated",
+            "by": "baseline",
+            "checks": [
+              "unit"
+            ]
+          }
+        ],
+        "probe": {
+          "status": "not_needed"
+        }
+      },
+      "procedure": {
+        "enabled": false,
+        "name": null,
+        "digest": null,
+        "situation": null
+      },
+      "schema": 1,
+      "run_id": "baseparallel",
+      "status": "succeeded",
+      "phase": "done",
+      "node": "finalize",
+      "task": "Fix independent arithmetic bugs so the unit tests pass.",
+      "source_dir": "<run>\\demo-source",
+      "delivery_mode": "patch",
+      "progress": {
+        "plan_revision": 0,
+        "replans_left": 1,
+        "steps_done": 2,
+        "lanes": [],
+        "step_index": 1,
+        "step_count": 2,
+        "step_title": "Correct multiplication",
+        "attempt": 1,
+        "review_round": 0
+      },
+      "pending": null,
+      "failure": null,
+      "resumable": false,
+      "usage": {
+        "calls": 5,
+        "input_tokens": 500,
+        "output_tokens": 500,
+        "estimated_cost": null
+      },
+      "checks": [
+        {
+          "id": "syntax",
+          "kind": "syntax",
+          "status": "passed",
+          "required": true,
+          "duration_s": 0,
+          "output_tail": ""
+        },
+        {
+          "id": "unit",
+          "kind": "test",
+          "status": "passed",
+          "required": true,
+          "duration_s": 0,
+          "output_tail": ""
+        }
+      ],
+      "delivery": {
+        "applied": false,
+        "diff_sha256": "3abe9050a9a783c7491800004e77cb892ab0741dfe5c0e732881329b6a042974",
+        "files": 2,
+        "conflicts": []
+      },
+      "artifacts": {
+        "plan": "<run>\\artifacts\\plan.json",
+        "diff": "<run>\\delivery\\candidate.diff",
+        "report_md": "<run>\\delivery\\report.md",
+        "report_json": "<run>\\delivery\\report.json"
+      },
+      "sandbox": {
+        "isolation": "No OS isolation.",
+        "image": null,
+        "mode": "host",
+        "isolated": false,
+        "setup_network": false
+      },
+      "pid": null,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "engine_version": "0.1.0"
+    }
+  },
+  "replan": {
+    "files": [
+      "artifacts/grounding.json",
+      "artifacts/implementer.json",
+      "artifacts/logs/baseline-unit.log",
+      "artifacts/logs/main-r1-step-0-R0-1-unit.log",
+      "artifacts/plan-r0.json",
+      "artifacts/plan-r1.json",
+      "artifacts/plan.json",
+      "artifacts/planner.json",
+      "artifacts/repo_index.json",
+      "artifacts/review-0.json",
+      "artifacts/reviewer.json",
+      "artifacts/source_manifest.json",
+      "checkpoints.sqlite",
+      "config.json",
+      "delivery/candidate.diff",
+      "delivery/report.json",
+      "delivery/report.md",
+      "demo-source/calculator.py",
+      "demo-source/test_calculator.py",
+      "events.jsonl",
+      "events.lock",
+      "evidence.jsonl",
+      "evidence.lock",
+      "grounding.jsonl",
+      "grounding.lock",
+      "lock",
+      "run.json",
+      "status.json",
+      "usage.jsonl",
+      "usage.lock",
+      "workspace/calculator.py",
+      "workspace/test_calculator.py"
+    ],
+    "status_keys": [
+      "artifacts",
+      "checks",
+      "created_at",
+      "delivery",
+      "delivery_mode",
+      "engine_version",
+      "failure",
+      "grounding",
+      "node",
+      "pending",
+      "phase",
+      "pid",
+      "procedure",
+      "progress",
+      "resumable",
+      "run_id",
+      "sandbox",
+      "schema",
+      "source_dir",
+      "status",
+      "task",
+      "updated_at",
+      "usage"
+    ],
+    "progress_keys": [
+      "attempt",
+      "lanes",
+      "plan_revision",
+      "replans_left",
+      "review_round",
+      "step_count",
+      "step_index",
+      "step_title",
+      "steps_done"
+    ],
+    "events": [
+      [
+        "run_started",
+        null
+      ],
+      [
+        "node_started",
+        "prepare_workspace"
+      ],
+      [
+        "node_finished",
+        "prepare_workspace"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan_context"
+      ],
+      [
+        "context",
+        null
+      ],
+      [
+        "node_finished",
+        "plan_context"
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_waiting",
+        null
+      ],
+      [
+        "run_resumed",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_decided",
+        null
+      ],
+      [
+        "node_finished",
+        "approve_plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "replan_requested",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "replan"
+      ],
+      [
+        "replanned",
+        null
+      ],
+      [
+        "node_finished",
+        "replan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "plan_context"
+      ],
+      [
+        "context",
+        null
+      ],
+      [
+        "node_finished",
+        "plan_context"
+      ],
+      [
+        "node_started",
+        "plan"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_waiting",
+        null
+      ],
+      [
+        "run_resumed",
+        null
+      ],
+      [
+        "node_started",
+        "approve_plan"
+      ],
+      [
+        "gate_decided",
+        null
+      ],
+      [
+        "node_finished",
+        "approve_plan"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "implement"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "implement"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "apply_edits"
+      ],
+      [
+        "edits_applied",
+        null
+      ],
+      [
+        "node_finished",
+        "apply_edits"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "verify"
+      ],
+      [
+        "node_finished",
+        "verify"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "select_step"
+      ],
+      [
+        "node_finished",
+        "select_step"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "review"
+      ],
+      [
+        "procedure",
+        null
+      ],
+      [
+        "llm_call",
+        null
+      ],
+      [
+        "grounding",
+        null
+      ],
+      [
+        "node_finished",
+        "review"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "ground"
+      ],
+      [
+        "criteria_decided",
+        null
+      ],
+      [
+        "probe_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "ground"
+      ],
+      [
+        "node_started",
+        "package"
+      ],
+      [
+        "node_finished",
+        "package"
+      ],
+      [
+        "route",
+        null
+      ],
+      [
+        "node_started",
+        "finalize"
+      ],
+      [
+        "run_finished",
+        null
+      ],
+      [
+        "node_finished",
+        "finalize"
+      ]
+    ],
+    "status": {
+      "grounding": {
+        "mode": "enforce",
+        "answer": 1.0,
+        "trajectory": 0.6667,
+        "unadjusted": 0.8333,
+        "violation_rate": 0.0,
+        "adjusted": 0.8333,
+        "tier": "clean",
+        "outputs": 7,
+        "violations": {},
+        "criteria": [
+          {
+            "id": "sum",
+            "verified_by": "checks",
+            "state": "demonstrated",
+            "by": "baseline",
+            "checks": [
+              "unit"
+            ]
+          }
+        ],
+        "probe": {
+          "status": "not_needed"
+        }
+      },
+      "procedure": {
+        "enabled": false,
+        "name": null,
+        "digest": null,
+        "situation": null
+      },
+      "schema": 1,
+      "run_id": "basereplan",
+      "status": "succeeded",
+      "phase": "done",
+      "node": "finalize",
+      "task": "Fix addition so the unit test passes.",
+      "source_dir": "<run>\\demo-source",
+      "delivery_mode": "patch",
+      "progress": {
+        "plan_revision": 1,
+        "replans_left": 0,
+        "steps_done": 1,
+        "lanes": [],
+        "step_index": 0,
+        "step_count": 1,
+        "step_title": "Correct addition",
+        "attempt": 1,
+        "review_round": 0
+      },
+      "pending": null,
+      "failure": null,
+      "resumable": false,
+      "usage": {
+        "calls": 7,
+        "input_tokens": 700,
+        "output_tokens": 700,
+        "estimated_cost": null
+      },
+      "checks": [
+        {
+          "id": "unit",
+          "kind": "test",
+          "status": "passed",
+          "required": true,
+          "duration_s": 0,
+          "output_tail": ""
+        }
+      ],
+      "delivery": {
+        "applied": false,
+        "diff_sha256": "bc6b90f72f1b97b14cb8696fef0f75747c7efea74ea78988be2e1ba331ce4261",
+        "files": 1,
+        "conflicts": []
+      },
+      "artifacts": {
+        "plan": "<run>\\artifacts\\plan.json",
+        "diff": "<run>\\delivery\\candidate.diff",
+        "report_md": "<run>\\delivery\\report.md",
+        "report_json": "<run>\\delivery\\report.json"
+      },
+      "sandbox": {
+        "isolation": "No OS isolation.",
+        "image": null,
+        "mode": "host",
+        "isolated": false,
+        "setup_network": false
+      },
+      "pid": null,
+      "created_at": "<time>",
+      "updated_at": "<time>",
+      "engine_version": "0.1.0"
+    }
+  }
+}

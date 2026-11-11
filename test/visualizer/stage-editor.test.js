@@ -78,6 +78,7 @@ test('drawer: one row per gate of the catalog, custom gates off; turned on, a cu
   await h.toggle('docs2', true);
   assert.equal(h.$('f-gates-summary').textContent, 'Review + Security + Doris \u2192 Tests + Seclint, after each developer turn');
 
+  await h.sandbox(true);
   await h.pick(ALL([...RUN, 'seclint', 'docs2']));
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
@@ -98,6 +99,7 @@ test('drawer: a stored choice with a custom gate is applied once the catalog arr
   await h.panel.refresh();
   assert.deepEqual(h.ids(), ['oscar', 'hank', 'angela', 'docs2']);
   assert.equal(h.$('f-gates-summary').textContent, 'Review, after each developer turn');
+  await h.sandbox(true);
   await h.pick(ALL(RUN));
   await h.$('run-form').fire('submit');
   assert.deepEqual(h.posts[0].body.workflow, { gates: [['oscar']] });
@@ -125,6 +127,7 @@ test('drawer: a configured workflow with a custom gate is respected without a st
   assert.deepEqual(h.shown(), { oscar: 0, hank: 0, angela: 2, seclint: 1, docs2: 0 });
   assert.equal(h.$('f-gates-summary').textContent, 'Seclint \u2192 Tests, after each developer turn');
   assert.equal(h.$('f-gates-config').hidden, true);
+  await h.sandbox(true);
   await h.pick(ALL(['michael', 'dwight', 'angela', 'seclint']));
   await h.$('run-form').fire('submit');
   assert.deepEqual(h.posts[0].body.workflow, { gates: [['seclint'], ['angela']] });
@@ -134,13 +137,15 @@ test('drawer: a configured workflow with a custom gate is respected without a st
 test('models: a custom gate\'s default option names its agent default, and it is then no Docker gap', async (t) => {
   assert.equal(piDefaultLabel({ seclint: SOL }, 'seclint'), 'Agent default (openai/gpt-6.1-sol)');
   assert.equal(piDefaultLabel({ seclint: null }, 'seclint'), 'pi default');
+  assert.equal(piDefaultLabel({ seclint: null }, 'seclint', true), 'No agent default');
   assert.deepEqual(runRoles({ gates: [['seclint'], ['angela']] }), ['michael', 'dwight', 'angela', 'seclint']);
-  const none = { michael: GPT, dwight: GPT, angela: GPT, seclint: '' };
-  assert.deepEqual(dockerGaps(none, { gates: [['seclint'], ['angela']], configured: { seclint: null } }), ['seclint']);
-  assert.deepEqual(dockerGaps(none, { gates: [['seclint'], ['angela']], configured: { seclint: SOL } }), [], 'the agent default counts');
-  const r = buildModels(none, parseModels(CATALOG), { gates: [['seclint']], configured: { michael: null }, names: { seclint: 'Seclint' } });
-  assert.deepEqual([r.field, r.fields], ['models.seclint', ['models.seclint']]);
-  assert.match(r.error, /needs a model for Seclint\./);
+  const base = { michael: SOL, dwight: SOL, angela: SOL };
+  assert.deepEqual(dockerGaps({ gates: [['seclint'], ['angela']], configured: { ...base, seclint: null } }), ['seclint']);
+  assert.deepEqual(dockerGaps({ gates: [['seclint'], ['angela']], configured: { ...base, seclint: SOL } }), [], 'the agent default counts');
+  const none = { michael: GPT, dwight: GPT, angela: GPT, seclint: GPT };
+  const r = buildModels(none, parseModels(CATALOG), { gates: [['seclint']], configured: { ...base, seclint: null }, names: { seclint: 'Seclint' } });
+  assert.deepEqual([r.field, r.fields], ['models.seclint', ['models.seclint']], 'a pick does not stand in for the agent default');
+  assert.match(r.error, /Seclint has none\. Set one in Agents\./);
   assert.deepEqual(parseStoredModels(JSON.stringify({ seclint: PICK, 'Bad-Id': PICK }), null), { seclint: PICK }, 'the picker keeps a custom choice');
   assert.equal(resolveChoices({ seclint: PICK }, parseModels(CATALOG), ['seclint']).seclint.value, GPT);
 
@@ -148,14 +153,18 @@ test('models: a custom gate\'s default option names its agent default, and it is
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.equal(h.select('seclint').childNodes[0].textContent, 'Agent default (openai/gpt-6.1-sol)');
-  assert.equal(h.select('docs2').childNodes[0].textContent, 'pi default');
+  assert.equal(h.select('docs2').childNodes[0].textContent, 'No agent default', 'Docker offers no pi default');
   assert.equal(h.$('model-row-oscar').hidden, true, 'Oscar does not run');
-  assert.match(h.$('models-need').textContent, /needs a model for Doris\./);
+  assert.match(h.$('models-need-text').textContent, /Doris has none\./);
   await h.$('run-form').fire('submit');
   assert.deepEqual(h.posts, []);
   assert.equal(h.select('docs2').getAttribute('aria-invalid'), 'true');
   assert.equal(h.select('seclint').getAttribute('aria-invalid'), null, 'the agent default is no gap');
-  assert.equal(globalThis.document.activeElement, h.select('docs2'));
+  assert.equal(h.select('docs2').disabled, true, 'Docker keeps the select locked');
+  assert.equal(h.$('run-error').getAttribute('tabindex'), '-1');
+  assert.equal(globalThis.document.activeElement, h.$('run-error'), 'the message, never the locked select');
+  await h.sandbox(true);
+  assert.equal(h.select('docs2').childNodes[0].textContent, 'pi default');
   await h.pick({ docs2: GPT });
   assert.deepEqual(JSON.parse(h.storage.map.get('scranton.models')), { docs2: PICK }, 'the custom choice is kept like the others');
   await h.$('run-form').fire('submit');
@@ -173,6 +182,7 @@ test('models: the server 400 for a custom gate marks its select', async (t) => {
   const h = harness({ control: withAgents(), stored: { stages: { seclint: 1 } }, reject: msg });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
+  await h.sandbox(true);
   await h.pick(ALL(['michael', 'dwight', 'seclint']));
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 1);
@@ -208,7 +218,7 @@ test('a custom agent with the id constructor is an agent like any other, never t
   await h.open();
   assert.equal(h.row('constructor').stage.value, '1');
   assert.equal(h.$('f-gates-summary').textContent, 'Connie, after each developer turn');
-  assert.equal(h.select('constructor').childNodes[0].textContent, 'pi default');
+  assert.equal(h.select('constructor').childNodes[0].textContent, 'No agent default');
   assert.equal(h.select('toString'), null);
-  assert.match(h.$('models-need').textContent, /for Michael, Dwight and Connie\./);
+  assert.match(h.$('models-need-text').textContent, /Michael, Dwight and Connie have none\./);
 });

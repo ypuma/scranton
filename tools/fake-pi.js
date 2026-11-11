@@ -112,7 +112,9 @@ const assistant = (content, stopReason, extra = {}) => ({
   ...extra
 });
 
-const failMode = env.FAKE_PI_FAIL && (!env.FAKE_PI_FAIL_ROLE || env.FAKE_PI_FAIL_ROLE === role) ? env.FAKE_PI_FAIL : null;
+const conversation = env.SCRANTON_CONVERSATION === '1';
+const reportFailure = conversation && kind === 'report_request' ? env.FAKE_PI_REPORT_FAIL : null;
+const failMode = reportFailure || (env.FAKE_PI_FAIL && (!env.FAKE_PI_FAIL_ROLE || env.FAKE_PI_FAIL_ROLE === role) ? env.FAKE_PI_FAIL : null);
 
 function header() {
   out({ type: 'session', version: 3, id: `fake-${Date.now().toString(36)}`, timestamp: new Date().toISOString(), cwd: process.cwd() });
@@ -128,7 +130,7 @@ async function tool(toolName, args, run) {
   const toolCall = { type: 'toolCall', id, name: toolName, arguments: args };
   out({ type: 'message_start', message: assistant([], 'pending') });
   out({ type: 'message_update', usage: usage(), assistantMessageEvent: { type: 'toolcall_start', contentIndex: 0, id, toolName } });
-  const message = assistant([toolCall], 'toolUse');
+  const message = assistant([...(conversation ? [{ type: 'text', text: toolName === 'ls' ? `Listing ${args.path}.` : toolName === 'read' ? `Reading ${args.path}.` : toolName === 'write' ? `Writing ${args.path}.` : toolName === 'bash' && args.command === 'node --test' ? 'Running the tests.' : `Running ${args.command ?? toolName}.` }] : []), toolCall], 'toolUse');
   out({ type: 'message_end', message });
   out({ type: 'tool_execution_start', toolCallId: id, toolName, args });
   await step();
@@ -144,6 +146,7 @@ async function tool(toolName, args, run) {
 }
 
 async function finalText(text) {
+  if (conversation && env.FAKE_PI_LONG_TEXT === '1') text = 'x'.repeat(17000) + '\n' + text;
   out({ type: 'message_start', message: assistant([], 'pending') });
   for (const chunk of text.match(/[\s\S]{1,60}/g) ?? []) {
     out({ type: 'message_update', usage: usage(), assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: chunk } });
@@ -327,6 +330,15 @@ const PLAN = (request) => ({
 });
 
 async function runMichael() {
+  if (conversation && kind === 'report_request') {
+    await finalText(reportFailure === 'missing' ? 'Report without a keyword.' : 'Completed the requested work. The milestone checks passed.\n\n[REPORT_READY]');
+    return;
+  }
+  if (conversation && scenario === 'question') {
+    await tool('ls', { path: '.' }, () => fs.readdirSync('.').join('\n'));
+    await finalText('The Team orchestrator asks Michael to plan the request, Dwight to implement each milestone, and Angela to verify it. Failed checks return to Dwight; repeated failures pause for a human.\n\n[ANSWER_READY]');
+    return;
+  }
   await tool('ls', { path: '.' }, () => fs.readdirSync('.').join('\n') || '(empty workspace)');
   const request = section('Request') || 'the request';
   if (env.FAKE_PI_PLAN === 'invalid') {

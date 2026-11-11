@@ -210,9 +210,9 @@ test('buildFollowUp: the goal with the drawer\'s execution and models, never a w
   const control = parseControl({ v: 1, enabled: true, workspace: 'C:\\ws', scenarios: ['happy'] });
   const models = { michael: { provider: 'anthropic', model: 'claude-sonnet-4-5' } };
   assert.deepEqual(buildFollowUp({ goal: '  Fix the typos  ', models, execution: { maxParallel: '2', sandbox: 'host', trustedHost: true } }, control).body,
-    { request: 'Fix the typos', maxParallel: 2, sandbox: 'host', trustedHost: true, models });
+    { request: 'Fix the typos', maxParallel: 2, sandbox: 'host', trustedHost: true, models, conversation: true });
   assert.deepEqual(buildFollowUp({ goal: 'Go', execution: { sandbox: 'docker', sandboxNetwork: 'none' } }, control).body,
-    { request: 'Go', sandbox: 'docker', sandboxNetwork: 'none' });
+    { request: 'Go', sandbox: 'docker', sandboxNetwork: 'none', conversation: true });
   assert.deepEqual(buildFollowUp({ goal: 'Go', execution: { sandbox: 'host', trustedHost: false } }, control).field, 'trustedHost');
   assert.equal(buildFollowUp({ goal: '   ' }, control).field, 'request');
   assert.equal(buildFollowUp({ goal: 'x'.repeat(4001) }, control).field, 'request');

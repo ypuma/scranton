@@ -25,9 +25,9 @@ import { createProjectRegistry, derivedChatTitle } from './projects.js';
 import { listRuns, formatThreadContext } from './thread.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues'];
+export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
 const POLICIES = ['ask', 'abort', 'skip', 'hive'];
-const SUCCESS_KEYWORDS = new Set(['PLAN_READY', 'TASK_COMPLETE', 'TEST_PASSED', 'REVIEW_APPROVED', 'SECURITY_PASSED']);
+const SUCCESS_KEYWORDS = new Set(['PLAN_READY', 'TASK_COMPLETE', 'TEST_PASSED', 'REVIEW_APPROVED', 'SECURITY_PASSED', 'ANSWER_READY', 'REPORT_READY']);
 
 export const HELP = `Project Scranton - multi-agent harness around the pi coding agent
 
@@ -40,7 +40,7 @@ Usage:
   scranton dashboard [--once] [--ascii]    Live terminal dashboard (second terminal)
   scranton visualize [--port N] [--host H] Web dashboard in the browser (default http://127.0.0.1:1725)
   scranton app-server [--port N]           Controlled server for desktop (default port 0)
-  scranton login <claude|chatgpt>           Sign in with a subscription in your browser
+  scranton login <claude|chatgpt|antigravity> Sign in with a subscription in your browser
   scranton login <provider> --api-key        Store an API key (hidden prompt or stdin, never argv)
   scranton login gemini                    Store a Gemini API key
   scranton provider add <id> --base-url URL --api API [--models a,b | --discover] [--label L]
@@ -56,6 +56,7 @@ Usage:
   scranton help
 
 Options:
+  --conversation       Publish agent messages and a final reply (--no-conversation disables)
   --gates STAGES       Ordered gates, e.g. oscar+hank,angela
   --parallel N         Maximum concurrent milestone pipelines (default 3)
   --trusted-host       Explicitly run outside Docker (worktrees remain isolated)
@@ -106,6 +107,8 @@ const OPTIONS = {
   workspace: { type: 'string' },
   hive: { type: 'string' },
   config: { type: 'string' },
+  conversation: { type: 'boolean' },
+  'no-conversation': { type: 'boolean' },
   'no-plan': { type: 'boolean' },
   'max-cycles': { type: 'string' },
   'on-breaker': { type: 'string' },
@@ -124,6 +127,7 @@ class UsageError extends Error {}
 
 function toFlags(values) {
   return {
+    conversation: values['no-conversation'] ? false : values.conversation,
     gates: values.gates,
     data: values.data,
     singleHive: values['single-hive'],
@@ -308,7 +312,7 @@ async function readApiKey(stdin, stderr) {
 }
 
 async function cmdAuth(command, args, values, { stdout, stderr, stdin, auth }) {
-  const aliases = { claude: 'anthropic', chatgpt: 'openai', anthropic: 'anthropic', openai: 'openai', gemini: 'google' };
+  const aliases = { claude: 'anthropic', chatgpt: 'openai', anthropic: 'anthropic', openai: 'openai', gemini: 'google', google: 'google', antigravity: 'google-antigravity' };
   if (command === 'accounts') {
     if (args.length) throw new UsageError('accounts takes no arguments');
     const accounts = await auth.listAccounts();
@@ -339,7 +343,7 @@ async function cmdAuth(command, args, values, { stdout, stderr, stdin, auth }) {
       stdout.write('API key stored. API keys are long-lived and readable by the launched agent.\n'); return 0;
     } catch (err) { stderr.write(`${err.status ? err.message : 'Control operation failed'}\n`); return 1; }
   }
-  if (command === 'login' && !['anthropic', 'openai'].includes(provider)) throw new UsageError('Use --api-key for this provider');
+  if (command === 'login' && !['anthropic', 'openai', 'google-antigravity'].includes(provider)) throw new UsageError('Use --api-key for this provider');
   if (command === 'logout') {
     try { await auth.logout(provider); stdout.write('Stored credential removed. Environment API keys, if set, remain active.\n'); return 0; }
     catch (err) { stderr.write(`${err.status ? err.message : 'Control operation failed'}\n`); return 1; }
@@ -416,7 +420,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
     threadContext,
     noPlan: Boolean(values['no-plan']),
     onBreaker: policyOf(values, config),
-    listener: createTerminalLog({ stream: stdout, env }),
+    listener: createTerminalLog({ stream: stdout, env, ascii: Boolean(values.ascii) }),
     extraEnv: env,
     stdout
   });
@@ -440,12 +444,12 @@ async function cmdDemo(values, { stdout, stderr, env, cwd, begin }) {
     config,
     noPlan: Boolean(values['no-plan']),
     onBreaker: policyOf(values, config),
-    listener: createTerminalLog({ stream: stdout, env }),
+    listener: createTerminalLog({ stream: stdout, env, ascii: Boolean(values.ascii) }),
     extraEnv: { ...env, FAKE_PI_SCENARIO: scenario, FAKE_PI_DELAY_MS: String(delay) },
     stdout
   });
   await begin();
-  return execute(orchestrator, 'Build a tiny todo CLI', { stderr, env });
+  return execute(orchestrator, scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI', { stderr, env });
 }
 
 async function cmdAgent(agentId, task, config, { stdout, stderr, env, begin }) {
