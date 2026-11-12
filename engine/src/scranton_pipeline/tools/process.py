@@ -130,24 +130,31 @@ def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeo
             raise EngineError(FailureClass.INFRASTRUCTURE, "process_start_failed", f"Cannot start owned process: {argv[0]} ({exc})") from exc
         assert proc.stdout is not None
         output = proc.stdout
+        # A retained writer must not leave a reader holding the buffered stream's close lock.
+        os.set_blocking(output.fileno(), False)
 
-        def drain() -> None:
+        def drain() -> bool | None:
             nonlocal count
-            while chunk := output.read(4096):
-                count += len(chunk)
-                log.extend(chunk[:max(0, max_log_bytes - len(log))])
-                tail.extend(chunk)
-                if len(tail) > tail_bytes:
-                    del tail[:len(tail) - tail_bytes]
+            try:
+                chunk = os.read(output.fileno(), 4096)
+            except BlockingIOError:
+                return None
+            if not chunk:
+                return False
+            count += len(chunk)
+            log.extend(chunk[:max(0, max_log_bytes - len(log))])
+            tail.extend(chunk)
+            if len(tail) > tail_bytes:
+                del tail[:len(tail) - tail_bytes]
+            return True
 
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
         while proc.poll() is None:
             stopped = stop is not None and stop.should_stop()
             timed_out = time.monotonic() - started >= timeout_s
             if stopped or timed_out:
                 break
-            time.sleep(0.05)
+            if not drain():
+                time.sleep(0.05)
         # Close ownership even on normal parent exit: a daemon grandchild is not allowed to escape.
         if job:
             job.close()
@@ -157,9 +164,15 @@ def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeo
             except ProcessLookupError:
                 pass
         proc.wait(timeout=10)
-        reader.join(timeout=10)
-        if reader.is_alive():
-            raise EngineError(FailureClass.INFRASTRUCTURE, "output_not_closed", "Process output did not close")
+        drain_deadline = time.monotonic() + 10
+        while True:
+            drained = drain()
+            if drained is False:
+                break
+            if time.monotonic() >= drain_deadline:
+                raise EngineError(FailureClass.INFRASTRUCTURE, "output_not_closed", "Process output did not close")
+            if drained is None:
+                time.sleep(0.05)
         redactor = Redactor()
         text = tail.decode("utf-8", errors="replace")
         if redact_output:
