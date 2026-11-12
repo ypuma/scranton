@@ -16,8 +16,8 @@ from scranton_pipeline.nodes.grounding import decide_criteria, evaluate, repair_
 from scranton_pipeline.nodes.planner import invalid
 from scranton_pipeline.observability import _rows
 from scranton_pipeline.state import PipelineState, counter, current_step, done_ids, get_plan
-from scranton_pipeline.tools.checks import run_checks
-from scranton_pipeline.tools.context import fulfil
+from scranton_pipeline.tools.checks import failure_feedback, run_checks
+from scranton_pipeline.tools.context import eviction_index, fulfil, unique_evidence
 from scranton_pipeline.tools.fs import PathPolicy, write_bytes_atomic
 from scranton_pipeline.tools.git import WorkspaceRepo
 from scranton_pipeline.tools.patches import apply_to_source as source_apply
@@ -116,8 +116,9 @@ def context(state: PipelineState, deps: Dependencies, *, planner: bool) -> dict[
     items = fulfil(requests, workspace=deps.workspace, policy=deps.policy(),
                    files=state["workspace"]["files"], limits=deps.cfg.limits, redactor=deps.redactor)
     evidence = [*(state.get("plan_evidence", []) if planner else state.get("step_evidence", [])), *[i.model_dump(mode="json") for i in items]]
+    evidence = unique_evidence(evidence)
     while len(json.dumps(evidence).encode()) > deps.cfg.limits.max_prompt_bytes and evidence:
-        evidence.pop(next((n for n, i in enumerate(evidence) if not i.get("python_read")), 0))
+        evidence.pop(eviction_index(evidence))
     deps.events.emit("context", requests=len(requests), fulfilled=sum(i.ok for i in items))
     return {f"{prefix}_evidence": evidence, f"{prefix}_requests": [], "counters": {key: 1}}
 
@@ -245,7 +246,8 @@ def verify(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         if counter(state, f"attempts:{scope_id(state)}") >= deps.cfg.limits.max_step_attempts:
             return {"checks": results, **request_replan({**state, "checks": results}, deps, EngineError(FailureClass.CHECKS_FAILED, "checks_exhausted", "Required checks failed"), "verify")}
         return {"checks": results, "feedback": {"kind": "checks_failed", "message": "Required checks failed",
-                                                 "details": [r["id"] + ": " + r["output_tail"] for r in failed]}}
+                                                 "details": failure_feedback(failed, state.get("baseline", []), run_dir=deps.run_dir,
+                                                     redactor=deps.redactor, tail_bytes=deps.cfg.limits.max_output_tail_bytes)}}
     head = state["workspace"]["head_commit"]
     if state.get("mode") == "integration":
         from scranton_pipeline.nodes.parallel import finish_integration

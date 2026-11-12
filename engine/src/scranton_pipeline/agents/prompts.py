@@ -21,6 +21,7 @@ from scranton_pipeline.models import (
 from scranton_pipeline.nodes.common import planning_key, scope_id
 from scranton_pipeline.procedure import Graph
 from scranton_pipeline.state import PipelineState, initial_planning
+from scranton_pipeline.tools.context import eviction_index, unique_evidence
 
 PROMPT_VERSION = "pipeline-v2-grounded"
 RULES = """Python owns all transitions, commands and tools. Return only the requested schema.
@@ -64,11 +65,7 @@ def fresh_evidence(state: PipelineState, cfg: EngineConfig, key: str) -> list[di
     workspace = state.get("workspace", {}).get("path")
     if not workspace:
         return list(entries)
-    unique: dict[str, dict[str, Any]] = {}
-    for item in entries:
-        key = json.dumps(item["request"], sort_keys=True)
-        unique[key] = {**item, **({"python_read": True} if item.get("python_read") or unique.get(key, {}).get("python_read") else {})}
-    entries = list(unique.values())
+    entries = unique_evidence(entries)
     policy = PathPolicy(Path(workspace), [*DEFAULT_PROTECTED, *cfg.policy.protected_paths], DEFAULT_WRITE_PROTECTED)
     result = []
     for item in entries:
@@ -107,7 +104,7 @@ def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg
     for key in ("baseline", "checks"):
         if isinstance(data.get(key), list):
             data[key] = [{**r, "output_tail": str(r.get("output_tail", ""))[-min(4096, cfg.limits.max_prompt_bytes // 32):]} for r in data[key]]
-    entries = list(evidence)
+    entries = unique_evidence(evidence)
     marker = ""
     cap = max(0, cfg.limits.max_prompt_bytes - len(system.encode()))
     def finish(user: str) -> Prompt:
@@ -120,8 +117,8 @@ def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg
         if len(user.encode()) <= cap:
             return finish(user)
         if entries:
-            entries.pop(next((n for n, i in enumerate(entries) if not i.get("python_read")), 0))
-            marker = "[TRUNCATED: oldest evidence removed]\n"
+            entries.pop(eviction_index(entries))
+            marker = "[TRUNCATED: evidence removed by quality, then oldest request]\n"
         else:
             encoded = user.encode()[:max(0, cap - 64)]
             tail = b"\n[TRUNCATED: data tails removed]"[:cap]

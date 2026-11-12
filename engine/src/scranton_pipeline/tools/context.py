@@ -2,6 +2,7 @@
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from ..config import Limits
 from ..errors import EngineError, FailureClass
@@ -101,3 +102,33 @@ def fulfil(requests: Sequence[ContextRequest], *, workspace: Path, policy: PathP
         raw = {**item.model_dump(mode="json"), "sha256": sha}
         stamped.append(item.model_copy(update={"sha256": sha, "evidence_id": context_id(raw)}))
     return stamped
+
+
+def unique_evidence(entries: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str | int, dict[str, Any]] = {}
+    for index, item in enumerate(entries):
+        # Without a locator, no shared request identity can be inferred.
+        key = json.dumps(item["request"], sort_keys=True) if "request" in item else index
+        previous = unique.get(key)
+        # Repeated automatic prereads must not manufacture recency on every turn.
+        if previous and item.get("python_read") and all(
+            item.get(k) == previous.get(k) for k in ("sha256", "content", "ok", "truncated", "note")
+        ):
+            unique[key] = {**previous, "python_read": True}
+            continue
+        unique.pop(key, None)
+        unique[key] = {**item, **({"python_read": True} if item.get("python_read") or (previous or {}).get("python_read") else {})}
+    return list(unique.values())
+
+
+def eviction_index(entries: Sequence[dict[str, Any]]) -> int:
+    def priority(index: int) -> int:
+        item = entries[index]
+        if not item.get("ok"):
+            return 0
+        if item.get("python_read"):
+            return 1 if item.get("truncated") else 3
+        request = item.get("request", {})
+        return 3 if request.get("kind") == "read" and (request.get("start_line") or request.get("end_line")) else 2
+    # Within each quality tier, retain the most recent requests.
+    return min(range(len(entries)), key=priority)
