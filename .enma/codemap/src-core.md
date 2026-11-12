@@ -12,15 +12,56 @@ by: "core"
 ---
 
 ---
+file: "src/core/live-activity.js"
+symbol: "createLiveActivity"
+ordinal: 0
+kind: "how"
+text: "Non-durable per-run live.json writer. Assistant message_start resets per-instance blocks/tails; message_update merges thinking/text by contentIndex, cleans and retains last2,000chars with cut flags. Writes atomically at400ms cadence; remove clears a finished instance, close immediately persists emptyLive. Orchestrator wires both pi transports; reasoning is not journaled."
+see_also: "src/core/events.js EventRecorder; readLive; .enma/live-activity-contract.md"
+hash: "span:0904cd92f2df17bf"
+written: "2026-11-12"
+commit: "9ec5519"
+by: "core"
+---
+
+---
 file: "src/core/orchestrator.js"
 symbol: "Orchestrator"
 ordinal: 0
 kind: "how"
-text: "run() snapshots role prompts into audited run_started, obtains Michael plan (or conversation direct answer), schedules dependency-ready milestones via runDag(maxParallel). Dwight's snapshot feeds per-stage gates: each gets own gate checkout prepared before parallel launch, emits gate_result on settle, judges listed order; failed/missing gate keyword feeds Dwight, blocked pauses, and passing gates precede integration. Default Angela-only gate path keeps legacy event order. Conversation opt-in adds Michael's answer/report keywords and prompt override, bounded agent_message events, run_reply immediately before run_finished; off-mode omits conversation metadata. Earlier chat context is delimited/capped for planning."
-see_also: ".enma/chat-view-contract.md; src/core/prompts.js"
-hash: "span:29b4f7f43f1fad76"
-written: "2026-11-11"
-commit: "2118ea5"
+text: "run snapshots role prompts into audited run_started, obtains Michael plan or conversation direct answer, schedules dependency-ready milestones via runDag(maxParallel). Dwight snapshot feeds per-stage gates with separate checkouts; judges listed order, failed/missing gate keyword feeds Dwight, passing gates precede integration. Conversation adds answer/report prompt override, bounded agent_message and run_reply before run_finished. #runAgent wires onLive to ephemeral writer, onUsage to durable per-call agent_usage and structured targetFile/command tool events; serial JSON retains legacy no-instanceId agent_finished and explicitly removes its ephemeral tail."
+see_also: "src/core/live-activity.js; src/core/state.js; .enma/live-activity-contract.md; .enma/chat-view-contract.md"
+hash: "span:4bbc45fde7898f34"
+written: "2026-11-12"
+commit: "9ec5519"
+by: "core"
+---
+
+---
+file: "src/core/pipeline-activity.js"
+symbol: "pipelineSteps"
+ordinal: 0
+kind: "how"
+text: "Pipeline completed step projection uses report.steps as exact authority, otherwise tracks outer implementer procedure scope step:* and commits only after outer verify→select_step. wave_merged steps wait for integration verify; lane-tagged local verify routes are ignored. Replan/finalize clears pending scope/merges. stepsDoneExact compares derived count to persisted status.progress.steps_done; derivation may undercount rather than claim unverified completion."
+see_also: "engine/src/scranton_pipeline/nodes/common.py; routing.py; nodes/parallel.py; .scratch/live-backend-fix/REPORT.md"
+hash: "span:4fd0865ee689e491"
+written: "2026-11-12"
+commit: "9ec5519"
+by: "core"
+---
+
+---
+file: "src/core/pipeline-activity.js"
+symbol: "pipelineSteps"
+ordinal: 0
+kind: "trap"
+text: "The procedure scope optional chain guards null/undefined only, not non-string JSON values. Normal engine events emit string scopes; external/corrupted procedure records with another type can throw during projection."
+evidence: "`d.scope?.startsWith('step:')`"
+see_also: "Final backend review a291 low; live-activity/backend/non-string-procedure-scope"
+hash: "span:4fd0865ee689e491"
+quote: "quote:7425f77c32572534"
+written: "2026-11-12"
+commit: "9ec5519"
 by: "core"
 ---
 
@@ -59,6 +100,19 @@ see_also: ".enma/custom-agents-contract.md; src/core/orchestrator.js, src/core/p
 hash: "span:ff3c2abb1be537fc"
 written: "2026-11-11"
 commit: "2118ea5"
+by: "core"
+---
+
+---
+file: "src/core/usage.js"
+symbol: "foldUsage"
+ordinal: 0
+kind: "how"
+text: "Accumulates Team input/output/cost and per-role calls/tokens; tokens=input+output. Sets first-call startedAt and adds cumulative per-agent point on every delta. Above120points keeps even indices plus latest. Server state.js reconciles per-instance pending usage at finish; browser state.js mirrors this fold and tests compare reducers."
+see_also: "src/core/state.js; visualizer/public/js/state.js; test/visualizer/live-activity.test.js"
+hash: "span:645eb9de33d956f3"
+written: "2026-11-12"
+commit: "9ec5519"
 by: "core"
 ---
 

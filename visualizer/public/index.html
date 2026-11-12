@@ -67,6 +67,10 @@
         <button type="button" class="seg" id="view-mode-chat" aria-pressed="true">Chat</button>
         <button type="button" class="seg" id="view-mode-dash" aria-pressed="false">Dashboard</button>
       </div>
+      <button type="button" class="btn btn-small rail-toggle" id="rail-toggle" aria-expanded="false" aria-controls="run-rail" title="Agents, cost and board of this run" hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3.5h11v9h-11zM10 3.5v9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        <span>Run</span> <span class="mono rail-toggle-fig" id="rail-toggle-fig"></span>
+      </button>
       <div class="thread-runs" id="thread-runs">
         <label class="field-label" for="run-picker">Run</label>
         <select id="run-picker" aria-describedby="thread-status"></select>
@@ -103,6 +107,21 @@
     <p class="hitl-status pv-msg" id="pv-msg" tabindex="-1"></p>
     <ol class="pv-stepper" id="pv-stepper" aria-label="Phases" hidden></ol>
     <p class="thread-empty pv-empty" id="pv-empty" hidden><strong id="pv-empty-title">No pipeline run in this chat yet.</strong> <button type="button" class="btn btn-small" id="pv-start" aria-haspopup="dialog">Start a run</button></p>
+    <div class="pv-live" id="pv-live" hidden>
+      <section class="section board-panel" aria-labelledby="pv-h-board">
+        <header class="section-head">
+          <h3 class="pv-h" id="pv-h-board">Board</h3>
+          <span class="section-aside" id="pv-board-aside"></span>
+        </header>
+        <div class="board" id="pv-board"></div>
+      </section>
+      <section class="section usage-panel" aria-labelledby="pv-h-usage">
+        <header class="section-head">
+          <h3 class="pv-h" id="pv-h-usage">Cost and usage</h3>
+        </header>
+        <div id="pv-usage"></div>
+      </section>
+    </div>
     <div class="pv-body" id="pv-body">
       <div class="pv-sections" id="pv-sections"></div>
       <div class="pv-side" id="pv-side"></div>
@@ -214,6 +233,12 @@
   </section>
   <p class="release-note" id="release-note" hidden></p>
 
+  <button type="button" class="live-line" id="run-live-line" aria-haspopup="dialog" title="Open the run panel" hidden>
+    <span class="live-line-glyph" aria-hidden="true">◐</span>
+    <span class="live-line-text" id="run-live-text"></span>
+    <span class="sr-only">Open the run panel</span>
+  </button>
+
   <form class="followup" id="followup" hidden novalidate aria-labelledby="followup-label">
     <label class="field-label" id="followup-label" for="followup-text">Follow up</label>
     <div class="composer">
@@ -251,6 +276,13 @@
   </section>
 
   <main class="dash" id="dash">
+    <section class="section board-panel" aria-labelledby="h-board">
+      <header class="section-head">
+        <h2 id="h-board">Board</h2>
+        <span class="section-aside" id="board-aside"></span>
+      </header>
+      <div class="board" id="board"></div>
+    </section>
     <div class="dash-main">
       <section class="section agents" aria-labelledby="h-pipeline">
         <header class="section-head">
@@ -267,12 +299,11 @@
         </div>
       </section>
 
-      <section class="section milestones-panel" aria-labelledby="h-milestones">
+      <section class="section usage-panel" aria-labelledby="h-usage">
         <header class="section-head">
-          <h2 id="h-milestones">Milestones</h2>
-          <span class="section-aside" id="milestones-aside"></span>
+          <h2 id="h-usage">Cost and usage</h2>
         </header>
-        <ol class="milestones" id="milestones"></ol>
+        <div id="usage-panel"></div>
       </section>
     </div>
 
@@ -334,7 +365,63 @@
     </section>
   </main>
   </div>
+  <aside class="rail" id="run-rail" aria-labelledby="rail-title" hidden>
+    <header class="rail-head">
+      <h2 id="rail-title">Run</h2>
+      <span class="rail-status" id="rail-status" role="status" aria-live="polite"></span>
+      <button type="button" class="icon-btn" id="rail-close" aria-label="Hide the run panel" title="Hide the run panel"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
+    </header>
+    <div class="rail-body" id="rail-body">
+      <section class="rail-sec" aria-labelledby="rail-agents-title">
+        <header class="rail-sec-head">
+          <h3 id="rail-agents-title">Agents now</h3>
+          <span class="section-aside" id="rail-agents-aside"></span>
+        </header>
+        <ul class="acts" id="rail-agents" aria-labelledby="rail-agents-title"></ul>
+        <p class="placeholder" id="rail-agents-empty" hidden>No agent has started yet</p>
+        <button type="button" class="msg-more" id="rail-agents-more" aria-controls="rail-agents" hidden></button>
+        <p class="live-note" id="rail-live-note" hidden></p>
+      </section>
+      <section class="rail-sec" aria-labelledby="rail-usage-title">
+        <header class="rail-sec-head">
+          <h3 id="rail-usage-title">Cost and usage</h3>
+        </header>
+        <div id="rail-usage"></div>
+      </section>
+      <section class="rail-sec" aria-labelledby="rail-board-title">
+        <header class="rail-sec-head">
+          <h3 id="rail-board-title">Board</h3>
+        </header>
+        <button type="button" class="rail-board" id="rail-board" aria-haspopup="dialog">
+          <span class="rail-board-summary" id="rail-board-summary"></span>
+          <span class="rail-board-open">Open board</span>
+        </button>
+        <p class="board-notice" id="rail-board-notice" role="status" aria-live="polite" hidden></p>
+      </section>
+    </div>
+  </aside>
   </div>
+
+  <dialog class="drawer" id="rail-dialog" aria-labelledby="rail-dialog-title">
+    <div class="drawer-frame">
+      <header class="drawer-head">
+        <h2 id="rail-dialog-title">Run</h2>
+        <button type="button" class="icon-btn" id="rail-dialog-close" aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body rail-host" id="rail-dialog-body"></div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet" id="board-dialog" aria-labelledby="board-dialog-title">
+    <div class="sheet-frame">
+      <header class="drawer-head">
+        <h2 id="board-dialog-title">Board</h2>
+        <span class="section-aside" id="board-dialog-aside"></span>
+        <button type="button" class="icon-btn" id="board-dialog-close" aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="sheet-body board" id="board-dialog-body"></div>
+    </div>
+  </dialog>
 
   <dialog class="drawer" id="run-dialog" aria-labelledby="run-dialog-title">
     <form id="run-form" novalidate>

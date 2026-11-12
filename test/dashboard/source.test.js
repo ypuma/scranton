@@ -129,3 +129,33 @@ test('a replaced events file (new run) resets the view to the new run', async (t
   await source.poll();
   assert.deepEqual(source.events, [], 'events of other runs than state.runId are dropped');
 });
+
+test('per-call usage traffic does not evict conversation activity', async t => {
+  const { mkdir } = await import('node:fs/promises');
+  const root = path.resolve('.scratch/live-activity'); await mkdir(root, { recursive: true });
+  const dir = await mkdtemp(path.join(root, 'dashboard-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const started = ev('usage-run', 1, 'run_started', { execution: { conversation: true } });
+  const activity = ev('usage-run', 2, 'agent_tool', { agent: 'dwight', tool: 'write', detail: 'a.js' });
+  const usage = Array.from({ length: 700 }, (_, i) => ev('usage-run', i + 3, 'agent_usage', { agent: 'dwight', usage: { input: 1, output: 1, cost: 0 } }));
+  await writeFile(path.join(dir, 'events.jsonl'), [started, activity, ...usage].map(line).join(''));
+  const source = createHiveSource(dir, { maxEvents: 5, tailBytes: 512 }); await source.poll();
+  assert.ok(source.events.some(e => e.seq === 2));
+  assert.equal(source.events.some(e => e.type === 'agent_usage'), false);
+});
+
+test('usage traffic consumes neither byte nor row budget outside conversation mode', async t => {
+  const { mkdir } = await import('node:fs/promises');
+  const root = path.resolve('.scratch/live-backend-fix'); await mkdir(root, { recursive: true });
+  const dir = await mkdtemp(path.join(root, 'tail-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'events.jsonl');
+  const visible = Array.from({ length: 8 }, (_, i) => ev('r', i + 1, 'log', { message: 'visible '.repeat(4) }));
+  await writeFile(file, visible.map(line).join(''));
+  const source = createHiveSource(dir, { tailBytes: 2048, maxEvents: 8 }); await source.poll();
+  assert.deepEqual(source.events, visible);
+  for (let i = 0; i < 3; i++) {
+    await appendFile(file, Array.from({ length: 400 }, (_, j) => line(ev('r', 9 + i * 400 + j, 'agent_usage', { usage: { input: 1, output: 1, cost: 0 } }))).join(''));
+    await source.poll(); assert.deepEqual(source.events, visible, 'all eight visible rows survive usage-only appends');
+  }
+  const fresh = createHiveSource(dir, { tailBytes: 2048, maxEvents: 8 }); await fresh.poll();
+  assert.deepEqual(fresh.events, visible, 'same budget on initial historical read');
+});

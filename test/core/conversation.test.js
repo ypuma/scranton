@@ -113,10 +113,23 @@ for (const transport of ['json', 'rpc']) {
     for (const scenario of ['happy', 'flaky', 'breaker', 'blocked']) {
       const run = cli(t, { transport, scenario, conversation: false });
       const baseline = read('test/core/fixtures/conversation-baseline.json')[transport][scenario];
-      assert.deepEqual(run.events.map((e) => e.type), baseline.types);
+      assert.deepEqual(run.events.filter(e => e.type !== 'agent_usage').map((e) => e.type), baseline.types);
       const proof = conversationProof({ ...run, packageRoot: path.resolve('.') });
-      assert.deepEqual(proof.events, baseline.events, 'full off-mode event payloads match committed HEAD');
-      assert.equal(proof.stateBytes, baseline.stateBytes, 'off-mode state.json bytes match committed HEAD');
+      const legacyEvents = proof.events.filter(e => e.type !== 'agent_usage').map((e, i) => {
+        const { targetFile, command, ...legacy } = e;
+        return { ...legacy, seq: i + 1 };
+      });
+      assert.deepEqual(legacyEvents, baseline.events, 'existing off-mode payloads preserved apart from additive activity fields');
+      const legacyState = JSON.parse(proof.stateBytes);
+      delete legacyState.usage; delete legacyState.usagePending;
+      legacyState.lastSeq = baseline.events.length;
+      for (const instance of Object.values(legacyState.instances)) { delete instance.lastTool; delete instance.touchedFiles; }
+      const expectedState = JSON.parse(baseline.stateBytes);
+      for (const [id, agent] of Object.entries(legacyState.agents)) {
+        assert.ok(Math.abs(agent.totals.cost - expectedState.agents[id].totals.cost) < 1e-12, 'same cost within floating point addition order');
+        agent.totals.cost = expectedState.agents[id].totals.cost;
+      }
+      assert.deepEqual(legacyState, expectedState, 'existing off-mode state and totals preserved');
       assert.equal(proof.planningInbox, baseline.planningInbox, 'off-mode planning inbox matches committed HEAD');
       const old = baseline.keywords;
       assert.deepEqual(run.events.filter((e) => e.type === 'agent_finished').map((e) => e.keyword), old);

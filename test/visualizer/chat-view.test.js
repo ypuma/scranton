@@ -60,7 +60,11 @@ function viewHarness({ loadRun, runs = [] } = {}) {
 
 // ------------------------------------------------------------ the transcript
 
-test('each entry is drawn as its kind: a labelled article, one quiet line for activity, the reply with its outcome', () => {
+test('each entry is drawn as its kind: a labelled article, one quiet line for activity, the reply with its outcome', (t) => {
+  t.mock.method(Date, 'now', () => Date.UTC(2026, 10, 12, 12));
+  const tz = process.env.TZ;
+  process.env.TZ = 'UTC';
+  t.after(() => { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; });
   const h = viewHarness();
   h.add(
     START,
@@ -77,7 +81,8 @@ test('each entry is drawn as its kind: a labelled article, one quiet line for ac
     ['ARTICLE', 'request'], ['ARTICLE', 'agent'], ['P', 'activity'], ['ARTICLE', 'question'], ['ARTICLE', 'human'], ['ARTICLE', 'reply'],
   ]);
   for (const x of h.items().filter((n) => n.tagName === 'ARTICLE')) assert.ok(x.getAttribute('aria-label'), `${x.dataset.kind} has a label`);
-  assert.match(h.item('agent').getAttribute('aria-label'), /^Michael, Orchestrator, \d\d:\d\d:\d\d$/);
+  // The fixture is yesterday in this fixed clock and timezone.
+  assert.equal(h.item('agent').getAttribute('aria-label'), 'Michael, Orchestrator, 2026-11-11 09:00');
   assert.equal(h.item('activity').getAttribute('aria-label'), null, 'an activity line is read as the text it is');
   assert.equal(h.item('activity').querySelector('.chat-act').textContent, 'Michael · read bin/scranton.js');
 

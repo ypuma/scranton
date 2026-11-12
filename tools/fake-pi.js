@@ -40,7 +40,7 @@ if (!rpc && flag('--mode') !== 'json') {
 
 const role = env.SCRANTON_AGENT || 'dwight';
 const scenario = env.FAKE_PI_SCENARIO || 'happy';
-const delayMs = Number(env[`FAKE_PI_${role.toUpperCase()}_DELAY_MS`] ?? env.FAKE_PI_DELAY_MS ?? 0);
+const delayMs = Number(env[`FAKE_PI_${role.toUpperCase()}_DELAY_MS`] ?? env.SCRANTON_FAKE_DELAY_MS ?? env.FAKE_PI_DELAY_MS ?? 0);
 const inboxArg = argv.find((a) => a.startsWith('@'));
 let rpcPrompt;
 if (rpc) {
@@ -89,6 +89,7 @@ if (env.FAKE_PI_LOG) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const step = () => (delayMs ? sleep(delayMs) : Promise.resolve());
+const streamStep = () => (delayMs ? sleep(Math.min(delayMs, 100)) : Promise.resolve());
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 let now = Date.now();
 let callNo = 0;
@@ -125,10 +126,19 @@ function header() {
   out({ type: 'message_end', message: user });
 }
 
+async function reasoning() {
+  const text = 'Checking the request and choosing the next safe step.';
+  const update = (event) => out({ type: 'message_update', usage: { input: 0, output: 0, cost: { total: 0 } }, assistantMessageEvent: { contentIndex: 1, ...event } });
+  update({ type: 'thinking_start' });
+  for (const delta of text.match(/.{1,24}/g)) { update({ type: 'thinking_delta', delta }); await streamStep(); }
+  update({ type: 'thinking_end', content: text });
+}
+
 async function tool(toolName, args, run) {
   const id = `call_${++callNo}`;
   const toolCall = { type: 'toolCall', id, name: toolName, arguments: args };
   out({ type: 'message_start', message: assistant([], 'pending') });
+  await reasoning();
   out({ type: 'message_update', usage: usage(), assistantMessageEvent: { type: 'toolcall_start', contentIndex: 0, id, toolName } });
   const message = assistant([...(conversation ? [{ type: 'text', text: toolName === 'ls' ? `Listing ${args.path}.` : toolName === 'read' ? `Reading ${args.path}.` : toolName === 'write' ? `Writing ${args.path}.` : toolName === 'bash' && args.command === 'node --test' ? 'Running the tests.' : `Running ${args.command ?? toolName}.` }] : []), toolCall], 'toolUse');
   out({ type: 'message_end', message });
@@ -148,10 +158,14 @@ async function tool(toolName, args, run) {
 async function finalText(text) {
   if (conversation && env.FAKE_PI_LONG_TEXT === '1') text = 'x'.repeat(17000) + '\n' + text;
   out({ type: 'message_start', message: assistant([], 'pending') });
+  await reasoning();
+  out({ type: 'message_update', usage: { input: 0, output: 0, cost: { total: 0 } }, assistantMessageEvent: { type: 'text_start', contentIndex: 0 } });
   for (const chunk of text.match(/[\s\S]{1,60}/g) ?? []) {
     out({ type: 'message_update', usage: usage(), assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: chunk } });
+    await streamStep();
   }
   await step();
+  out({ type: 'message_update', usage: { input: 0, output: 0, cost: { total: 0 } }, assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: text } });
   const message = assistant([{ type: 'text', text }], 'stop');
   out({ type: 'message_end', message });
   out({ type: 'turn_end', message, toolResults: [] });

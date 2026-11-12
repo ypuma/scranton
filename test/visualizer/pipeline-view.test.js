@@ -845,3 +845,31 @@ test('Pipeline Chat drains full current event pages immediately without a second
   assert.deepEqual(h.view.chat().run.events.map((e) => e.seq), [3, 501]);
   assert.equal(h.timers.pending.size, 1);
 });
+
+test('activity combines retained conversation with lifecycle history without changing the transcript', async (t) => {
+  const events = [
+    { type: 'agent_message', data: { role: 'planner', text: 'The original plan.' } },
+    { type: 'edits_applied', data: { files: ['src/parse.py'] } },
+    ...Array.from({ length: 1000 }, () => ({ type: 'node_finished', node: 'verify', data: { duration_s: 0.1 } })),
+    { type: 'agent_message', data: { role: 'planner', text: 'The revised plan.' } },
+    { type: 'node_started', node: 'approve_plan', data: {} },
+    { type: 'route', data: { from: 'approve_plan', to: 'finalize', reason: 'cancelled' } },
+    { type: 'node_started', node: 'finalize', data: {} },
+    { type: 'run_finished', data: { status: 'cancelled' } },
+    { type: 'node_finished', node: 'finalize', data: { duration_s: 0.1 } },
+  ].map((event, i) => ({ ...event, seq: i + 1, ts: '2026-11-12T06:08:00Z' }));
+  const h = harness({ doc: (n) => {
+    const page = events.slice(n * 500, (n + 1) * 500);
+    return doc(runStatus({ status: 'cancelled', phase: 'done', node: 'finalize', pending: null }), { events: page, lastSeq: page.at(-1)?.seq });
+  } });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  await h.tick();
+  const activity = h.view.activity().run.events;
+  assert.ok(activity.some((e) => e.type === 'route'), 'activity keeps terminal attribution evidence');
+  assert.deepEqual(activity.slice(0, 2).map((e) => e.seq), [1, 2], 'older messages and edited files survive the independently bounded lifecycle cache');
+  assert.deepEqual(activity.map((e) => e.seq), [...new Set(activity.map((e) => e.seq))].sort((a, b) => a - b), 'the combined evidence is ordered and not counted twice');
+  assert.deepEqual(h.view.chat().run.events.map((e) => e.type), ['agent_message', 'edits_applied', 'agent_message', 'run_finished'], 'lifecycle events stay out of the transcript');
+  assert.equal(activity.filter((e) => e.type === 'node_finished').length, 995, 'the original lifecycle retention cap is unchanged');
+});

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { pipelineUsage, pipelineSteps } from './pipeline-activity.js';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { PROVIDER_ENV_NAMES } from './providers.js';
@@ -88,7 +89,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
   function list(chat) {
     const values = statuses(chat);
     return { active: values.find((s) => !terminal.has(s.status))?.run_id ?? null, runs: values.map((s) => {
-      const row = { runId: s.run_id, status: s.status, phase: s.phase, task: scrub(s.task), createdAt: s.created_at, updatedAt: s.updated_at };
+      const row = { runId: s.run_id, status: s.status, phase: s.phase, task: scrub(s.task), createdAt: s.created_at, updatedAt: s.updated_at, usage: s.usage ? { tokens: (s.usage.input_tokens ?? 0) + (s.usage.output_tokens ?? 0), cost: s.usage.estimated_cost ?? null, ...(typeof s.usage.estimated_cost === 'number' ? { estimated: true } : {}) } : null };
       if (s.reply) {
         const text = scrub(s.reply.text);
         row.reply = { kind: s.reply.kind, text: text.slice(0, 4000), truncated: s.reply.truncated === true || text.length > 4000, citations: scrub(s.reply.citations) };
@@ -308,31 +309,51 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     if (!Number.isSafeInteger(after) || after < 0) throw fail(400, 'Invalid event sequence');
     const runDir = dir(chat, id);
     const launchError = optional(safe(root(chat), `requests/${id}.error.json`, false));
-    if (!fs.existsSync(runDir) && launchError) return scrub({ status: null, live: false, launchError, events: [], lastSeq: after, plan: null, review: null, stderrTail: '' });
+    if (!fs.existsSync(runDir) && launchError) return scrub({ status: null, live: false, usage: null, stepsDone: [], stepsDoneExact: false, launchError, events: [], lastSeq: after, plan: null, review: null, stderrTail: '' });
     if (!fs.existsSync(runDir)) throw fail(404, 'Pipeline status not found');
     await normalize(runDir);
     const status = optional(safe(runDir, 'status.json', false));
     if (!status) throw fail(404, 'Pipeline status not found');
-    const file = safe(runDir, 'events.jsonl', false), events = [];
+    const file = safe(runDir, 'events.jsonl', false), events = [], activity = [], calls = [];
+    let skippedEvents = 0;
     if (fs.existsSync(file)) {
       // Stream from disk; only retain the requested page, not the whole journal.
-      let pending = '';
+      let pending = '', dropping = false;
+      const maxLine = 1024 * 1024;
       for await (const chunk of fs.createReadStream(file, { encoding: 'utf8' })) {
-        pending += chunk;
+        let text = chunk;
+        if (dropping) {
+          const end = text.indexOf('\n');
+          if (end < 0) continue;
+          text = text.slice(end + 1); dropping = false;
+        }
+        pending += text;
         let end;
         while ((end = pending.indexOf('\n')) >= 0) {
           const line = pending.slice(0, end); pending = pending.slice(end + 1);
-          try { const e = JSON.parse(line); if (Number.isSafeInteger(e.seq) && e.seq > after && events.length < 500) events.push(e); } catch {}
+          if (line.length > maxLine) { skippedEvents++; continue; }
+          try {
+            const e = JSON.parse(line);
+            if (!object(e)) { skippedEvents++; continue; }
+            if (Number.isSafeInteger(e.seq) && e.seq > after && events.length < 500) events.push(e);
+            if (['procedure', 'llm_call', 'wave_merged', 'replanned', 'route'].includes(e.type)) activity.push(e);
+            if (e.type === 'llm_call') calls.push({ ...e.data, ts: e.ts });
+          } catch { skippedEvents++; }
         }
-        if (events.length === 500) break;
-        if (pending.length > 1024 * 1024) throw fail(413, 'Pipeline event too large');
+        if (pending.length > maxLine) { skippedEvents++; pending = ''; dropping = true; }
       }
     }
     const readObject = (rel) => { const f = safe(runDir, rel, false); if (!fs.existsSync(f)) return null; if (fs.statSync(f).size > 1024 * 1024) return null; return optional(f); };
+    let ledger = [];
+    const ledgerFile = safe(runDir, 'usage.jsonl', false);
+    if (fs.existsSync(ledgerFile) && fs.statSync(ledgerFile).size <= 1024 * 1024) ledger = fs.readFileSync(ledgerFile, 'utf8').split('\n').flatMap(line => { try { const row = JSON.parse(line); return object(row) ? [row] : []; } catch { return []; } });
+    const plan = readObject('artifacts/plan.json');
+    const usage = pipelineUsage(status, calls, ledger);
+    const steps = pipelineSteps(status, activity, plan, readObject('delivery/report.json'));
     let review = null;
     const artifacts = safe(runDir, 'artifacts', false);
     if (fs.existsSync(artifacts)) { const names = fs.readdirSync(artifacts).filter((n) => /^review-\d+\.json$/.test(n)).sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0])); if (names.length) review = readObject(`artifacts/${names.at(-1)}`); }
-    return scrub({ status, launchError: optional(safe(root(chat), `requests/${id}.error.json`, false)), live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan: readObject('artifacts/plan.json'), review, stderrTail: children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '' });
+    return scrub({ status, usage, ...steps, launchError: optional(safe(root(chat), `requests/${id}.error.json`, false)), live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan, review, stderrTail: [children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '', ...(skippedEvents ? [`Skipped ${skippedEvents} malformed or oversized Pipeline event lines`] : [])].filter(Boolean).join('\n') });
   }
   async function action(chat, id, action, body) {
     pipelineFields(body, action === 'decision' ? ['gate', 'decision', 'digest', 'comment'] : []);

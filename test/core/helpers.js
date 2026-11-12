@@ -108,6 +108,7 @@ const EVENT_FIELDS = {
     activity: str
   },
   agent_tool: { agent: AGENT, tool: str, detail: (v) => str(v) && v.length <= 140 },
+  agent_usage: { agent: AGENT, instanceId: str, model: nullable(str), usage: (u) => u && num(u.input) && num(u.output) && num(u.cost) },
   agent_finished: {
     agent: AGENT,
     milestoneId: nullable(str),

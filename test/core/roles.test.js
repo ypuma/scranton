@@ -103,6 +103,8 @@ test('parallel failures aggregate in listed order independent of finish order, r
     const gateDecisions = es.filter((e) => e.type === 'gate_result').map(({ milestoneId, cycle, stage, agent, result, keyword }) => ({ milestoneId, cycle, stage, agent, result, keyword })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     if (referenceGates) assert.deepEqual(gateDecisions, referenceGates); else referenceGates = gateDecisions;
     const state = stableState(JSON.parse(fs.readFileSync(path.join(config.hiveDir, 'state.json'))));
+    // Cumulative samples follow actual completion order; final totals do not.
+    state.usage.series = [];
     if (referenceState) assert.deepEqual(state, referenceState); else referenceState = state;
   }
   assert.equal(new Set(finishOrders).size, 2, 'actual finish order changed');

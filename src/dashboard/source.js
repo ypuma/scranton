@@ -83,13 +83,13 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
   let gateInode = null;
   let gateDropping = false;
   const gateResults = new Map();
-  let conversationEvents = [];
+  let conversationEvents = [], visibleEvents = [], visibleBytes = 0;
 
   // Gate verdicts must survive tool traffic scrolling out of the log tail.
   async function readGateResults(handle, info, runId) {
     if (gateRun !== runId || gateInode !== info.ino || gateOffset > info.size) {
       gateResults.clear();
-      conversationEvents = [];
+      conversationEvents = []; visibleEvents = []; visibleBytes = 0;
       gateOffset = 0;
       gateDropping = false;
     }
@@ -120,6 +120,11 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
         continue;
       }
       for (const ev of parseEventLines(pending.subarray(0, end + 1).toString('utf8'))) {
+        if (ev.runId === runId) {
+          const bytes = Buffer.byteLength(JSON.stringify(ev)) + 1;
+          visibleEvents.push({ ev, bytes }); visibleBytes += bytes;
+          while (visibleEvents.length > 1 && (visibleBytes > tailBytes || visibleEvents.length > Math.max(1, maxEvents))) visibleBytes -= visibleEvents.shift().bytes;
+        }
         if (ev.runId === runId && ev.type !== 'agent_message') {
           conversationEvents.push(ev);
           if (conversationEvents.length > Math.max(1, maxEvents)) conversationEvents.shift();
@@ -166,7 +171,7 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
       tail = [];
       head = null;
       gateResults.clear();
-      conversationEvents = [];
+      conversationEvents = []; visibleEvents = []; visibleBytes = 0;
       gateRun = null;
       gateOffset = 0;
       tailKey = 'missing';
@@ -184,7 +189,12 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
       const handle = await open(eventsPath, 'r');
       try {
         next = parseEventLines(await readAt(handle, from, length), { dropFirst: start > 0 });
-        const runId = next.at(-1)?.runId || state?.runId || head?.runId;
+        let runId = next.at(-1)?.runId || state?.runId || head?.runId || gateRun;
+        if (!runId && start > 0) {
+          const first = parseEventLines(await readAt(handle, 0, Math.min(headBytes, start)));
+          nextHead = first.find(ev => ev.type === 'run_started') ?? null;
+          runId = nextHead?.runId ?? first.at(-1)?.runId;
+        }
         if (start > 0 && runId && !next.some((ev) => ev.type === 'run_started')) {
           // The head only changes with a new run, which brings a new runId into the tail.
           if (head && head.runId === runId) nextHead = head;
@@ -197,14 +207,14 @@ export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 1
     }
     if (!length) {
       gateResults.clear();
-      conversationEvents = [];
+      conversationEvents = []; visibleEvents = []; visibleBytes = 0;
       gateRun = null;
       gateOffset = 0;
       gateDropping = false;
     }
     // Assistant bodies do not consume the visible event budget in conversation mode.
     tail = state?.execution?.conversation === true || (nextHead ?? next.find((ev) => ev.type === 'run_started') ?? head)?.execution?.conversation === true
-      ? conversationEvents.slice() : next;
+      ? conversationEvents.slice() : visibleEvents.map(row => row.ev);
     head = nextHead;
     tailKey = key;
     return true;

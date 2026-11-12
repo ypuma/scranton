@@ -108,6 +108,8 @@ export function installTree() {
       return byId.get(id);
     },
     createElement: (tag) => new TreeEl(tag),
+    // SVG built in code (usage-chart.js): the same node, its attributes read with getAttribute
+    createElementNS: (ns, tag) => new TreeEl(tag),
     createTextNode: (text) => new Text(text),
   };
   return (id) => globalThis.document.getElementById(id);

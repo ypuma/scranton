@@ -1,6 +1,7 @@
-// Run line (status, elapsed, connection, key figures), alert bar, milestones and mailboxes.
+// Run line (status, elapsed, connection, key figures), alert bar and mailboxes. The milestones are the cards of
+// the board (board.js).
 import {
-  PARTICIPANTS, displayName, totals, humanNeeded, dependencyState, lanesOf, isLive, isBusy, activeRoles, workflowOf, workflowText, stepNames, customRoles,
+  PARTICIPANTS, displayName, totals, humanNeeded, lanesOf, isBusy, activeRoles, workflowOf, workflowText, stepNames, customRoles,
 } from './state.js';
 import { formatTokens, formatCost, formatDuration, formatClock, runElapsed, plural } from './format.js';
 
@@ -11,18 +12,6 @@ const STATUS_PILL = {
 const MODE_LABEL = { connecting: 'Connecting', live: 'Live', reconnecting: 'Reconnecting', unavailable: 'Unavailable', demo: 'Demo' };
 // a quiet stream needs no run line until a run exists
 const QUIET_MODES = new Set(['live', 'demo']);
-export const MS_GLYPH = { pending: '○', active: '●', passed: '✓', skipped: '–', failed: '✕', aborted: '✕', blocked: '■', interrupted: '✕' };
-// What the badge says for a milestone that has not started, by dependencyState kind.
-const DEP_BADGE = { waiting: 'waiting', queued: 'queued', blocked: 'blocked' };
-
-// The dependency line under a milestone title, or '' when there is nothing to say.
-export function dependencyText(dep, m) {
-  if (dep.kind === 'blocked') return dep.on.length ? `blocked by ${dep.on.join(', ')}: a prerequisite did not pass` : 'blocked: a prerequisite did not pass';
-  if (dep.kind === 'waiting') return `waiting on ${dep.on.join(', ')}`;
-  if (dep.kind === 'queued') return 'prerequisites passed - waiting for a free parallel slot';
-  if (dep.kind === 'met' && m.dependsOn?.length) return `after ${m.dependsOn.join(', ')}`;
-  return '';
-}
 
 const $ = (id) => document.getElementById(id);
 
@@ -53,7 +42,7 @@ export function createDashboard({ hasRun = () => null } = {}) {
     kBrTile: $('kpi-breaker-tile'), kBr: $('kpi-breaker'), kBrMeter: $('kpi-breaker-meter'), kBrSub: $('kpi-breaker-sub'),
     kTok: $('kpi-tokens'), kTokSub: $('kpi-tokens-sub'), kCost: $('kpi-cost'), kCostSub: $('kpi-cost-sub'),
     kDur: $('kpi-duration'), kDurSub: $('kpi-duration-sub'), workflow: $('run-workflow'),
-    milestones: $('milestones'), msAside: $('milestones-aside'), pipeAside: $('pipeline-aside'),
+    pipeAside: $('pipeline-aside'),
     mail: $('mailboxes'), mailCount: $('tab-count-mail'), announcer: $('announcer'),
   };
   e.moreToggle.addEventListener('click', () => {
@@ -64,9 +53,6 @@ export function createDashboard({ hasRun = () => null } = {}) {
   let mode = 'connecting';
   let modeInfo = {};
   let state = null;
-  const openCriteria = new Set();
-  let msKey = '';
-  let msRun = null;
   let mailKey = '';
   let announced = '';
   // where a human answers: 'terminal' | 'here' (control API answer panel) | 'exited' (the run process died)
@@ -154,70 +140,17 @@ export function createDashboard({ hasRun = () => null } = {}) {
     segments(e.kBrMeter, Array.from({ length: Math.min(max, 10) }, (_, i) => (i < failed ? 'full' : 'none')));
     e.kBrSub.textContent = `${failed}/${max} failed`;
 
-    const t = s ? totals(s) : { tokens: 0, input: 0, output: 0, cost: 0, runs: 0, durationMs: 0 };
-    e.kTok.textContent = formatTokens(t.tokens);
-    e.kTokSub.textContent = `in ${formatTokens(t.input)} · out ${formatTokens(t.output)}`;
-    e.kCost.textContent = formatCost(t.cost);
-    e.kCostSub.textContent = plural(t.runs, 'agent run');
+    const t = s ? totals(s) : { runs: 0, durationMs: 0 };
+    // the usage counts every model call as it is reported; the agents' totals only move when a turn has ended
+    const u = s?.usage ?? { tokens: 0, input: 0, output: 0, cost: 0, calls: 0 };
+    e.kTok.textContent = formatTokens(u.tokens);
+    e.kTokSub.textContent = `in ${formatTokens(u.input)} · out ${formatTokens(u.output)}`;
+    e.kCost.textContent = formatCost(u.cost);
+    e.kCostSub.textContent = `${plural(t.runs, 'agent run')} · ${plural(u.calls, 'model call')}`;
     e.kDurSub.textContent = `agent time ${t.durationMs ? formatDuration(t.durationMs) : '-'}`;
     // the gates the engine reported for the run (an older run: the tests alone)
     e.workflow.textContent = s?.runId ? workflowText(workflowOf(s), stepNames(s)) : '-';
     e.workflow.title = s?.runId ? `Gates after each developer turn${s.workflow ? '' : ' (not reported: an older run)'}` : '';
-  }
-
-  function renderMilestones(s) {
-    const ms = s?.milestones ?? [];
-    const lanes = s?.runId ? lanesOf(s).filter(isLive) : [];
-    const key = JSON.stringify([s?.runId, ms, lanes.map((i) => [i.id, i.milestoneId, i.status])]);
-    if (key === msKey) return;
-    if ((s?.runId ?? null) !== msRun) openCriteria.clear();
-    msRun = s?.runId ?? null;
-    msKey = key;
-    e.msAside.textContent = ms.length ? `${plural(ms.length, 'milestone')}` : '';
-    if (!ms.length) {
-      e.milestones.replaceChildren(el('li', 'placeholder', s?.runId ? 'Waiting for the plan...' : 'No milestones yet'));
-      return;
-    }
-    e.milestones.replaceChildren(...ms.map((m, i) => {
-      const li = el('li', 'ms');
-      li.dataset.status = m.status;
-      const dep = dependencyState(s, m);
-      li.dataset.dep = dep.kind;
-      const row = el('div', 'ms-row');
-      const waiting = m.status === 'pending' ? DEP_BADGE[dep.kind] : null;
-      row.append(
-        el('span', 'ms-idx mono', String(i + 1).padStart(2, '0')),
-        el('span', 'ms-glyph', waiting === 'blocked' ? MS_GLYPH.blocked : MS_GLYPH[m.status] ?? '○'),
-        el('span', 'ms-title', m.title),
-        el('span', 'ms-badge', waiting ?? m.status),
-        el('span', 'ms-cycles mono', m.cycles ? plural(m.cycles, 'cycle') : '-'),
-      );
-      row.querySelector('.ms-title').title = `${m.id}: ${m.title}`;
-      row.querySelector('.ms-glyph').setAttribute('aria-hidden', 'true');
-      li.append(row);
-      const deps = dependencyText(dep, m);
-      if (deps) li.append(el('p', 'ms-deps', deps));
-      const mine = lanes.filter((x) => x.milestoneId === m.id);
-      if (mine.length && m.status === 'active') li.append(el('p', 'ms-lanes', mine.map((x) => `${x.id} ${x.status}`).join(' · ')));
-      if (m.lastResult === 'failed' && m.status === 'active' && m.lastReason) {
-        const p = el('p', 'ms-reason');
-        p.append(el('b', '', 'last failure '), m.lastReason);
-        li.append(p);
-      }
-      if (m.acceptanceCriteria.length || m.description) {
-        const d = el('details');
-        d.open = openCriteria.has(m.id);
-        d.addEventListener('toggle', () => (d.open ? openCriteria.add(m.id) : openCriteria.delete(m.id)));
-        const n = m.acceptanceCriteria.length;
-        d.append(el('summary', '', n === 1 ? '1 acceptance criterion' : `${n} acceptance criteria`));
-        if (m.description) d.append(el('p', 'ms-desc', m.description));
-        const ul = el('ul', 'ms-criteria');
-        ul.append(...m.acceptanceCriteria.map((c) => el('li', '', c)));
-        d.append(ul);
-        li.append(d);
-      }
-      return li;
-    }));
   }
 
   function renderMail(s) {
@@ -295,7 +228,6 @@ export function createDashboard({ hasRun = () => null } = {}) {
     e.pipeAside.title = s?.workspace ?? '';
     renderAlert(s);
     renderKpis(s);
-    renderMilestones(s);
     renderMail(s);
     announce(s);
     tick();

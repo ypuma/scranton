@@ -11,6 +11,7 @@ import {
   RUN_ID_RE, laneRows, evidenceView, riskFlagText, activityEvents, eventLoud, nodeLabel, EVENTS_PAGE, CHAT_EVENTS_KEPT,
 } from './pipeline-model.js';
 import { pipelineChatEvent } from './chat-adapter-pipeline.js';
+import { parseUsage, parseLive, foldCalls } from './activity-model.js';
 import { detailError } from './scope.js';
 
 const $ = (id) => document.getElementById(id);
@@ -186,6 +187,11 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
       settled: run?.settled ?? id === startedHere,
       lastSeq: parsed.lastSeq ?? run?.lastSeq ?? 0,
       plan: parsed.plan ?? run?.plan ?? null, review: parsed.review ?? run?.review ?? null, stderrTail: parsed.stderrTail,
+      // what the live panels read (activity-model.js). calls: the llm_call events folded as they come, for a server
+      // that sends no usage; they are kept apart from `events`, which drops its oldest.
+      stepsDone: parsed.stepsDone, stepsDoneExact: parsed.stepsDoneExact, usage: parseUsage(parsed.usage),
+      calls: parsed.usage ? null : foldCalls(run?.calls ?? null, parsed.events.filter((x) => x.seq > (run?.lastSeq ?? 0))),
+      liveText: parseLive(parsed.liveText), liveAt: Date.now(),
     };
     if (deciding && !deciding.error) {
       // taken up once the gate it answered is gone; failed once the engine call ended and the gate still waits
@@ -981,6 +987,18 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
       version, list, details: [...details.values()], current: run?.runId ?? currentId(),
       run: run && { runId: run.runId, status: run.status, events: run.chat, plan: run.plan, review: run.review },
       loaded: Boolean(list), active: active(), note: note(),
+    }),
+    // The run on screen for the live panels: the same document, with what the server says about usage, live text
+    // and the implemented steps.
+    activity: () => ({
+      list,
+      run: run && {
+        // Keep older conversation evidence as well as the independently bounded lifecycle history.
+        runId: run.runId, status: run.status, live: run.live,
+        events: [...new Map([...run.chat, ...run.events].map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq),
+        plan: run.plan, usage: run.usage, calls: run.calls,
+        liveText: run.liveText, liveAt: run.liveAt, stepsDone: run.stepsDone, stepsDoneExact: run.stepsDoneExact,
+      },
     }),
     loadRun,
     // the next run for the Chat composer, or null while one cannot start

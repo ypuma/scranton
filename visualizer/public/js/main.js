@@ -20,6 +20,11 @@ import { createViewMode, createDock } from './view-mode.js';
 import { createChatView } from './chat-view.js';
 import { teamChatAdapter, CHAT_EVENT_TYPES } from './chat-adapter-team.js';
 import { pipelineChatAdapter } from './chat-adapter-pipeline.js';
+import { teamRunView, pipelineRunView, boardSummary } from './activity-model.js';
+import { createBoard } from './board.js';
+import { createUsage } from './usage-chart.js';
+import { createRunRail } from './run-rail.js';
+import { createLivePoll } from './live-poll.js';
 
 const params = new URLSearchParams(location.search);
 const mode = params.has('demo') ? 'demo' : params.has('live') ? 'live' : 'auto';
@@ -65,6 +70,8 @@ let entries = [];
 let entriesKey = '';
 // the same for a pipeline chat: what its view last loaded was the run as the page found it
 let pipelineHistory = true;
+// how the event stream stands (feed.js); only a live one has a run whose models can be listened to
+let feedMode = 'connecting';
 
 function forgetLive() {
   live = createState();
@@ -178,6 +185,59 @@ function view() {
   return snap?.gone ? interruptedView(live, { at: snap.control.lastExit?.finishedAt, exitCode: snap.control.lastExit?.exitCode }) : live;
 }
 
+// Live activity (.enma/live-activity-contract.md): what the agents do now, the board and the usage, as one run view
+// that the rail of the Chat view and the panels of the Dashboard and of Details all draw.
+const livePoll = createLivePoll({
+  url: () => urlFor('live'),
+  wanted: () => engine === 'team' && !replay && feedMode === 'live' && ['planning', 'running', 'paused'].includes(live.status) && !control?.snapshot().gone,
+  onChange: () => schedule(),
+});
+function runView() {
+  if (engine === 'pipeline') return pipelineRunView(pipelineView.activity());
+  return teamRunView({ state: view(), live: replay ? null : livePoll.get(), runs: thread?.runs() ?? [] });
+}
+const boards = {
+  dash: createBoard($('board'), { name: 'board' }),
+  details: createBoard($('pv-board'), { name: 'pv-board' }),
+  dialog: createBoard($('board-dialog-body'), { name: 'board-dialog' }),
+};
+const usages = { dash: createUsage({ table: true, height: 180, id: 'dash-usage' }), details: createUsage({ table: true, height: 180, id: 'pv-usage' }) };
+$('usage-panel').append(usages.dash.el);
+$('pv-usage').append(usages.details.el);
+const boardDialog = $('board-dialog');
+$('board-dialog-close').addEventListener('click', () => boardDialog.close());
+const rail = createRunRail({
+  viewMode: () => viewMode.get(),
+  liveOff: () => livePoll.off(),
+  openBoard: () => {
+    if (boardDialog.open) return;
+    renderActivity();
+    boardDialog.showModal();
+    $('board-dialog-close').focus();
+  },
+});
+
+// Everything that reads the run view, after the state or a poll changed.
+function renderActivity(v = view()) {
+  const rv = runView();
+  const summary = rv.board.total ? boardSummary(rv.board) : '';
+  if (engine === 'pipeline') {
+    $('pv-live').hidden = !rv.runId;
+    boards.details.render(rv.board);
+    $('pv-board-aside').textContent = summary;
+    usages.details.render(rv.usage, { live: rv.live });
+  } else {
+    lanes.render(v, rv);
+    boards.dash.render(rv.board);
+    $('board-aside').textContent = summary;
+    usages.dash.render(rv.usage, { live: rv.live });
+  }
+  boards.dialog.render(rv.board);
+  $('board-dialog-aside').textContent = summary;
+  rail.render(rv);
+  livePoll.sync();
+}
+
 const pipelineView = createPipelineView({
   confirm: (opts) => control.confirm(opts),
   openRun: (target, onStarted, { task, problem } = {}) => control.openRun({ engine: 'pipeline', target, onStarted, task, problem }),
@@ -213,7 +273,7 @@ control = createControlPanel({
     const settle = dock.hold();
     dashboard.render(v);
     pipeline.render(v);
-    lanes.render(v);
+    renderActivity(v);
     chat.render();
     accounts?.render();
     agents?.render();
@@ -260,6 +320,7 @@ function onEvent(event, { instant }) {
 }
 
 const onMode = (m, info) => {
+  feedMode = m;
   dashboard.setMode(m, info);
   control.setMode(m);
 };
@@ -279,6 +340,8 @@ function bind(next) {
   control.setReadOnly(readOnlyView());
   chat.reset();
   chatView.reset();
+  livePoll.reset();
+  rail.reset();
   thread.setScope();
   nav.render();
   attach();
@@ -347,6 +410,8 @@ nav = createNav({
       control.setReadOnly(readOnlyView());
       chat.reset();
       chatView.reset();
+      livePoll.reset();
+      rail.reset();
       attach();
       schedule();
     }

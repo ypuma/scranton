@@ -386,3 +386,17 @@ CLI: `scranton agents`, `scranton agent set-model <id> --provider P --model M [-
 Both `POST /api/runs` and scoped `POST P/runs` accept optional `conversation:boolean`. Non-booleans return 400 before spawning. Explicit true/false becomes `--conversation`/`--no-conversation`; omission retains CLI/env/config defaults (engine false). The UI sends true for new runs, follow-ups and demos. Control discovery includes the fake `question` scenario; its default request is `How does the Team orchestrator handle a request?`, matching its scripted answer. `defaults.execution.conversation` is omitted unless true. Child agents receive SCRANTON_CONVERSATION=1|0, including Docker/RPC launches. No additional filesystem or dialog API is introduced.
 
 Conversation runs emit agent_message plus exactly one run_reply immediately before run_finished (see EVENTS.md). The latter is persisted in state.reply and exposed without sender in RunSummary.reply. Follow-up planning sees bounded earlier replies as context, not instructions. The report phase is best-effort: stop/failure/timeout never changes a completed milestone outcome or raises a human question. Off-mode events/state/CLI output retain their prior format.
+
+## Live activity (additive)
+
+- `GET /api/live` und `GET /api/projects/:p/chats/:c/live` liefern 200 mit dem Liveobjekt aus
+  [EVENTS.md](EVENTS.md#live-activity-and-usage-additive-v1), `Cache-Control: no-store`.
+  Ohne Datei/passenden aktiven Run: `{v:1,runId:null,updatedAt:null,instances:{}}`.
+- Die Zugriffsschutzregeln sind identisch zur benachbarten State-Route: Registry-Aliase und Scoped-GETs
+  verlangen Loopback, lokalen Host, `X-Scranton-Client: 1` und gegebenenfalls exakten Origin.
+  Der unscoped Single-Read behält wie `/api/state` seine bisherigen Leseregeln.
+- `RunSummary` ergänzt `usage:{tokens,cost}|null`; aus archiviertem `state.usage`, bei alten States
+  aus der Summe der Agententotals. Kein Reasoning in Archivantworten.
+
+Clients pollen Live nur bei sichtbarer Seite und aktivem Run einmal pro Sekunde, prüfen Run-ID und
+aktive Instanz und rendern ausschliesslich als Text. Fehler/404 schalten Live still ab.

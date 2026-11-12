@@ -63,7 +63,7 @@ test('instances get their own lane with session, worktree and sandbox', () => {
   assert.equal(d1.sessionId, 'dwight-m1-0000-uuid');
   assert.deepEqual(d1.worktree, { mode: 'worktree', dir: 'C:\\hive\\isolation\\dwight-m1', ref: '' });
   assert.deepEqual(d1.sandbox, { mode: 'docker', image: '', network: '' });
-  assert.deepEqual(d1.tool, { tool: 'write', detail: 'todo.js' });
+  assert.deepEqual(d1.tool, { tool: 'write', detail: 'todo.js', targetFile: 'todo.js', command: null, startedAt: '2026-11-08T12:00:10.000Z' });
 });
 
 test('a role card speaks for its loudest live lane, not for whichever lane wrote last', () => {

@@ -187,3 +187,31 @@ ANSWER_READY bypasses plan/milestones and finishes with success / `Answered by M
 Ending order: the existing final done/idle `agent_status` events for every active role, then exactly one `run_reply`, immediately followed by `run_finished`. Reply text removes the trailing ANSWER_READY/REPORT_READY token (including inline `Done. [ANSWER_READY]`) and trims whitespace. The reducer stores `reply:{from,kind,text,truncated?}`; it is absent before a reply and removed at run_started. `agent_message` changes only lastSeq/updatedAt, not other state. History/API and earlier-run context caps are documented in CONTROL.md.
 
 In conversation mode only, Michael's staged system prompt appends a short override: each request's Required answer section chooses PLAN_READY, ANSWER_READY or REPORT_READY rather than always requiring a plan. Built-in and custom source prompts remain unchanged; the run's prompt audit hashes the actual staged text. CLI assistant/reply output strips ANSI, controls, bidi formatting and variation selectors like the terminal dashboard. The terminal source retains a bounded visible-event tail independent of large suppressed agent_message bodies; disabled runs retain the original byte-tail selection. Fake intermediate messages describe the next scripted tool, and fake RPC follows the same scenario as fake JSON (only question answers directly).
+
+## Live activity and usage (additive v1)
+
+`agent_tool` adds `targetFile:string|null` (workspace-relative forward-slash path when possible) and
+`command:string|null` (shell command); both are sanitised/redacted and capped at 240 characters.
+Older journals lack these fields; consumers fall back to `detail`. Instance `tool`/`lastTool` retain
+these fields and `startedAt`/`ts`; `touchedFiles` is newest-first, unique by path, capped at eight
+`{path,kind:"read"|"write"|"edit",ts}` entries.
+
+`agent_usage {agent,instanceId,model:string|null,usage:{input,output,cost,cacheRead?,cacheWrite?}}`
+carries one assistant message's usage delta, with the normal v/seq/ts/runId envelope. Both JSON and
+RPC transports use Pi's authoritative `message_end`; streaming usage snapshots are not counted.
+`agent_finished.usage` remains the invocation total. Usage events are not Activity or conversation rows.
+
+`state.usage` is `{input,output,cost,tokens,calls,startedAt,byAgent,series}`. Tokens mean input + output.
+`byAgent[agent]` contains `{input,output,cost,tokens,calls}`. Each cumulative series point is
+`{ts,tokens,cost,byAgent:{[agent]:{tokens,cost}}}`. Above 120 points, odd-index points are removed
+except the last. Per-instance `usagePending` sums reported deltas; finish folds only nonnegative
+component-wise differences and clears pending. Legacy finishes with no deltas still contribute.
+Run totals equal the sum of `agents[*].totals` throughout the fold.
+
+Reasoning is NEVER written to this journal or state.json. A separate atomic `hive/live.json` holds
+`{v:1,runId,updatedAt,instances:{[instanceId]:{agent,phase,thinking,thinkingCut,text,textCut,updatedAt}}}`.
+Phase is `thinking|text|tool|idle`; each sanitised tail is at most 2000 characters, null if unseen,
+reset at the next assistant message. Writes are trailing-edge throttled to 400 ms; terminal clearing
+is immediate. Finished instances are removed; success, failure and abort clear the file to
+`{v:1,runId:null,updatedAt:null,instances:{}}`. Missing, stale or terminal live data reads as that empty
+object. This channel is ephemeral display data, not a replay or recovery source. Redaction is best effort.

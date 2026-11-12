@@ -85,8 +85,8 @@ test('Pipeline conversation list bounds replies and inspect preserves reply/even
   fs.writeFileSync(path.join(runs, 'answer01/events.jsonl'), events.map(JSON.stringify).join('\n') + '\n');
   const list = supervisor.list(chat);
   assert.deepEqual(list, { active: null, runs: [
-    { runId: 'answer01', status: 'succeeded', phase: 'done', task: 'Question', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-11T00:01:00Z', reply: { kind: 'answer', text: 'A'.repeat(4000), truncated: true, citations: ['E-1234567890'] } },
-    { runId: 'normal01', status: 'succeeded', phase: 'done', task: 'Question', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-11T00:01:00Z' }
+    { runId: 'answer01', status: 'succeeded', phase: 'done', task: 'Question', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-11T00:01:00Z', usage: null, reply: { kind: 'answer', text: 'A'.repeat(4000), truncated: true, citations: ['E-1234567890'] } },
+    { usage: null, runId: 'normal01', status: 'succeeded', phase: 'done', task: 'Question', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-11T00:01:00Z' }
   ] });
   assert.equal(Object.hasOwn(list.runs[1], 'reply'), false);
   const inspected = await supervisor.inspect(chat, 'answer01');

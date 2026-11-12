@@ -204,3 +204,27 @@ Die implementierte Node-Anbindung nutzt die vorhandenen Routen: `POST /api/proje
 Die Desktop-Pakete für Windows x64, macOS arm64/x64 und Linux glibc arm64/x64 liefern ihre eigene Pipeline-Runtime, keine Abhängigkeit von einem Python auf dem Nutzer-PATH. Windows: offizielles CPython-Embed 3.14.8; POSIX: Astral python-build-standalone CPython 3.14.10, gepinnt auf Release 20261110. Runtimearchiv und Plattform-Wheels werden per SHA-256 geprüft; private `site-packages` und der isolierte Bootstrap ersetzen keine Systemdateien. `engine-runtime/launch.json` trägt `{schema:1,platform,arch,executable,args}`; `executable` ist `python/python.exe` unter Windows, sonst `python/bin/python3`, `args` exakt `['-I','-B','bootstrap.py']`. Node löst den Bootstrappfad absolut auf. Ein altes Windows-Paket ohne Manifest bleibt über den bisherigen Embedpfad startbar; ein vorhandenes ungültiges Manifest ist ein Fehler, kein Anlass für Systemruntime-/Legacy-Fallback.
 
 Bauen und Paketprüfung erfolgen auf dem nativen Zielhost, nicht als Universal-/Cross-Build. [Desktopmatrix und konkrete Befehle](DESKTOP.md#native-builds-und-ci-matrix). In diesem Windows-Dokumentationslauf sind macOS-/Linuxbetrieb und nativer installierter Lifecycle **nicht verifiziert**. Komponentenfloors (Node: macOS 13.5/glibc 2.28) sind keine vollständige Mindest-OS-Zusage; portable Python-Wheels und WebKitGTK können die reale Untergrenze erhöhen. Git und bei Dockerwahl eine separat bereitgestellte lokale Linux-Engine bleiben nötig. CI verwendet nur offline/scripted Smokes, keinen echten Login oder Modellaufruf und keinen Imagebuild.
+
+## Live-Aktivität und Usage (additiv)
+
+`GET R` ergänzt `usage:{input,output,cost,tokens,calls,startedAt,byAgent,series}`.
+`tokens` ist Input + Output; `byAgent` verwendet Pipeline-Rollen und enthält je
+`{input,output,cost,tokens,calls}`. `series` enthält kumulative Punkte
+`{ts,tokens,cost,byAgent:{[role]:{tokens,cost}}}`; oberhalb 120 Punkten werden ungerade
+Indizes bis auf den letzten entfernt. Die Node-Seite aggregiert das Usageledger, ersatzweise
+`llm_call`-Events, unabhängig von der angeforderten Eventseite. Ledger und Events werden nicht doppelt
+gezählt. Ledgerzeilen ohne Zeitstempel verwenden den korrespondierenden Eventzeitpunkt bzw.
+`status.updated_at`. Ohne Einzelpreise bleiben Punktkosten `null`; der Runpreis kommt aus
+`status.usage.estimated_cost` und ist mit `estimated:true` gekennzeichnet. Fehlende Preise sind nicht null Dollar.
+Die Runliste ergänzt je Zeile `usage:{tokens,cost,estimated?}|null`.
+
+`live` bleibt ausdrücklich ein Boolean für den besessenen Kindprozess. `liveText` wird nicht geliefert:
+Die Python-Schnittstelle liefert abgeschlossene strukturierte Antworten, keine Reasoningdeltas. Dafür
+wären eine separate Python-/Bridge-Streaming-Schnittstelle und deren Lebenszyklus-/Redaktionsregeln nötig;
+diese Änderung ist nicht Teil der Node-Erweiterung.
+
+`stepsDone:string[]` nennt implementierte Schritt-IDs in persistierter Reihenfolge aus
+`delivery/report.json` (ohne interne `step:`-Scopes, ohne Review-Revisionsscopes). Vor dem Abschluss wird
+konservativ aus Implementer-/Verify-/Waveereignissen abgeleitet. `stepsDoneExact:true` kennzeichnet den
+Bericht oder Übereinstimmung mit `status.progress.steps_done`; andernfalls ist es `false`, und die UI
+kennzeichnet die Schrittzustände als ungefähr. Keine Python-Checkpoints werden dafür geöffnet oder geändert.

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { cleanActivity, createLiveActivity } from './live-activity.js';
 import path from 'node:path';
 import { initialState, reduce } from './state.js';
 import { clip, nowIso, withFsRetry, writeFileAtomicSync } from './util.js';
@@ -38,6 +39,7 @@ export class EventRecorder {
     fs.mkdirSync(this.hiveDir, { recursive: true });
     archivePreviousRun(this.hiveDir);
     withFsRetry(() => fs.writeFileSync(this.eventsFile, ''));
+    this.live = createLiveActivity(this.hiveDir, this.runId);
   }
 
   /** Reopen an interrupted journal without starting or archiving another run. */
@@ -75,7 +77,9 @@ export class EventRecorder {
 
   emit(type, fields = {}) {
     if (type === 'hive_write') fields = { ...fields, summary: clip(fields.summary, 140) };
-    if (type === 'agent_tool') fields = { ...fields, detail: clip(fields.detail, 140) };
+    if (type === 'agent_tool') fields = { ...fields, detail: clip(cleanActivity(fields.detail), 140), targetFile: fields.targetFile ? clip(cleanActivity(fields.targetFile), 240) : null, command: fields.command ? clip(cleanActivity(fields.command), 240) : null };
+    if (type === 'agent_finished') this.live?.remove(fields.instanceId ?? fields.agent);
+    if (type === 'run_finished') (this.live ?? createLiveActivity(this.hiveDir, this.runId)).close();
     const event = { v: 1, seq: ++this.#seq, ts: nowIso(), runId: this.runId, type, ...fields };
     const line = JSON.stringify(event).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
     withFsRetry(() => fs.appendFileSync(this.eventsFile, `${line}\n`));

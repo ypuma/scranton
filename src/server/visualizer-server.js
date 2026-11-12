@@ -1,3 +1,4 @@
+import { readLive } from '../core/live-activity.js';
 // Visualizer HTTP/SSE server: static UI, /events (tail of hive/events.jsonl) and /api/state.
 import http from 'node:http';
 import { isLoopbackAddress } from '../core/network.js';
@@ -310,7 +311,13 @@ export function createHiveContext({ hive, control }) {
     res.end(req.method === 'HEAD' ? undefined : body);
   }
 
-  return { controller, get subscribers() { return clients.size; }, handleEvents, handleState,
+  async function handleLive(req, res) {
+    const body = JSON.stringify(readLive(hive));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store' });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  }
+
+  return { handleLive, controller, get subscribers() { return clients.size; }, handleEvents, handleState,
     async close() {
       closed = true;
       for (const c of [...clients]) { removeClient(c); c.res.end(); }
@@ -382,6 +389,7 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
     const pathname = req.url.split(/[?#]/, 1)[0];
     if (!pathname.startsWith('/')) return notFound(res, req.method === 'HEAD');
     if (pathname === '/events') return single.handleEvents(req, res);
+    if (pathname === '/api/live') return single.handleLive(req, res).catch(() => res.destroy());
     if (pathname === '/api/state') {
       return single.handleState(req, res).catch(() => res.destroy());
     }

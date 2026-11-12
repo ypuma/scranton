@@ -240,7 +240,8 @@ export function parseReply(r) {
   return { kind: o.kind, text: str(o.text), truncated: o.truncated === true, citations: list(o.citations).filter((x) => typeof x === 'string' && x).map(str) };
 }
 
-// GET .../pipeline -> { active, runs } (runs oldest first, as sent); a run carries `reply` only when it has one
+// GET .../pipeline -> { active, runs } (runs oldest first, as sent); a run carries `reply` and `usage` only when
+// it has one
 export function parseRunList(doc) {
   const d = obj(doc);
   if (!d || !Array.isArray(d.runs)) return null;
@@ -251,9 +252,12 @@ export function parseRunList(doc) {
     if (!o || !RUN_ID_RE.test(o.runId ?? '') || seen.has(o.runId)) continue;
     seen.add(o.runId);
     const reply = parseReply(o.reply);
+    // what the run used (live-activity-contract section 4); a server from before it sends none
+    const u = obj(o.usage);
     runs.push({
       runId: o.runId, status: Object.hasOwn(RUN_STATUS, o.status) ? o.status : null, phase: str(o.phase) || null,
       task: str(o.task), createdAt: str(o.createdAt) || null, updatedAt: str(o.updatedAt) || null, ...(reply ? { reply } : {}),
+      ...(u ? { usage: { tokens: num(u.tokens) ?? 0, cost: num(u.cost), ...(u.estimated === true ? { estimated: true } : {}) } } : {}),
     });
   }
   const active = typeof d.active === 'string' && seen.has(d.active) ? d.active : null;
@@ -376,6 +380,11 @@ export function parseRunDoc(doc) {
     events: list(d.events).map(parseEvent).filter(Boolean),
     lastSeq: Number.isInteger(d.lastSeq) ? d.lastSeq : null,
     plan: parsePlan(d.plan), review: parseReview(d.review), stderrTail: raw(d.stderrTail),
+    // live-activity-contract section 4: the ids of the implemented steps, and whether the engine stored them or
+    // the server derived them; the usage and the live text as sent (activity-model.js reads them)
+    stepsDone: Array.isArray(d.stepsDone) ? d.stepsDone.filter((x) => typeof x === 'string' && x).map(str) : null,
+    stepsDoneExact: d.stepsDoneExact !== false,
+    usage: obj(d.usage), liveText: obj(d.liveText),
   };
 }
 

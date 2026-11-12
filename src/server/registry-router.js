@@ -140,6 +140,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     if (archive && req.method === 'GET') { json(res, 200, { events: replay(chat.hiveDir, archive[1]) }); return; }
     const ctx = context(project, chat);
     if (suffix === '/events' && req.method === 'GET') return ctx.handleEvents(req, res);
+    if (suffix === '/live' && req.method === 'GET') return ctx.handleLive(req, res);
     if (suffix === '/state' && req.method === 'GET') return ctx.handleState(req, res);
     if (suffix === '/control' && req.method === 'GET') {
       const s = ctx.controller?.snapshot() ?? { v: 1, enabled: false };
@@ -165,7 +166,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       const scopedPath = /^\/api\/projects\/([^/]+)\/chats\/([^/]+)(\/.*)$/.exec(pathname);
       const chatRoute = /^\/api\/projects\/([^/]+)\/chats(?:\/(rename|remove))?$/.exec(pathname);
       const projectsRoute = ['/api/projects', '/api/projects/rename', '/api/projects/remove'].includes(pathname);
-      const alias = registry && ['/events', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname);
+      const alias = registry && ['/events', '/api/live', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname);
       const detectPath = /^\/api\/projects\/([^/]+)\/pipeline\/detect$/.exec(pathname);
       if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath) return false;
       if (!registry && !scopedPath && !chatRoute && !projectsRoute && pathname === '/api/runs' && req.method !== 'GET') return false;

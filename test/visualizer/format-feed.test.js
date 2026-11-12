@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { formatTokens, formatCost, formatDuration, formatClock, runElapsed, plural, stripBidi } from '../../visualizer/public/js/format.js';
-import { MS_GLYPH } from '../../visualizer/public/js/dashboard.js';
+import { GATE_MARK } from '../../visualizer/public/js/board.js';
 import { demoDelays } from '../../visualizer/public/js/feed.js';
 import { parseJsonl } from '../../visualizer/public/js/state.js';
 
@@ -38,10 +38,10 @@ test('cost: 3 decimals below $1, 2 from $1', () => {
   assert.equal(formatCost(-1), '$0.00');
 });
 
-test('the active milestone uses the filled dot, like the terminal dashboard', () => {
-  assert.equal(MS_GLYPH.active, '●');
-  assert.equal(MS_GLYPH.pending, '○');
-  assert.equal(MS_GLYPH.passed, '✓');
+test('the board uses distinct running, pending and passed gate marks', () => {
+  assert.equal(GATE_MARK.running, '◐');
+  assert.equal(GATE_MARK.pending, '○');
+  assert.equal(GATE_MARK.passed, '✓');
 });
 
 test('stripBidi removes the bidi embedding, override, isolate and mark controls', () => {

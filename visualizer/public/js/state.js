@@ -20,6 +20,12 @@ export const CHAT_SIZE = 200;
 export const CHAT_TEXT_MAX = 4000;
 // An error log line or a failed agent's activity is kept this long, so the open log row can show it in full.
 export const FAILURE_TEXT_MAX = 2000;
+// Live activity (.enma/live-activity-contract.md sections 1 and 2): the files an instance last touched, and the
+// points the usage series keeps.
+export const TOUCHED_MAX = 8;
+export const USAGE_POINTS_MAX = 120;
+const FILE_TOOLS = { read: 'read', write: 'write', edit: 'edit' };
+const SHELL_TOOLS = new Set(['bash', 'powershell']);
 // Instance states after which nothing is delivered any more (the control route's list, plus the view-only
 // 'interrupted' of a run whose process exited).
 export const TERMINAL_STATUSES = new Set(['finished', 'failed', 'aborted', 'stopped', 'cancelled', 'done', 'interrupted']);
@@ -42,7 +48,7 @@ const KNOWN_TYPES = new Set([
   'run_started', 'plan_ready', 'milestone_started', 'hive_write', 'agent_status', 'agent_tool',
   'agent_finished', 'cycle_result', 'circuit_breaker', 'hitl_request', 'hitl_response',
   'milestone_finished', 'run_finished', 'log', 'instance_started', 'chat_message', 'chat_delivery', 'milestone_integrated',
-  'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply',
+  'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply', 'agent_usage',
 ]);
 
 const CATEGORY = {
@@ -224,6 +230,7 @@ function freshInstance(id, agent, milestoneId, state) {
     activity: 'Starting',
     tool: null,
     lastTool: null,
+    touchedFiles: [],
     lastKeyword: null,
     lastExitCode: null,
     sessionId: null,
@@ -243,6 +250,7 @@ function freshAgent() {
     activity: 'Idle',
     tool: null,
     lastTool: null,
+    touchedFiles: [],
     lastKeyword: null,
     lastExitCode: null,
     updatedAt: null,
@@ -250,6 +258,10 @@ function freshAgent() {
     roleSeq: 0,
     totals: { runs: 0, input: 0, output: 0, cost: 0, durationMs: 0 },
   };
+}
+
+export function freshUsage() {
+  return { input: 0, output: 0, cost: 0, tokens: 0, calls: 0, startedAt: null, byAgent: {}, series: [] };
 }
 
 export function createState() {
@@ -285,6 +297,9 @@ export function createState() {
     activeMilestoneIds: [],
     instances: {},
     chat: [],
+    usage: freshUsage(),
+    // per instance: the agent_usage deltas folded since its last agent_finished
+    usagePending: {},
   };
 }
 
@@ -543,23 +558,34 @@ function apply(s, e) {
     }
 
     case 'agent_tool': {
+      const call = toolCall(e);
       const inst = instanceOf(s, e, { create: false });
-      if (inst) {
-        inst.tool = { tool: e.tool ?? '', detail: e.detail ?? '' };
-        inst.lastTool = { tool: e.tool ?? '', detail: e.detail ?? '', ts: e.ts ?? null };
-        inst.updatedAt = e.ts ?? null;
+      for (const x of [inst, agentOf(s, e.agent)]) {
+        if (!x) continue;
+        x.tool = { ...call, startedAt: e.ts ?? null };
+        x.lastTool = { ...call, ts: e.ts ?? null };
+        x.updatedAt = e.ts ?? null;
+        touch(x, call, e.ts ?? null);
       }
+      break;
+    }
+
+    case 'agent_usage': {
+      const d = usageDelta(e.usage);
+      const key = pendingKey(e);
+      const p = own(s.usagePending, key) ?? { input: 0, output: 0, cost: 0 };
+      s.usagePending[key] = { input: p.input + d.input, output: p.output + d.output, cost: p.cost + d.cost };
+      addUsage(s.usage, e.agent, d, e.ts);
       const a = agentOf(s, e.agent);
-      if (!a) break;
-      a.tool = { tool: e.tool ?? '', detail: e.detail ?? '' };
-      a.lastTool = { tool: e.tool ?? '', detail: e.detail ?? '', ts: e.ts ?? null };
-      a.updatedAt = e.ts ?? null;
+      if (a) for (const key of ['input', 'output', 'cost']) a.totals[key] += d[key];
       break;
     }
 
     case 'agent_finished': {
-      const inst = instanceOf(s, e);
+      // Legacy JSON finishes omit instanceId; explicit ids only settle an existing lane.
+      const inst = instanceOf(s, e, { create: false });
       if (inst) finishInto(inst, e);
+      const delta = settleUsage(s, e);
       const a = agentOf(s, e.agent);
       if (!a) break;
       a.lastKeyword = e.keyword ?? null;
@@ -569,9 +595,7 @@ function apply(s, e) {
       a.totals.runs += 1;
       a.totals.durationMs += Number(e.durationMs) || 0;
       if (e.usage) {
-        a.totals.input += Number(e.usage.input) || 0;
-        a.totals.output += Number(e.usage.output) || 0;
-        a.totals.cost += Number(e.usage.cost) || 0;
+        for (const key of ['input', 'output', 'cost']) a.totals[key] += delta[key];
       }
       if (a.status === 'thinking' || a.status === 'working') {
         a.status = 'idle';
@@ -714,6 +738,66 @@ function apply(s, e) {
   }
   // the engine may publish its own list of active pipelines; it wins over the derived one
   if (Array.isArray(e.activeMilestoneIds)) s.activeMilestoneIds = e.activeMilestoneIds.filter((x) => typeof x === 'string');
+}
+
+// agent_tool as an instance keeps it. A journal from before targetFile and command says both in detail.
+function toolCall(e) {
+  const tool = e.tool ?? '';
+  const detail = e.detail ?? '';
+  return {
+    tool, detail,
+    targetFile: text(e.targetFile) || (Object.hasOwn(FILE_TOOLS, tool) ? text(detail) : '') || null,
+    command: text(e.command) || (SHELL_TOOLS.has(tool) ? text(detail) : '') || null,
+  };
+}
+
+// newest first, each path once
+function touch(x, call, ts) {
+  const kind = own(FILE_TOOLS, call.tool);
+  if (!kind || !call.targetFile) return;
+  x.touchedFiles = [{ path: call.targetFile, kind, ts }, ...(x.touchedFiles ?? []).filter((f) => f.path !== call.targetFile)].slice(0, TOUCHED_MAX);
+}
+
+const amount = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+
+// Even an all-zero report is a call, like the server's foldUsage.
+function usageDelta(u) {
+  return { input: amount(u?.input), output: amount(u?.output), cost: amount(u?.cost) };
+}
+
+const pendingKey = (e) => text(e.instanceId) || text(e.agent) || '?';
+
+// One delta { input, output, cost } into a usage object (changed in place): the totals, the agent's share and one
+// more cumulative point.
+export function addUsage(u, agent, d, ts, calls = 1) {
+  const id = typeof agent === 'string' && agent ? agent : '?';
+  if (!Object.hasOwn(u.byAgent, id)) u.byAgent[id] = { input: 0, output: 0, cost: 0, tokens: 0, calls: 0 };
+  for (const x of [u, u.byAgent[id]]) {
+    x.input += d.input;
+    x.output += d.output;
+    x.cost += d.cost;
+    x.tokens = x.input + x.output;
+    x.calls += calls;
+  }
+  if (!u.startedAt) u.startedAt = ts ?? null;
+  u.series.push({
+    ts: ts ?? null, tokens: u.tokens, cost: u.cost,
+    byAgent: Object.fromEntries(Object.entries(u.byAgent).map(([k, a]) => [k, { tokens: a.tokens, cost: a.cost }])),
+  });
+  // the series halves instead of growing: every odd point goes, the newest stays
+  if (u.series.length > USAGE_POINTS_MAX) u.series = u.series.filter((_, i, all) => i % 2 === 0 || i === all.length - 1);
+}
+
+// Reconciliation adds a point, not another call. Old journals without per-call usage still count a launch.
+function settleUsage(s, e) {
+  const scoped = e.milestoneId ? `${e.agent}-${e.milestoneId}` : e.agent;
+  const key = e.instanceId ?? (own(s.usagePending, scoped) ? scoped : e.agent);
+  const pending = own(s.usagePending, key);
+  const u = usageDelta(e.usage);
+  const rest = Object.fromEntries(['input', 'output', 'cost'].map((k) => [k, Math.max(0, u[k] - (pending?.[k] ?? 0))]));
+  if (rest.input || rest.output || rest.cost) addUsage(s.usage, e.agent, rest, e.ts, pending ? 0 : 1);
+  delete s.usagePending[key];
+  return rest;
 }
 
 // an own role key only: an event naming 'constructor' must not reach the prototype

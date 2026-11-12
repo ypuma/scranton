@@ -75,6 +75,7 @@ export class Orchestrator {
   /** Ctrl+C: kill the active pi child and unwind; run() then emits run_finished(aborted). */
   abort(reason = 'Interrupted by the user (Ctrl+C)') {
     this.aborting ??= reason;
+    this.rec.live?.close();
     this.abortController.abort();
     for (const runner of this.active.values()) void runner.kill('user');
   }
@@ -564,9 +565,11 @@ export class Orchestrator {
       systemPromptFile: this.prompts[rpc ? instanceId : agentId],
       extraEnv: { ...this.extraEnv, SCRANTON_CONVERSATION: this.conversation ? '1' : '0', SCRANTON_AGENT: agentId, SCRANTON_ROLE_KIND: this.roleMap[agentId].kind, SCRANTON_PASS_KEYWORD: this.roleMap[agentId].passKeyword ?? '', SCRANTON_FAIL_KEYWORD: this.roleMap[agentId].failKeyword ?? '', SCRANTON_INSTANCE_ID: instanceId, SCRANTON_RUN_ID: this.runId, SCRANTON_MILESTONE: milestone ?? '', SCRANTON_CYCLE: cycle == null ? '' : String(cycle) },
       timeoutMs: report ? 120000 : Math.round(this.config.agentTimeoutMinutes * 60000),
-      onTool: ({ tool, activity, detail }) => {
+      onLive: (record) => this.rec.live?.update(instanceId, agentId, record),
+      onUsage: (fields) => this.emit('agent_usage', { agent: agentId, instanceId, ...fields }),
+      onTool: ({ tool, activity, detail, targetFile = null, command = null }) => {
         if (pending) { message(pending, false); pending = ''; }
-        this.emit('agent_tool', { agent: agentId, instanceId, tool, detail });
+        this.emit('agent_tool', { agent: agentId, instanceId, tool, detail, targetFile, command });
         this.setStatus(agentId, 'working', activity, rpc ? instanceId : undefined);
       },
       onToolEnd: () => this.setStatus(agentId, 'thinking', 'Thinking...', rpc ? instanceId : undefined)
@@ -592,6 +595,7 @@ export class Orchestrator {
       const to = { michael: 'dwight', dwight: 'angela', oscar: 'dwight', hank: 'dwight', angela: 'dwight' }[agentId] ?? 'dwight';
       this.hive.writeOutbox({ agent: rpc ? instanceId : agentId, to, runId: this.runId, milestone, cycle, keyword: result.keyword, body: result.text });
     }
+    this.rec.live?.remove(instanceId);
     const finished = { agent: agentId, ...(rpc ? { instanceId } : {}), milestoneId: milestone, cycle, keyword: result.keyword, exitCode: result.exitCode, durationMs: result.durationMs };
     if (result.usage) finished.usage = { input: result.usage.input, output: result.usage.output, cost: result.usage.cost };
     this.emit('agent_finished', finished);

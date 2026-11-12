@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { messageUsage } from './usage.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { AGENT_MESSAGE, buildPiArgs, spawnPi, killTree, piChildEnv } from './pi-command.js';
@@ -105,6 +106,7 @@ export function startPiRpc(options, { describeTool }) {
     if (finished || !line.trim()) return;
     const r = parseJsonLine(line);
     if (!r || typeof r.type !== 'string') return fail('protocol', 'Invalid Pi RPC record');
+    options.onLive?.(r);
     if (r.type === 'response') {
       const p = pending.get(r.id);
       if (!p) { if (r.command === 'parse') fail('protocol', r.error ?? 'Pi parse error'); return; }
@@ -147,6 +149,7 @@ export function startPiRpc(options, { describeTool }) {
       if (typeof r.message.content !== 'string' && (!Array.isArray(r.message.content) || r.message.content.some((b) => !b || typeof b !== 'object'))) return fail('protocol', 'Invalid assistant content');
       options.onAssistantMessage?.(typeof r.message.content === 'string' ? r.message.content : r.message.content.filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n'), Array.isArray(r.message.content) && r.message.content.some((b) => b.type === 'toolCall'));
       last = r.message;
+      if (last.usage) options.onUsage?.({ model: last.model ?? null, usage: messageUsage(last) });
       usage.input += last.usage?.input ?? 0; usage.output += last.usage?.output ?? 0; usage.cost += last.usage?.cost?.total ?? 0;
     } else if (r.type === 'tool_execution_start') onTool?.({ tool: r.toolName, ...describeTool(r.toolName, r.args, options.cwd) });
     else if (r.type === 'tool_execution_end') onToolEnd?.({ tool: r.toolName, isError: Boolean(r.isError) });

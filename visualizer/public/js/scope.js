@@ -29,7 +29,7 @@ export const ALIVE_STATUSES = new Set(['running', 'needs_human']);
 // The unscoped routes of a server without /api/projects (and of the single hive it serves).
 const LEGACY = {
   events: '/events', state: '/api/state', runs: '/api/runs', chat: '/api/chat', hitl: '/api/hitl', stop: '/api/runs/stop',
-  release: '/api/runs/release', control: '/api/control',
+  release: '/api/runs/release', control: '/api/control', live: '/api/live',
 };
 
 const str = (v) => (typeof v === 'string' ? stripBidi(v) : '');
@@ -239,7 +239,14 @@ function parseReply(r) {
   return { kind: r.kind, text: str(r.text), ...(r.truncated === true ? { truncated: true } : {}) };
 }
 
-// GET .../runs -> [{ runId, goal, status, startedAt, endedAt, current, summary, reply }] (oldest first) or null
+// What a run used, as the run list carries it (live-activity-contract section 2); null from a server before it.
+function parseRunUsage(u) {
+  if (!u || typeof u !== 'object') return null;
+  const n = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+  return { tokens: n(u.tokens), cost: n(u.cost) };
+}
+
+// GET .../runs -> [{ runId, goal, status, startedAt, endedAt, current, summary, reply, usage }] (oldest first) or null
 export function parseRuns(doc) {
   if (!doc || typeof doc !== 'object' || !Array.isArray(doc.runs)) return null;
   const seen = new Set();
@@ -250,7 +257,7 @@ export function parseRuns(doc) {
     runs.push({
       runId: r.runId, goal: str(r.goal), status: str(r.status) || null,
       startedAt: str(r.startedAt) || null, endedAt: str(r.endedAt) || null, current: r.current === true,
-      summary: str(r.summary), reply: parseReply(r.reply),
+      summary: str(r.summary), reply: parseReply(r.reply), usage: parseRunUsage(r.usage),
     });
   }
   return runs;

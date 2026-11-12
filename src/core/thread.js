@@ -77,7 +77,8 @@ function readRun(dir, fallbackId = null) {
   const stored = snapshot?.reply ?? events.findLast((e) => e.type === 'run_reply');
   const reply = stored && ['answer', 'report', 'summary'].includes(stored.kind) && typeof stored.text === 'string'
     ? { kind: stored.kind, text: stored.text.slice(0, 4000), ...(stored.truncated || stored.text.length > 4000 ? { truncated: true } : {}) } : null;
-  return remember({ runId, goal, status, reply, startedAt: text(start?.ts) || null,
+  const usage = snapshot?.usage ? { tokens: snapshot.usage.tokens, cost: snapshot.usage.cost } : snapshot?.agents ? Object.values(snapshot.agents).reduce((sum, a) => ({ tokens: sum.tokens + (a.totals?.input ?? 0) + (a.totals?.output ?? 0), cost: sum.cost + (a.totals?.cost ?? 0) }), { tokens: 0, cost: 0 }) : null;
+  return remember({ runId, goal, status, reply, usage, startedAt: text(start?.ts) || null,
     endedAt: text(finish?.ts) || (['finished', 'failed', 'aborted'].includes(status) ? text(snapshot?.updatedAt) || null : null), summary });
 }
 

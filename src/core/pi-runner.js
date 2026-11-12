@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { messageUsage } from './usage.js';
 import { startPiRpc } from './pi-rpc-session.js';
 import path from 'node:path';
 import { ConfigError } from './config.js';
@@ -39,14 +40,14 @@ export function describeTool(tool, args, workspace) {
   const pattern = oneLine(firstString(args, ['pattern', 'query', 'glob', 'regex']));
   switch (tool) {
     case 'write':
-      return { activity: `Writing ${file || 'a file'}`, detail: file };
+      return { activity: `Writing ${file || 'a file'}`, detail: file, targetFile: file || null, command: null };
     case 'edit':
-      return { activity: `Editing ${file || 'a file'}`, detail: file };
+      return { activity: `Editing ${file || 'a file'}`, detail: file, targetFile: file || null, command: null };
     case 'read':
-      return { activity: `Reading ${file || 'a file'}`, detail: file };
+      return { activity: `Reading ${file || 'a file'}`, detail: file, targetFile: file || null, command: null };
     case 'bash':
     case 'powershell':
-      return { activity: `Running ${clip(command, 60) || 'a command'}`, detail: command };
+      return { activity: `Running ${clip(command, 60) || 'a command'}`, detail: command, targetFile: null, command: command || null };
     case 'grep':
       return { activity: pattern ? `Searching for ${clip(pattern, 40)}` : 'Searching...', detail: pattern || file };
     case 'find':
@@ -79,7 +80,7 @@ export function startPi(options) {
   return startPiJson(options);
 }
 
-function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milestone = null, cycle = null, systemPromptFile, extraEnv = {}, timeoutMs, onTool, onToolEnd, onSpawn, onAssistantMessage }) {
+function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milestone = null, cycle = null, systemPromptFile, extraEnv = {}, timeoutMs, onTool, onToolEnd, onSpawn, onAssistantMessage, onLive, onUsage }) {
   fs.mkdirSync(hive.sessionDir(agentId), { recursive: true });
   const args = buildPiArgs({
     agent: agentConfig,
@@ -114,6 +115,7 @@ function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milesto
     const handle = (line) => {
       const r = parseJsonLine(line);
       if (!r) return;
+      onLive?.(r);
       switch (r.type) {
         case 'session':
           rec.sessionId = r.id ?? null;
@@ -123,6 +125,7 @@ function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milesto
             onAssistantMessage?.(assistantText(r.message), Boolean((r.message.content ?? []).some?.((b) => b?.type === 'toolCall')));
             rec.last = r.message;
             const u = r.message.usage;
+            if (u) onUsage?.({ model: r.message.model ?? null, usage: messageUsage(r.message) });
             if (u) {
               rec.usage.input += u.input ?? 0;
               rec.usage.output += u.output ?? 0;

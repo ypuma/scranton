@@ -110,14 +110,15 @@ test('agent transitions: status, tool, finished', () => {
   const { e, state } = startedRun();
   let s = reduce(state, e('agent_status', { agent: 'dwight', status: 'working', activity: 'Writing code...' }));
   s = reduce(s, e('agent_tool', { agent: 'dwight', tool: 'write', detail: 'src/a.js' }));
-  assert.deepEqual(s.agents.dwight.tool, { tool: 'write', detail: 'src/a.js' });
+  // an event from before targetFile and command says the file in detail (live-activity-contract section 1)
+  assert.deepEqual(s.agents.dwight.tool, { tool: 'write', detail: 'src/a.js', targetFile: 'src/a.js', command: null, startedAt: '2026-07-12T12:00:05.000Z' });
   assert.equal(s.agents.dwight.activity, 'Writing code...');
   s = reduce(s, e('agent_finished', { agent: 'dwight', milestoneId: 'm1', cycle: 1, keyword: 'TASK_COMPLETE', exitCode: 0, durationMs: 1000, usage: { input: 10, output: 5, cost: 0.5 } }));
   assert.equal(s.agents.dwight.lastKeyword, 'TASK_COMPLETE');
   assert.equal(s.agents.dwight.tool, null);
   assert.equal(s.agents.dwight.status, 'idle');
   assert.deepEqual(s.agents.dwight.totals, { runs: 1, input: 10, output: 5, cost: 0.5, durationMs: 1000 });
-  assert.deepEqual(s.agents.dwight.lastTool, { tool: 'write', detail: 'src/a.js', ts: s.agents.dwight.lastTool.ts }, 'last tool survives the finish');
+  assert.deepEqual(s.agents.dwight.lastTool, { tool: 'write', detail: 'src/a.js', targetFile: 'src/a.js', command: null, ts: '2026-07-12T12:00:05.000Z' }, 'last tool survives the finish');
   assert.equal(s.agents.dwight.lastExitCode, 0);
   s = reduce(s, e('agent_status', { agent: 'dwight', status: 'waiting', activity: 'Waiting for QA' }));
   assert.equal(s.agents.dwight.status, 'waiting');

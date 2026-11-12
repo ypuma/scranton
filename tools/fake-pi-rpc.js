@@ -36,10 +36,19 @@ const ctx = { mode: 'rpc', ui: { input: (title, placeholder, opts) => new Promis
   if (mode === 'chat-replay') send(request);
 }) } };
 const ack = (r, success = true, data) => send({ type: 'response', id: r.id, command: r.type, success, data, ...(!success ? { error: 'Rejected by fixture' } : {}) });
-const settle = (text) => {
+const settle = async (text) => {
   if (process.env.SCRANTON_CONVERSATION === '1' && process.env.SCRANTON_AGENT === 'michael') text = /kind: report_request/.test(prompt) ? 'Report complete.\n[REPORT_READY]' : process.env.FAKE_PI_SCENARIO === 'question' ? 'Question answered.\n[ANSWER_READY]' : text;
   const keyword = process.env.FAKE_RPC_KEYWORD ?? (process.env.SCRANTON_PASS_KEYWORD || ({ oscar: 'REVIEW_APPROVED', hank: 'SECURITY_PASSED' }[process.env.SCRANTON_AGENT]));
   if (keyword) text = text.replace(/\[TASK_COMPLETE\]/g, `[${keyword}]`);
+  send({ type: 'message_start', message: { role: 'assistant', content: [], stopReason: 'pending' } });
+  const delay = Number(process.env.SCRANTON_FAKE_DELAY_MS ?? process.env.FAKE_PI_DELAY_MS ?? 0);
+  const update = (event) => send({ type: 'message_update', usage: { input: 0, output: 0, cost: { total: 0 } }, assistantMessageEvent: event });
+  const thinking = 'Checking the request before answering.';
+  for (const [kind, value, contentIndex] of [['thinking', thinking, 0], ['text', text, 1]]) {
+    update({ type: kind + '_start', contentIndex });
+    for (const delta of value.match(/[\s\S]{1,60}/g) ?? []) { update({ type: kind + '_delta', contentIndex, delta }); if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay)); }
+    update({ type: kind + '_end', contentIndex, content: value });
+  }
   send({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop', usage: { input: 2, output: 3, cost: { total: 0.01 } } } });
   send({ type: 'agent_end' });
   timer = setTimeout(() => send({ type: 'agent_settled', aborted: false }), 30);

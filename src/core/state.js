@@ -1,3 +1,4 @@
+import { emptyUsage, foldUsage, amount } from './usage.js';
 export const AGENT_IDS = ['michael', 'dwight', 'oscar', 'hank', 'angela'];
 
 export function emptyAgents(now = new Date().toISOString()) {
@@ -23,6 +24,8 @@ export function initialState() {
     currentMilestoneId: null,
     activeMilestoneIds: [],
     instances: {},
+    usage: emptyUsage(),
+    usagePending: {},
     chat: [],
     execution: null,
     cycle: 0,
@@ -81,9 +84,27 @@ export function reduce(state, event) {
     case 'instance_started':
       s.instances[event.instanceId] = { ...s.instances[event.instanceId], id: event.instanceId, agent: event.agent, milestoneId: event.milestoneId, sessionId: event.sessionId, worktree: event.worktree, sandbox: event.sandbox, status: 'thinking', activity: 'Thinking...', tool: null };
       break;
-    case 'agent_tool':
-      if (s.instances[event.instanceId]) s.instances[event.instanceId].tool = event.tool;
+    case 'agent_tool': {
+      const inst = s.instances[event.instanceId];
+      if (inst) {
+        inst.tool = { tool: event.tool, detail: event.detail, targetFile: event.targetFile ?? null, command: event.command ?? null, startedAt: event.ts };
+        inst.lastTool = { ...inst.tool, ts: event.ts };
+        if (event.targetFile && ['read', 'write', 'edit'].includes(event.tool)) inst.touchedFiles = [{ path: event.targetFile, kind: event.tool, ts: event.ts }, ...(inst.touchedFiles ?? []).filter(f => f.path !== event.targetFile)].slice(0, 8);
+      }
       break;
+    }
+    case 'agent_usage': {
+      const id = event.instanceId ?? event.agent;
+      s.usage ??= emptyUsage(); s.usagePending ??= {};
+      const pending = s.usagePending[id] ??= { input: 0, output: 0, cost: 0 };
+      foldUsage(s.usage, event.agent, event.usage, event.ts);
+      const a = s.agents[event.agent];
+      for (const key of ['input', 'output', 'cost']) {
+        const n = amount(event.usage?.[key]); pending[key] += n;
+        if (a) a.totals[key] += n;
+      }
+      break;
+    }
     case 'chat_message':
       s.chat.push({ id: event.id, ts: event.ts, from: event.from, to: event.to, text: event.text, delivery: event.delivery, reason: event.reason });
       s.chat = s.chat.slice(-200);
@@ -108,9 +129,15 @@ export function reduce(state, event) {
       if (a) {
         a.lastKeyword = event.keyword ?? null;
         a.totals.runs += 1;
-        a.totals.input += event.usage?.input ?? 0;
-        a.totals.output += event.usage?.output ?? 0;
-        a.totals.cost += event.usage?.cost ?? 0;
+        s.usage ??= emptyUsage(); s.usagePending ??= {};
+        const scoped = event.milestoneId ? `${event.agent}-${event.milestoneId}` : event.agent;
+        const id = event.instanceId ?? (s.usagePending[scoped] ? scoped : event.agent), pending = s.usagePending[id];
+        const delta = Object.fromEntries(['input', 'output', 'cost'].map(key => [key, Math.max(0, amount(event.usage?.[key]) - (pending?.[key] ?? 0))]));
+        if (Object.values(delta).some(n => n > 0)) {
+          foldUsage(s.usage, event.agent, delta, event.ts, pending ? 0 : 1);
+          for (const key of ['input', 'output', 'cost']) a.totals[key] += delta[key];
+        }
+        delete s.usagePending[id];
       }
       break;
     }
