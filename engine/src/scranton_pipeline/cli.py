@@ -27,6 +27,7 @@ def parser() -> argparse.ArgumentParser:
     task.add_argument("--task")
     task.add_argument("--task-file", type=Path)
     run.add_argument("--config", type=Path, required=True)
+    run.add_argument("--history-file", type=Path)
     for name, command in (("run", run), ("demo", sub.add_parser("demo"))):
         command.add_argument("--run-root", type=Path, required=True)
         command.add_argument("--workspace-root", type=Path)
@@ -161,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                 task = args.task
             result = start(source=args.source, task=task, cfg=cfg, run_root=args.run_root, run_id=args.run_id,
                            workspace_root=args.workspace_root, delivery=args.delivery,
-                           trust_host=args.trust_host, guarded=args.parent_guard)
+                           trust_host=args.trust_host, guarded=args.parent_guard, history_file=args.history_file)
         elif command == "resume":
             result = resume(args.run_dir, gate=args.gate, decision=args.decision, digest=args.digest,
                             comment=args.comment, trust_host=args.trust_host, guarded=args.parent_guard)

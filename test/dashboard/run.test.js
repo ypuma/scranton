@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runDashboard } from '../../src/dashboard/index.js';
-import { stripAnsi } from '../../src/dashboard/text.js';
+import { stripAnsi, textWidth } from '../../src/dashboard/text.js';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -57,7 +57,7 @@ function withEnv(t, vars) {
 test('once: writes exactly one frame of the hive and resolves', async (t) => {
   withEnv(t, { NO_COLOR: undefined, FORCE_COLOR: undefined });
   const hiveDir = await hiveFrom(t, 'running');
-  const stdout = fakeStdout({ columns: 100, rows: 30 });
+  const stdout = fakeStdout({ columns: Math.max(100, textWidth(hiveDir) + 40), rows: 30 });
   await runDashboard({ hiveDir, once: true, stdout });
   assert.equal(stdout.chunks.length, 1);
   const frame = stdout.text();

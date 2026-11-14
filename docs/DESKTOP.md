@@ -26,7 +26,7 @@ npm.cmd run app:build
 ```
 
 Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Der NSIS-Installer liegt anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.2.0_x64-setup.exe`.
+`src-tauri\target\release\bundle\nsis\Scranton_0.2.1_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
 
 ## Daten und Konfiguration

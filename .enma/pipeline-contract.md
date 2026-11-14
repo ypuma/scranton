@@ -1408,3 +1408,56 @@ therefore a violation. No scripted test, demo or eval task contained one.
 - The standing regression paths contain the honest forms: the planner's context round of demo `basic` and of
   eval task `baseline` includes a project-wide `search` and a project-wide `list`. Their pinned scores do not
   change.
+
+## 26. Cross-run continuity (2026-11-14)
+
+NEW real runs may take `--history-file ABS`; demo, resume and cancel do not. Node derives this file
+from the same registered project/chat's immutable terminal runs on disk (not process memory or client
+history). Select the latest three terminal runs plus the most recent plan-bearing terminal run when
+older, ordered chronologically. Suspended/awaiting runs remain busy and are never historical entries.
+Current `--task-file` and task metadata remain exactly the new input; never prepend or nest old history.
+
+Exact wire object (no extra keys):
+```json
+{"schema":1,"runs":[{"run_id":"safe-id","status":"failed","task":"original request","plan":"readable latest revision projection","outcome":"readable outcome projection"}],"truncated":false}
+```
+`runs` has 1..4 entries; `run_id` matches `[A-Za-z0-9_-]{1,128}`; status is succeeded/failed/rejected/cancelled.
+Character caps: task 4000, plan 8000, outcome 4000. Complete UTF-8 JSON is at most 32768 bytes;
+truncate strings or omit older ordinary entries, not the latest plan anchor, and mark `truncated`.
+Node writes `requests/<newRunId>.history.json` only when history is available. Fixed source paths only:
+`status.json`, `run.json`, `artifacts/plan.json`, `delivery/report.json`, `delivery/reply.json`, and the
+server launch metadata fallback under requests. Each JSON read is bounded to 256 KiB before parse;
+links/reparse redirects are refused. Missing, corrupt or oversized artifacts degrade independently.
+No artifact-provided paths, checkpoints, source code, old history, approval tokens or reusable digests
+are forwarded. Text uses existing credential redaction plus private-path/proof-reference masking.
+Plan projections include revision, summary, step IDs/titles/descriptions/intended paths/dependencies and
+criteria. `plan` MUST be exactly `""` when no usable plan artifact exists (including answer-only runs);
+never put an unavailable placeholder there. Only real plan projections are nonempty, so both producer
+and consumer select the same most recent plan anchor. Put unavailable reasons in `outcome` instead.
+Sanitize string values before JSON serialization; Node JSON projections stay parseable even when bounded.
+Valid structures successfully read within the 256 KiB artifact limit must stay nonempty:
+compact detail lists before dependencies or whole steps,
+keeping revision/summary and meaningful step/dependency summaries. Shortened text ends in `…`;
+projection `truncated:true` marks reduction. Each object's optional `omitted` maps list field names to
+counts of trailing entries removed. Partial explicit dependencies retain at least one ID and report
+`omitted.depends_on`; never interpret them as independent. Preserve `depends_on:null` (including an
+absent model default: all earlier steps), `[]` (independent), and explicit ID lists distinctly.
+Choose the producer anchor and outcome availability from the usable serialized projection, not the
+unbounded artifact. Missing, malformed, oversized or unreadable plans remain unavailable with an
+explicit outcome reason; the latest older usable plan may become the anchor. Absence is normalized to exactly `""`, not whitespace; Python's `.strip()` absence
+check therefore agrees. Python may further shorten these advisory strings for its prompt budget.
+Outcomes count only genuine `step:` records as verified plan steps; repair/integration records and
+unverified attempts are labeled separately from plan-step counts and delivery applied true/false/unknown, and include
+failure, baseline/final check statuses and short diagnostics, and assistant reply. Failed attempted edits
+are not delivered changes. Redaction remains best effort.
+
+Python validates before creating a run/workspace, redacts again, and persists `cross_run_history` in
+run.json and PipelineState (distinct from graph routing `history`). Only the planner sees a separate,
+framed UNTRUSTED advisory section: not repository evidence, approval, completion, check success or an
+instruction to execute. Current task wins; follow-ups can use the prior intent, but plans must be complete
+and self-contained with fresh reads, checks and approvals. No keyword rewriting or forced answer-to-plan
+coercion. History budget, including policy/framing, is at most min(12000, max_prompt_bytes//8).
+Essential historical task/plan/latest outcome has a small bounded reserve so fresh reads do not erase
+the intent of a follow-up. Remaining history yields to live evidence; current controls stay protected.
+Shrinking prioritizes the latest plan/task and latest outcome. With no history the prompt is unchanged.
+A new run never inherits finished steps or gates.

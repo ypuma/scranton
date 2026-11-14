@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import stat
+import sys
 import tempfile
 import time
 from collections.abc import Sequence
@@ -90,7 +91,7 @@ def write_bytes_atomic(path: Path, data: bytes, *, mode: int | None = None) -> N
             stream.write(data)
             stream.flush()
             # Apply after writing (which can clear mode bits), only to our private inode.
-            if mode is not None:
+            if sys.platform != "win32" and mode is not None:
                 os.fchmod(stream.fileno(), mode & 0o777)
             os.fsync(stream.fileno())
         first: PermissionError | None = None

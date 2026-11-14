@@ -41,7 +41,7 @@ test('profile guard flags only newly added test-owned marker workspaces', (t) =>
   add('temp-test', path.join(os.tmpdir(), 'new-test'));
   add('scratch-test', path.resolve('.scratch/gitdir-fix3/workspace'));
   add('user', path.resolve('user-workspace'));
-  add('sibling', os.tmpdir() + '-unrelated');
+  add('sibling', path.join(path.parse(process.cwd()).root, 'scranton-unrelated-workspace'));
   assert.deepEqual(newTestIsolationEntries(before, root).sort(), ['scratch-test', 'temp-test']);
   assert.deepEqual(newTestIsolationEntries(isolationEntries(root), root), []);
   assert.ok(isolationTestEnv({ SCRANTON_ISOLATION_ROOT: 'unsafe' }).SCRANTON_ISOLATION_ROOT.startsWith(path.resolve('.scratch')));

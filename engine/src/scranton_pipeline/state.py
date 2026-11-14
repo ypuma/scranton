@@ -32,6 +32,7 @@ class PipelineState(TypedDict, total=False):
     lane: dict[str, Any]
     run_id: str
     task: str
+    cross_run_history: dict[str, Any]
     source_dir: str
     delivery_mode: str
     workspace: dict[str, Any]

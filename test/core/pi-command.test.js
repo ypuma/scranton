@@ -54,8 +54,7 @@ test('3. falls back to pi on PATH; a .cmd shim needs a shell on Windows only', (
   const bin = tempDir(t);
   const cmd = path.join(bin, 'pi.cmd');
   fs.writeFileSync(cmd, '@echo off\n');
-  const empty = tempDir(t);
-  const win = resolvePiCommand({ config: config(), roots: [empty], env: { PATH: bin, PATHEXT: '.CMD' }, platform: 'win32' });
+  const win = resolvePiCommand({ config: config(), roots: [], env: { PATH: bin, PATHEXT: '.CMD' }, platform: 'win32' });
   assert.equal(win.source, 'path');
   assert.equal(win.shell, true);
   assert.equal(win.argv[0].toLowerCase(), cmd.toLowerCase());
@@ -68,7 +67,7 @@ test('3. on Windows an extensionless sh script next to pi.cmd never wins (npm gl
   const cmd = path.join(bin, 'pi.cmd');
   fs.writeFileSync(cmd, '@echo off\n');
   const env = { PATH: bin, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
-  const spec = resolvePiCommand({ config: config(), roots: [tempDir(t)], env, platform: 'win32' });
+  const spec = resolvePiCommand({ config: config(), roots: [], env, platform: 'win32' });
   assert.equal(spec.argv[0].toLowerCase(), cmd.toLowerCase());
   assert.equal(spec.shell, true);
   const configured = resolvePiCommand({ config: config({ command: ['pi'] }), env, platform: 'win32' });
@@ -99,7 +98,7 @@ test('a bare config command is resolved through PATH/PATHEXT on Windows', (t) =>
 
 test('nothing found -> a clear PiNotFoundError', (t) => {
   const empty = tempDir(t);
-  assert.throws(() => resolvePiCommand({ config: config(), roots: [empty], env: { PATH: empty } }), PiNotFoundError);
+  assert.throws(() => resolvePiCommand({ config: config(), roots: [], env: { PATH: empty } }), PiNotFoundError);
 });
 
 test('this project resolves its installed pi (real package)', () => {

@@ -123,6 +123,7 @@ function gate(name) {
   event('gate_waiting', { gate: name, digest: status.pending.digest }); finish(3);
 }
 async function main() {
+  if (process.env.FAKE_PIPELINE_INVOCATIONS) fs.appendFileSync(process.env.FAKE_PIPELINE_INVOCATIONS, JSON.stringify([command, ...args]) + '\n');
   if (command === 'version') { if (process.env.FAKE_PIPELINE_UNAVAILABLE === '1') process.exit(2); console.log(JSON.stringify({ version: 'fake-1', python: 'fake', langgraph: 'fake' })); return; }
   if (command === 'sandbox') {
     if (process.env.FAKE_PIPELINE_OLD_ENGINE === '1') throw Error('unknown_command');

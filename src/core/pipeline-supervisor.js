@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { buildPipelineHistory } from './pipeline-history.js';
 import { pipelineUsage, pipelineSteps } from './pipeline-activity.js';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -300,6 +301,14 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       const args = [body.demo ? 'demo' : 'run', '--run-root', runRoot, '--run-id', runId, '--workspace-root', workspaceRoot, '--delivery', body.delivery ?? 'apply'];
       if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); if (cfg.settings.conversation) args.push('--conversation'); }
       if (!body.demo) { const taskFile = request + '.task.txt'; writeFileAtomicSync(taskFile, body.task); args.push('--source', project.workspace, '--task-file', taskFile, '--config', request); if (cfg.trustHost) args.push('--trust-host'); }
+      if (!body.demo) {
+        const history = buildPipelineHistory({ dataDir, projectId: chat.projectId, chatId: chat.id, redact: sandboxText });
+        if (history) {
+          const historyFile = path.join(key, 'requests', `${runId}.history.json`);
+          writeFileAtomicSync(historyFile, JSON.stringify(history));
+          args.push('--history-file', historyFile);
+        }
+      }
       onStarting(chat, body.task);
       launch(spec, args, runDir, chat, cfg.extra);
       return { ok: true, runId };

@@ -24,6 +24,7 @@ from scranton_pipeline.errors import EngineError, FailureClass
 from scranton_pipeline.graph import build_graph
 from scranton_pipeline.grounding import append_trace
 from scranton_pipeline.guidance import pinned
+from scranton_pipeline.history import load_history
 from scranton_pipeline.limits import recursion_limit
 from scranton_pipeline.models import RunStatus
 from scranton_pipeline.nodes.common import Dependencies, cleanup_provider
@@ -89,12 +90,7 @@ def dependencies(run_dir: Path, cfg: EngineConfig, *, trust_host: bool,
                  guarded: bool = False, models: bool = True) -> Iterator[Dependencies]:
     metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     procedure = pinned(run_dir, cfg.procedure.enabled)
-    secrets = [value for name, value in os.environ.items() if name.startswith("SCRANTON_PIPELINE_KEY_") or (
-        re.search("KEY|TOKEN|SECRET|PASSWORD", name, re.IGNORECASE) and len(value) >= 12
-        and value.casefold() not in {"true", "false", "none", "null", "yes", "no", "enabled", "disabled", "undefined", "development", "production", "default", "password", "changeme"}
-        and not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", value) and not Path(value).exists())]
-    secrets += [os.environ.get(getattr(cfg.models, role).api_key_env, "") for role in ("planner", "implementer", "reviewer")]
-    redactor = Redactor(v for v in secrets if v)
+    redactor = request_redactor(cfg)
     ledger = UsageLedger(run_dir / "usage.jsonl")
     events = EventLog(run_dir / "events.jsonl", run_dir.name, redactor)
     stop = StopSignal(run_dir / "cancel.requested")
@@ -111,6 +107,15 @@ def dependencies(run_dir: Path, cfg: EngineConfig, *, trust_host: bool,
         connection.close()
 
 
+def request_redactor(cfg: EngineConfig) -> Redactor:
+    secrets = [value for name, value in os.environ.items() if name.startswith("SCRANTON_PIPELINE_KEY_") or (
+        re.search("KEY|TOKEN|SECRET|PASSWORD", name, re.IGNORECASE) and len(value) >= 12
+        and value.casefold() not in {"true", "false", "none", "null", "yes", "no", "enabled", "disabled", "undefined", "development", "production", "default", "password", "changeme"}
+        and not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", value) and not Path(value).exists())]
+    secrets += [os.environ.get(getattr(cfg.models, role).api_key_env, "") for role in ("planner", "implementer", "reviewer")]
+    return Redactor(v for v in secrets if v)
+
+
 def validate_trust(cfg: EngineConfig, trust_host: bool) -> None:
     if cfg.sandbox.mode == "host" and not trust_host:
         raise invalid("host_trust_required", "Host sandbox requires --trust-host on every invocation")
@@ -118,9 +123,11 @@ def validate_trust(cfg: EngineConfig, trust_host: bool) -> None:
 
 def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id: str | None = None,
           workspace_root: Path | None = None, delivery: str = "patch", trust_host: bool = False,
-          guarded: bool = False, demo: bool = False, demo_scenario: str = "basic") -> RunStatus:
+          guarded: bool = False, demo: bool = False, demo_scenario: str = "basic",
+          history_file: Path | None = None) -> RunStatus:
     procedure = load_procedure(Path(cfg.procedure.graph) if cfg.procedure.graph else None) if cfg.procedure.enabled else None
     validate_trust(cfg, trust_host)
+    history = load_history(history_file, request_redactor(cfg)) if history_file is not None else None
     run_id = run_id or uuid.uuid4().hex[:12]
     if not re.fullmatch("[a-z0-9]{8,32}", run_id):
         raise invalid("invalid_run_id", "run-id must be 8..32 lowercase letters/digits")
@@ -161,10 +168,13 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
     json_write(run_dir / "config.json", cfg.model_dump(mode="json", by_alias=True))
     json_write(run_dir / "run.json", {"run_id": run_id, "task": task, "source_dir": str(source), "delivery_mode": delivery,
         "created_at": now(), "config_digest": config_digest(cfg), "engine_version": "0.1.0", "workspace": str(workspace), "demo": demo,
+        **({"cross_run_history": history} if history is not None else {}),
         **({"procedure": {"enabled": True, "name": procedure.name, "digest": procedure_digest(procedure)}} if procedure is not None else {})})
     initial: PipelineState = {"run_id": run_id, "task": task, "source_dir": str(source), "delivery_mode": delivery,
         "step_index": -1, "mode": "step", "counters": {}, "active_seconds": 0.0, "history": [],
         "plan_revision": 0, "plan_revisions": [], "steps_done": [], "failure": None, "outcome": "", "review_round": 0}
+    if history is not None:
+        initial["cross_run_history"] = history
     with owner(run_dir), dependencies(run_dir, cfg, trust_host=trust_host, guarded=guarded) as deps:
         append_trace(run_dir, {"type": "settings", "mode": cfg.grounding.mode, "weights": cfg.grounding.weights.model_dump()})
         cleanup_provider(deps)
