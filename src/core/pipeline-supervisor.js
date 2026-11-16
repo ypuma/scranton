@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { dreamingCap, pipelineDreamingCohort } from './dreaming-sources.js';
 import { buildPipelineHistory } from './pipeline-history.js';
 import { pipelineUsage, pipelineSteps } from './pipeline-activity.js';
 import path from 'node:path';
@@ -42,7 +43,7 @@ const readJson = (file) => JSON.parse(withFsRetry(() => fs.readFileSync(file, 'u
 const writeJson = (file, value) => writeFileAtomicSync(file, JSON.stringify(value, null, 2) + '\n');
 const optional = (file) => { try { return readJson(file); } catch (e) { if (e.code === 'ENOENT') return null; throw fail(409, 'Unreadable Pipeline metadata'); } };
 
-export function createPipelineSupervisor({ dataDir, env = process.env, auth = getAuthService(), checkCapacity = () => {}, onStarting = () => {} } = {}) {
+export function createPipelineSupervisor({ dataDir, env = process.env, auth = getAuthService(), checkCapacity = () => {}, onStarting = () => {}, dreaming } = {}) {
   const children = new Map(), starting = new Set(), diagnostics = new Map(), secrets = new Set(), normalizing = new Map();
   let closing = false, sandboxProbe = null, buildEntry = null, buildStarting = false;
   const sandboxFlights = new Map();
@@ -206,10 +207,10 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     if (body.guidance !== undefined && typeof body.guidance !== 'boolean') throw fail(400, 'guidance: Expected boolean');
     if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw fail(400, 'conversation: Expected boolean');
     const settings = { ...(body.conversation === true ? { conversation: true } : {}), ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
-    const sandbox = body.sandbox ?? { mode: body.demo ? 'host' : 'docker' };
+    const sandbox = body.sandbox ?? { mode: 'host' };
     pipelineFields(sandbox, ['mode', 'image', 'trustHost']);
     if (!['docker', 'host'].includes(sandbox.mode) || sandbox.trustHost !== undefined && typeof sandbox.trustHost !== 'boolean') throw fail(400, 'Invalid sandbox');
-    if (!body.demo && sandbox.mode === 'host' && sandbox.trustHost !== true) throw fail(409, 'Host mode requires trustHost:true');
+    if (!body.demo && body.sandbox != null && sandbox.mode === 'host' && sandbox.trustHost !== true) throw fail(409, 'Host mode requires trustHost:true');
     if (sandbox.image !== undefined && (typeof sandbox.image !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(sandbox.image))) throw fail(400, 'Invalid sandbox image');
     async function dockerImage() {
       if (sandbox.mode !== 'docker') return undefined;
@@ -285,10 +286,23 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
   }
   async function start(project, chat, body) {
     const key = root(chat);
+    try { Promise.resolve(dreaming?.(chat.projectId)?.cancelReflection?.()).catch(() => {}); } catch {}
     if (busy(chat)) throw fail(409, 'Chat has a non-terminal Pipeline run');
     starting.add(key);
     try {
       const spec = await available(), cfg = await config(body);
+      let projectMemory = [], dreamingWarning = null;
+      if (!body.demo && dreaming && cfg.operator) {
+        const ceiling = cfg.operator.limits.max_step_attempts ?? 3;
+        const cohort = pipelineDreamingCohort(cfg.operator);
+        try {
+          const dream = dreaming(chat.projectId);
+          const memory = dream?.structuredContext() ?? [];
+          const cap = dreamingCap(dream, 'pipeline', ceiling, cohort);
+          projectMemory = memory;
+          if (cap < ceiling) cfg.operator.limits.max_step_attempts = cap;
+        } catch { dreamingWarning = 'Optional Dreaming unavailable; using configured retry ceiling without project memory'; }
+      }
       if (closing) throw fail(409, 'Server is closing');
       checkCapacity();
       const runId = randomBytes(6).toString('hex'), runRoot = path.join(key, 'runs'), runDir = path.join(runRoot, runId);
@@ -302,16 +316,17 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); if (cfg.settings.conversation) args.push('--conversation'); }
       if (!body.demo) { const taskFile = request + '.task.txt'; writeFileAtomicSync(taskFile, body.task); args.push('--source', project.workspace, '--task-file', taskFile, '--config', request); if (cfg.trustHost) args.push('--trust-host'); }
       if (!body.demo) {
-        const history = buildPipelineHistory({ dataDir, projectId: chat.projectId, chatId: chat.id, redact: sandboxText });
+        const history = buildPipelineHistory({ dataDir, projectId: chat.projectId, chatId: chat.id, redact: sandboxText, projectMemory });
         if (history) {
           const historyFile = path.join(key, 'requests', `${runId}.history.json`);
           writeFileAtomicSync(historyFile, JSON.stringify(history));
           args.push('--history-file', historyFile);
         }
       }
+      try { Promise.resolve(dreaming?.(chat.projectId)?.cancelReflection?.()).catch(() => {}); } catch {}
       onStarting(chat, body.task);
       launch(spec, args, runDir, chat, cfg.extra);
-      return { ok: true, runId };
+      return { ok: true, runId, ...(dreamingWarning ? { dreamingWarning } : {}) };
     } finally { starting.delete(key); }
   }
   async function inspect(chat, id, after = 0) {
@@ -365,6 +380,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     return scrub({ status, usage, ...steps, launchError: optional(safe(root(chat), `requests/${id}.error.json`, false)), live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan, review, stderrTail: [children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '', ...(skippedEvents ? [`Skipped ${skippedEvents} malformed or oversized Pipeline event lines`] : [])].filter(Boolean).join('\n') });
   }
   async function action(chat, id, action, body) {
+    try { Promise.resolve(dreaming?.(chat.projectId)?.cancelReflection?.()).catch(() => {}); } catch {}
     pipelineFields(body, action === 'decision' ? ['gate', 'decision', 'digest', 'comment'] : []);
     const runDir = dir(chat, id); await normalize(runDir);
     let status = optional(safe(runDir, 'status.json'));

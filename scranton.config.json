@@ -30,7 +30,7 @@
     "maxParallel": 3,
     "isolation": "worktree",
     "sandbox": {
-      "mode": "docker",
+      "mode": "host",
       "image": "scranton-sandbox:1.5.0-r2",
       "network": "bridge"
     },

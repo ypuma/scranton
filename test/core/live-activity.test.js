@@ -180,3 +180,41 @@ test('live read hides confirmed dead or mismatched owners but not quiet long cal
   t.mock.method(process, 'kill', () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
   beat(123); assert.deepEqual(readLive(dir), emptyLive());
 });
+
+test('thoughts: finished blocks are saved with the run, bounded and redacted, and archived with its journal', async t => {
+  const { readThoughts, THOUGHT_MAX } = await import('../../src/core/live-activity.js');
+  const dir = temp(t);
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ status: 'running', runId: 'r1' }));
+  const live = createLiveActivity(dir, 'r1');
+  const send = (id, index, e) => live.update(id, 'dwight', { type: 'message_update', assistantMessageEvent: { contentIndex: index, ...e } });
+  live.update('a', 'dwight', { type: 'message_start', message: { role: 'assistant' } });
+  send('a', 0, { type: 'thinking_delta', delta: 'I should ' });
+  assert.equal(readThoughts(dir, 'r1'), null, 'a block that is still open is not saved');
+  send('a', 0, { type: 'thinking_end', content: 'I should read the file. token=abc123' });
+  send('a', 1, { type: 'text_delta', delta: 'Half an ans' });
+  live.update('a', 'dwight', { type: 'message_end' });
+  live.update('b', 'dwight', { type: 'message_start', message: { role: 'assistant' } });
+  send('b', 0, { type: 'thinking_end', content: 'x'.repeat(THOUGHT_MAX + 5) });
+  send('b', 1, { type: 'text_delta', delta: 'cut short' });
+  live.remove('b');
+  live.close();
+  const doc = readThoughts(dir, 'r1');
+  assert.deepEqual(doc.thoughts.map(x => [x.n, x.instanceId, x.kind, x.cut, x.text.length > 40 ? x.text.length : x.text]), [
+    [1, 'a', 'reasoning', false, 'I should read the file. token=[redacted]'],
+    [2, 'a', 'answer', true, 'Half an ans'],
+    [3, 'b', 'reasoning', true, THOUGHT_MAX],
+    [4, 'b', 'answer', true, 'cut short'],
+  ]);
+  assert.equal(doc.next, 4);
+  assert.deepEqual(readThoughts(dir, 'r1', 2).thoughts.map(x => x.n), [3, 4]);
+  assert.equal(readThoughts(dir, 'other'), null); assert.equal(readThoughts(dir, '../r1'), null);
+
+  // the next run moves them to the archive of the run they belong to, and starts with none
+  fs.writeFileSync(path.join(dir, 'events.jsonl'), JSON.stringify({ v: 1, seq: 1, runId: 'r1', type: 'run_started' }) + '\n');
+  const rec = new EventRecorder({ hiveDir: dir, runId: 'r2' }); rec.start(); t.after(() => rec.live.close());
+  assert.equal(fs.existsSync(path.join(dir, 'thoughts.jsonl')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'runs', 'r1', 'thoughts.jsonl')), true);
+  rec.emit('run_started', { request: 'x' });
+  assert.equal(readThoughts(dir, 'r1').thoughts.length, 4, 'an earlier run is read from its archive');
+  assert.equal(readThoughts(dir, 'r2'), null);
+});

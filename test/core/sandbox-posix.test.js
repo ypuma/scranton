@@ -76,7 +76,7 @@ test('real POSIX fixtures: links rejected, private worktree guards and readonly 
   fs.mkdirSync(work); fs.mkdirSync(session); fs.writeFileSync(prompt, 'prompt');
   fs.writeFileSync(path.join(work, '.git'), 'gitdir: /host-only/private.git\n');
   const deps = { executable: '/mock/docker', run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : '' };
-  const options = { workspace: work, sessionDir: session, systemPromptFile: prompt };
+  const options = { sandbox: { mode: 'docker' }, workspace: work, sessionDir: session, systemPromptFile: prompt };
   const launch = await prepareSandbox(options, deps);
   const mounts = launch.argsPrefix.filter((_, i, a) => a[i - 1] === '--mount');
   assert.ok(mounts.includes(`type=bind,source=${checkedPath(prompt, false)},target=/scranton/prompt.md,readonly`));

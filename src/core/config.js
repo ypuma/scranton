@@ -162,13 +162,13 @@ export function loadConfig({
     persistentSessions: file.execution?.persistentSessions !== false,
     maxReplans: 0,
     sandbox: {
-      mode: flags.trustedHost ? 'host' : pick(flags.sandbox, file.execution?.sandbox?.mode, 'docker'),
+      mode: flags.trustedHost ? 'host' : pick(flags.sandbox, file.execution?.sandbox?.mode, 'host'),
       image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-sandbox:1.5.0-r2'),
       network: pick(flags.sandboxNetwork, file.execution?.sandbox?.network, 'bridge')
     }
   };
   if (!['shared', 'worktree'].includes(execution.isolation)) throw new ConfigError('execution.isolation must be shared or worktree');
-  if (execution.isolation === 'shared' && execution.sandbox.mode !== 'host') throw new ConfigError('shared isolation requires explicit trusted-host execution; Docker requires worktree isolation');
+  if (execution.isolation === 'shared' && (execution.sandbox.mode !== 'host' || !flags.trustedHost && flags.sandbox !== 'host' && file.execution?.sandbox?.mode !== 'host')) throw new ConfigError('shared isolation requires explicit trusted-host execution; Docker requires worktree isolation');
   if (execution.maxParallel > 1 && execution.isolation !== 'worktree') throw new ConfigError('parallel execution requires worktree isolation');
   if (!['host', 'docker'].includes(execution.sandbox.mode)) throw new ConfigError('sandbox must be host or docker');
   if (!['none', 'bridge'].includes(execution.sandbox.network)) throw new ConfigError('sandbox network must be none or bridge');

@@ -1,12 +1,23 @@
 // Event log grid: incremental one-line rows (click, Enter or Space to expand), filter buttons,
 // auto-scroll that pauses while the user reads back. total: where the count of all events goes (the tab).
 import { displayName } from './state.js';
-import { formatClock } from './format.js';
+import { formatWhen } from './format.js';
 
 const FOLLOW_SLACK_PX = 24;
 const KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ']);
 // the column of the detail cell, where the stop starts
 const DETAIL = 3;
+// what the Type column says; the event's own name stays in the opened row
+const TYPE_LABEL = {
+  run_started: 'Run started', run_finished: 'Run ended', run_reply: 'Reply', plan_ready: 'Plan', milestone_started: 'Milestone',
+  milestone_finished: 'Milestone', milestone_integrated: 'Integrated', cycle_result: 'Cycle', gate_result: 'Gate',
+  circuit_breaker: 'Breaker', hitl_request: 'Question', hitl_response: 'Answer', instance_started: 'Agent started',
+  agent_status: 'Status', agent_tool: 'Tool', agent_finished: 'Turn ended', agent_message: 'Message', hive_write: 'Handoff',
+  chat_message: 'Chat', chat_delivery: 'Chat', chat_command_rejected: 'Chat', log: 'Note',
+};
+export const typeLabel = (type) => TYPE_LABEL[type] ?? String(type ?? '').replace(/_/g, ' ');
+// 'ticks': an agent saying it thinks or works, about half of a run's rows; Key events leaves them out
+export const rowCategory = (entry) => (entry.type === 'agent_status' && entry.tone === 'muted' ? 'ticks' : entry.category);
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -36,7 +47,10 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
   // with no row to focus (a new run, or a filter that shows nothing) the grid itself keeps the focus in the log
   table.tabIndex = -1;
 
-  const shown = (tr) => (table.dataset.filter ?? 'all') === 'all' || tr.dataset.cat === table.dataset.filter;
+  const shown = (tr) => {
+    const f = table.dataset.filter ?? 'all';
+    return f === 'all' || (f === 'main' ? tr.dataset.cat !== 'ticks' : tr.dataset.cat === f);
+  };
   const visibleRows = () => [...body.children].filter(shown);
 
   // a row the filter hides cannot take focus, so the stop moves to the next newer row, else to the newest
@@ -179,14 +193,17 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
 
   function row(entry) {
     const tr = el('tr');
-    tr.dataset.cat = entry.category;
+    tr.dataset.cat = rowCategory(entry);
     tr.dataset.tone = entry.tone;
     tr.dataset.seq = String(entry.seq);
     const source = entry.source === 'orchestrator' ? 'run' : displayName(entry.source).toLowerCase();
     const type = el('td', 't-type');
-    type.append(el('span', '', entry.type));
+    type.append(el('span', '', typeLabel(entry.type)));
     const cell = el('td', 't-detail', entry.text);
-    const cells = [el('td', 't-time', formatClock(entry.ts)), el('td', 't-source', source), type, cell];
+    // a row of another day says its date, and the column makes room for it
+    const when = formatWhen(entry.ts);
+    if (when.length > 8) table.dataset.dated = 'true';
+    const cells = [el('td', 't-time', when), el('td', 't-source', source), type, cell];
     for (const td of cells) {
       td.tabIndex = -1;
       td.setAttribute('aria-expanded', 'false');
@@ -237,6 +254,7 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
       runId = s?.runId ?? null;
       lastSeq = 0;
       body.replaceChildren();
+      delete table.dataset.dated;
       current = null;
       col = DETAIL;
       stop = null;

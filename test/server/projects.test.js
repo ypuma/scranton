@@ -105,3 +105,18 @@ test('single mode exposes default scoped routes without changing legacy routes',
   const res = await fetch(server.url + '/api/projects', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: '{"name":"No"}' });
   assert.equal(res.status, 409); assert.equal((await res.json()).error, 'single_mode');
 });
+
+test('thoughts route: the saved thinking of a run, after a sequence number; 404 for a run that kept none', async (t) => {
+  const dir = fixture(t), hive = path.join(dir, 'hive'); fs.mkdirSync(hive);
+  fs.writeFileSync(path.join(hive, 'state.json'), '{"v":1,"status":"finished","runId":"r1"}');
+  const line = (n, text) => JSON.stringify({ v: 1, n, ts: '2026-11-16T10:00:00Z', runId: 'r1', instanceId: 'dwight-m1', agent: 'dwight', kind: 'reasoning', text, cut: false });
+  fs.writeFileSync(path.join(hive, 'thoughts.jsonl'), `${line(1, 'first')}\n${line(2, 'second')}\nnot json\n`);
+  const server = await startVisualizerServer({ hiveDir: hive, publicDir: dir, port: 0 }); t.after(() => server.close());
+  const get = (route) => fetch(server.url + route, { headers: { 'X-Scranton-Client': '1' } });
+  const base = '/api/projects/default/chats/default/runs';
+  const all = await (await get(`${base}/r1/thoughts`)).json();
+  assert.deepEqual([all.runId, all.next, all.thoughts.map((x) => x.text)], ['r1', 2, ['first', 'second']]);
+  assert.deepEqual((await (await get(`${base}/r1/thoughts?after=1`)).json()).thoughts.map((x) => x.n), [2]);
+  assert.equal((await get(`${base}/r0/thoughts`)).status, 404);
+  assert.equal((await get(`${base}/r1/thoughts?after=x`)).status, 400);
+});

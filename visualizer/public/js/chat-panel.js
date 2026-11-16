@@ -2,7 +2,7 @@
 // The composer's rules and delivery states live in chat-steer.js, which the Chat view mounts as well.
 import { CHAT_MAX, DELIVERY_LABEL, outboxStale } from './chat.js';
 import { createSteering } from './chat-steer.js';
-import { formatClock, plural } from './format.js';
+import { formatWhen, plural } from './format.js';
 import { scopedUrl } from './scope.js';
 
 const $ = (id) => document.getElementById(id);
@@ -79,7 +79,7 @@ export function createChatPanel({ getState, getControl, refresh, url = (suffix) 
     state.title = m.local ? 'Accepted by the server; the orchestrator has not taken it up yet'
       : m.delivery === 'unknown' ? 'The acknowledgement timed out: it may or may not have arrived. It is not resent automatically.'
         : `Delivery: ${m.delivery}`;
-    const time = el('span', 'msg-time mono', m.ts ? formatClock(m.ts) : '--:--:--');
+    const time = el('span', 'msg-time mono', m.ts ? formatWhen(m.ts) : '--:--:--');
     time.title = m.ts ?? '';
     head.append(route);
     if (m.milestoneId) head.append(el('span', 'msg-ms mono', m.milestoneId));

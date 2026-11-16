@@ -54,7 +54,8 @@ function harness({
     url: () => '/api/control', pipelineForm: createPipelineForm({ timers }),
   });
   const sent = [];
-  const open = async () => {
+  // ack: the human ticks the trusted host acknowledgement, as a run on the default host needs
+  const open = async ({ ack = true } = {}) => {
     panel.setMode('live');
     await tick();
     panel.openRun({
@@ -65,6 +66,13 @@ function harness({
     await tick();
     $('pf-task').value = 'Fix the parser';
     for (const role of ['planner', 'implementer', 'reviewer']) $(`pf-model-${role}`).value = MODEL;
+    if (ack) $('pf-trust').checked = true;
+  };
+  // the human picks Docker or Trusted host
+  const pick = async (mode) => {
+    $('pf-docker').checked = mode === 'docker';
+    $('pf-host').checked = mode === 'host';
+    await $(mode === 'docker' ? 'pf-docker' : 'pf-host').fire('change');
   };
   // a setup or check row: its inputs as the row builds them
   const row = (list, i) => {
@@ -76,7 +84,7 @@ function harness({
     };
   };
   const submit = () => $('run-form').fire('submit');
-  return { $, panel, posts, sent, open, row, submit };
+  return { $, panel, posts, sent, open, pick, row, submit };
 }
 
 const done = (t, h) => t.after(() => h.panel.setMode('demo'));
@@ -205,42 +213,46 @@ function fakeTimers() {
   return t;
 }
 
-// guards the `else if (!sandboxTouched)` preselection in renderSandbox
-test('sandbox: Docker running with the image present is preselected and said in one quiet line, without a build button', async (t) => {
+// guards the host preselection in open() and that renderSandbox no longer preselects Docker from the probe
+test('sandbox: Docker running with the image present is said in one quiet line, yet the Trusted host is preselected without its acknowledgement', async (t) => {
   const h = harness({ info: withSandbox(sandbox()) });
   done(t, h);
-  await h.open();
-  assert.equal(h.$('pf-docker').checked, true);
-  assert.equal(h.$('pf-host').checked, false);
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true]);
+  assert.equal(h.$('pf-trust').checked, false, 'the acknowledgement is never given for the human');
+  assert.equal(h.$('pf-trust-row').hidden, false, 'the no-OS-isolation acknowledgement is on screen');
   assert.equal(h.$('pf-sandbox-status').textContent, `Docker 29.9.2 is running; the image ${IMAGE} is present.`);
   assert.equal(h.$('pf-build').hidden, true);
   assert.equal(h.$('pf-build-log').hidden, true);
   await h.submit();
+  assert.deepEqual(h.sent, [], 'the host is not used without the acknowledgement');
+  assert.equal(h.$('run-error').textContent, 'Confirm that the checks may run on this computer without OS isolation, or use Docker.');
+  await h.pick('docker');
+  await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'docker' });
 });
 
-// guards `e.docker.checked = v.ready !== false;` (nothing preselected) and the 'sandbox' check of buildRunBody
-test('sandbox: Docker not running says why, offers no build, and preselects nothing, so the choice is made by the human', async (t) => {
+// guards `e.trust.checked = false;` in open() and that a Docker that is down changes nothing about the choice
+test('sandbox: Docker not running says why and offers no build; the Trusted host stays preselected and still waits for its acknowledgement', async (t) => {
   const h = harness({ info: withSandbox(sandbox({ docker: { available: false, version: null, reason: 'the Docker daemon does not answer' } })) });
   done(t, h);
-  await h.open();
+  await h.open({ ack: false });
   assert.equal(h.$('pf-sandbox-status').textContent, 'Docker is not running: the Docker daemon does not answer');
   assert.equal(h.$('pf-sandbox-status').dataset.tone, 'error');
   assert.equal(h.$('pf-build').hidden, true, 'there is nothing to build with');
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, false]);
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true]);
   await h.submit();
   assert.deepEqual(h.sent, []);
-  assert.equal(h.$('run-error').textContent, 'Choose where the checks run: Docker container or Trusted host.');
-  h.$('pf-host').checked = true;
-  await h.$('pf-host').fire('change');
+  assert.equal(h.$('run-error').textContent, 'Confirm that the checks may run on this computer without OS isolation, or use Docker.');
+  assert.equal(document.activeElement, h.$('pf-trust'));
   assert.equal(h.$('pf-trust-row').hidden, false, 'Trusted host stays available with its acknowledgement');
   h.$('pf-trust').checked = true;
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'host', trustHost: true });
 });
 
-// guards the build click handler, schedulePoll and the untouched preselection after the build in renderSandbox
-test('sandbox: a missing image is named and built from the form; the tail is shown on demand while it runs, then Docker is preselected', async (t) => {
+// guards the build click handler, schedulePoll and that a finished build does not preselect Docker
+test('sandbox: a missing image is named and built from the form; the tail is shown on demand while it runs, and the Trusted host stays chosen', async (t) => {
   const timers = fakeTimers();
   const states = [missing(), missing({ state: 'running', tail: 'Step 2/9 : RUN apt-get update' }), missing({ state: 'running', tail: 'Step 5/9 : RUN pip install pytest' }),
     sandbox({ build: { state: 'succeeded', tail: 'Successfully tagged' } })];
@@ -249,7 +261,7 @@ test('sandbox: a missing image is named and built from the form; the tail is sho
   await h.open();
   assert.equal(h.$('pf-sandbox-status').textContent, `The sandbox image ${IMAGE} has not been built yet.`);
   assert.equal(h.$('pf-build').hidden, false);
-  assert.equal(h.$('pf-docker').checked, false, 'not preselected while the image is missing');
+  assert.equal(h.$('pf-docker').checked, false);
   assert.equal(timers.pending.size, 0, 'no poll while nothing builds');
 
   await h.$('pf-build').fire('click');
@@ -266,22 +278,20 @@ test('sandbox: a missing image is named and built from the form; the tail is sho
   await timers.fire();
   assert.equal(h.$('pf-build-tail').textContent, 'Step 5/9 : RUN pip install pytest');
   await timers.fire();
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [true, false], 'built: Docker is preselected');
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true], 'built: the probe does not move the choice');
   assert.equal(h.$('pf-build').hidden, true);
   assert.equal(h.$('pf-build-log').hidden, true);
   assert.equal(timers.pending.size, 0, 'polling stopped');
 });
 
-// review F5 finding 3: guards `if (!sandboxTouched) {` around the preselection in renderSandbox (the old `justBuilt`
-// branch forced Docker and cleared the acknowledgement)
+// review F5 finding 3: a finished build never forces Docker or clears the acknowledgement (the old `justBuilt` branch did)
 test('sandbox: a build that finishes keeps an explicit Trusted host pick and its acknowledgement', async (t) => {
   const timers = fakeTimers();
   const states = [missing(), missing({ state: 'running', tail: 'Step 1/9' }), sandbox({ build: { state: 'succeeded', tail: '' } })];
   const h = harness({ timers, info: (n) => withSandbox(states[Math.min(n, states.length - 1)]) });
   done(t, h);
-  await h.open();
-  h.$('pf-host').checked = true;
-  await h.$('pf-host').fire('change');
+  await h.open({ ack: false });
+  await h.pick('host');
   h.$('pf-trust').checked = true;
   await h.$('pf-build').fire('click');
   await timers.fire();
@@ -291,41 +301,69 @@ test('sandbox: a build that finishes keeps an explicit Trusted host pick and its
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'host', trustHost: true });
 
-  // a new drawer session starts without a choice, so the ready Docker is preselected again
-  await h.open();
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [true, false]);
+  // a new drawer session keeps the host, never the old acknowledgement, and the ready Docker is not preselected
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false]);
 });
 
-// review F5 finding 2: guards `e.host.checked = !docker && e.demo.checked;` in renderSandbox and the renderSandbox() call
-// in the demo change handler
-test('sandbox: a demo with Docker not ready preselects the Trusted host and starts without an acknowledgement; a run still waits for a choice', async (t) => {
+// guards `if (e.docker.checked) sandboxPick = 'docker';`, `e.docker.checked = sandboxPick === 'docker';` in open() and
+// that renderSandbox leaves the radio buttons alone on every probe
+test('sandbox: an explicit Docker pick survives every probe of a build, a failed one included, and the next drawer session', async (t) => {
+  const timers = fakeTimers();
+  const states = [missing(), missing({ state: 'running', tail: 'Step 1/9' }), missing({ state: 'failed', tail: 'pull access denied' })];
+  const h = harness({ timers, info: (n) => withSandbox(states[Math.min(n, states.length - 1)]) });
+  done(t, h);
+  await h.open({ ack: false });
+  await h.pick('docker');
+  assert.equal(h.$('pf-trust-row').hidden, true, 'Docker asks for no acknowledgement');
+  await h.$('pf-build').fire('click');
+  await timers.fire();
+  await timers.fire();
+  assert.equal(h.$('pf-sandbox-status').textContent, `The sandbox image ${IMAGE} could not be built. Its output is below.`);
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [true, false], 'the probes keep Docker');
+
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [true, false], 'the next session keeps the pick');
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'docker' });
+
+  await h.open({ ack: false });
+  await h.pick('host');
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false], 'and so is a host pick, without its acknowledgement');
+});
+
+// review F5 finding 2: the demo on the host needs no acknowledgement; turning the demo on or off never moves the choice
+test('sandbox: a demo starts on the preselected Trusted host without an acknowledgement; a run still waits for it', async (t) => {
   const down = sandbox({ docker: { available: false, version: null, reason: 'the Docker daemon does not answer' } });
   const h = harness({ info: withSandbox(down) });
   done(t, h);
-  await h.open();
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, false], 'a run: nothing');
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true], 'a run: the host');
+  assert.equal(h.$('pf-trust-row').hidden, false, 'with its acknowledgement');
   await demoOn(h);
   assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true], 'a demo: the host');
   assert.equal(h.$('pf-trust-demo').hidden, false, 'with the line saying no acknowledgement is needed');
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'host' });
 
-  await h.open();
+  await h.open({ ack: false });
   await demoOn(h);
   await demoOn(h, false);
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, false], 'back to a run: nothing again');
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false], 'back to a run: the host, unacknowledged');
+  await h.submit();
+  assert.equal(h.sent.length, 1, 'the run is refused without the acknowledgement');
 
   const ready = harness({ info: withSandbox(sandbox()) });
   done(t, ready);
   await ready.open();
   await demoOn(ready);
-  assert.deepEqual([ready.$('pf-docker').checked, ready.$('pf-host').checked], [true, false], 'a demo with Docker ready: Docker');
+  assert.deepEqual([ready.$('pf-docker').checked, ready.$('pf-host').checked], [false, true], 'a demo with Docker ready: still the host');
 
   const picked = harness({ info: withSandbox(down) });
   done(t, picked);
   await picked.open();
-  picked.$('pf-docker').checked = true;
-  await picked.$('pf-docker').fire('change');
+  await picked.pick('docker');
   await demoOn(picked);
   assert.deepEqual([picked.$('pf-docker').checked, picked.$('pf-host').checked], [true, false], 'an explicit pick stays');
 });
@@ -357,11 +395,11 @@ test('sandbox: a refused build request is said in the sandbox line', async (t) =
 });
 
 // guards `if (!docker || typeof docker.available !== 'boolean') return { known: false, ...` for the form
-test('sandbox: an older server that only names the image keeps the Docker default, with no line and no build button', async (t) => {
+test('sandbox: an older server that only names the image gets the Trusted host default, with no line and no build button', async (t) => {
   const h = harness();
   done(t, h);
-  await h.open();
-  assert.equal(h.$('pf-docker').checked, true);
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false]);
   assert.equal(h.$('pf-sandbox-status').textContent, '');
   assert.equal(h.$('pf-build').hidden, true);
   assert.equal(h.$('pf-image').placeholder, 'scranton-sandbox:1.5.0');
@@ -373,6 +411,7 @@ test('sandbox: the server refusing a run for a missing image is said at the sand
   const h = harness({ info: withSandbox(sandbox()), answer: { ok: false, status: 409, data: { error: message }, error: message } });
   done(t, h);
   await h.open();
+  await h.pick('docker');
   h.$('pf-image').value = 'my/img:2';
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'docker', image: 'my/img:2' }, 'a custom image is sent unchecked');
@@ -467,7 +506,7 @@ test('demo scenario: the select is shown only for a demo, its line follows the c
     assert.equal(h.$('pf-scenario-hint').textContent, line, id);
   }
   await h.submit();
-  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'parallel', delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false, conversation: true });
+  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'parallel', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: false, conversation: true });
 
   // a started run closes the drawer; the next one opens it again
   await h.open();
@@ -505,7 +544,7 @@ test('demo scenario: the evidence demo holds Evidence checks on Enforce and give
   await demoOn(h);
   assert.deepEqual(state(), held, 'the demo on again with the evidence scenario');
   await h.submit();
-  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'docker' }, grounding: 'enforce', guidance: false, conversation: true });
+  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: false, conversation: true });
 
   // the scenario and the demo stay as they were; the held choice does not survive a new drawer
   await h.open();
@@ -526,10 +565,8 @@ test('demo scenario: the sandbox choice and the image build stay operable for a 
   done(t, h);
   await h.open();
   await demoOn(h);
-  assert.equal(h.$('pf-host').checked, true, 'the image is missing, so the demo takes the host');
-  h.$('pf-host').checked = false;
-  h.$('pf-docker').checked = true;
-  await h.$('pf-docker').fire('change');
+  assert.equal(h.$('pf-host').checked, true, 'the demo keeps the host default');
+  await h.pick('docker');
   assert.deepEqual([h.$('pf-docker').disabled, h.$('pf-host').disabled, h.$('pf-image').disabled, h.$('pf-build').disabled], [false, false, false, false]);
   assert.notEqual(h.$('pf-sandbox-set').dataset.demo, 'true', 'not dimmed');
   assert.equal(h.$('pf-sandbox-status').textContent, `The sandbox image ${IMAGE} has not been built yet.`);
@@ -545,7 +582,7 @@ test('demo scenario: the sandbox choice and the image build stay operable for a 
 test('demo scenario: the trusted host needs no acknowledgement for a demo, says so, and still needs it for a real run', async (t) => {
   const h = harness({ info: withSandbox(sandbox()) });
   done(t, h);
-  await h.open();
+  await h.open({ ack: false });
   h.$('pf-docker').checked = false;
   h.$('pf-host').checked = true;
   await h.$('pf-host').fire('change');
@@ -584,9 +621,16 @@ test('Pipeline Chat dock starts a real conversation using detected checks and st
   await h.$('pf-model-planner').fire('change');
   h.panel.setReadOnly(true);
   const sent = [];
-  const result = await h.panel.startPipelineFollowUp('Why does addition subtract?', { project: 'core', startPipeline: async (body) => { sent.push(body); return { ok: true, status: 202, data: { runId: 'chatanswer' } }; } });
+  const target = { project: 'core', startPipeline: async (body) => { sent.push(body); return { ok: true, status: 202, data: { runId: 'chatanswer' } }; } };
+  // the default host: the acknowledgement of the drawer is not carried into the dock, the fix is in the drawer
+  assert.deepEqual(await h.panel.startPipelineFollowUp('Why does addition subtract?', target),
+    { error: 'Confirm that the checks may run on this computer without OS isolation, or use Docker.', field: 'trustHost', options: true });
+  assert.equal(sent.length, 0);
+  await h.pick('docker');
+  const result = await h.panel.startPipelineFollowUp('Why does addition subtract?', target);
   assert.equal(result.ok, true, result.error);
   assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].sandbox, { mode: 'docker' }, 'an explicit Docker pick holds for the dock');
   assert.equal(sent[0].task, 'Why does addition subtract?');
   assert.equal(sent[0].conversation, true);
   assert.equal(sent[0].demo, undefined);

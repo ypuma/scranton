@@ -151,7 +151,7 @@ test('custom Docker model validation and fake Docker runner preserve verdict env
   const { config, load } = fixture(t);
   saveAgent(config, 'seclint', definition, { create: true });
   saveAgent(config, 'dwight', { model: { provider: 'openai', model: 'developer' } });
-  const flags = { gates: 'seclint' };
+  const flags = { gates: 'seclint', sandbox: 'docker' };
   assert.throws(() => validateDockerModels(load({ flags }), ['dwight', 'seclint']), /seclint/);
   saveAgent(config, 'seclint', { model: { provider: 'openai', model: 'auditor' } });
   const current = load({ flags }); validateDockerModels(current, ['dwight', 'seclint']);
@@ -162,7 +162,7 @@ test('custom Docker model validation and fake Docker runner preserve verdict env
   const sessionDir = path.join(current.hiveDir, 'sessions', 'seclint'); fs.mkdirSync(sessionDir, { recursive: true });
   const systemPromptFile = stagePrompt(current, { dir: current.hiveDir }, 'seclint');
   const calls = [], minted = [];
-  const execution = await prepareSandbox({ workspace: checkout.dir, sessionDir, systemPromptFile,
+  const execution = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace: checkout.dir, sessionDir, systemPromptFile,
     instanceId: 'seclint-m1', runId: 'custom-docker', provider: current.agents.seclint.provider, agentTimeoutMinutes: 1,
     env: { SCRANTON_AGENT: 'seclint', SCRANTON_ROLE_KIND: 'gate', SCRANTON_PASS_KEYWORD: 'SECLINT_PASSED', SCRANTON_FAIL_KEYWORD: 'SECLINT_FAILED', ANTHROPIC_API_KEY: 'UNRELATED', REFRESH_TOKEN: 'NEVER_FORWARD' } }, {
       executable: path.resolve('.scratch/ca-fix-backend/fake-docker.exe'),
@@ -282,7 +282,7 @@ test('review: doctor warns about invalid configured workflow instead of refusing
 
 test('review: orchestrator drives custom Docker preparation, argv, verdict and cleanup via fake Docker runner', async (t) => {
   const { config, load } = fixture(t); saveAgent(config, 'seclint', definition, { create: true });
-  const current = load({ flags: { gates: 'seclint' }, fileConfig: { agents: { dwight: { provider: 'openai', model: 'fake' }, seclint: { provider: 'openai', model: 'fake' } }, pi: { command: [process.execPath, path.resolve('tools/fake-pi.js')] } } });
+  const current = load({ flags: { gates: 'seclint', sandbox: 'docker' }, fileConfig: { agents: { dwight: { provider: 'openai', model: 'fake' }, seclint: { provider: 'openai', model: 'fake' } }, pi: { command: [process.execPath, path.resolve('tools/fake-pi.js')] } } });
   const launches = [], calls = [];
   const o = new Orchestrator({ config: current, noPlan: true, onBreaker: 'abort', extraEnv: { FAKE_PI_DELAY_MS: '0' },
     prepareExecution: async (options) => {

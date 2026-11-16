@@ -2,10 +2,10 @@
 // in one shape for both engines: { agents, board, usage }. The Team side reads the reducer state and the /live
 // poll, the Pipeline side the run document its view polls. Pure: no DOM, no fetch.
 import {
-  AGENT_IDS, lanesOf, isLive, isBusy, laneGate, gateView, displayName, roleTitle, own, activeRoles, workflowOf, isGate,
+  AGENT_IDS, lanesOf, isLive, isBusy, settledStatus, laneGate, gateView, displayName, roleTitle, own, activeRoles, workflowOf, isGate,
   dependencyState, humanNeeded, customRoles, freshUsage, addUsage, USAGE_POINTS_MAX, TOUCHED_MAX,
 } from './state.js';
-import { stripBidi } from './format.js';
+import { stripBidi, formatDuration, runElapsed } from './format.js';
 import { ROLE_LABEL, TERMINAL, lastWorkNode, stepper } from './pipeline-model.js';
 
 // a /live answer older than this is no longer what the model is producing now
@@ -63,6 +63,8 @@ export function parseLive(doc) {
     instances[id] = {
       agent: str(i.agent), phase: PHASES.includes(i.phase) ? i.phase : 'idle',
       thinking: tailOf(i.thinking, i.thinkingCut), text: tailOf(i.text, i.textCut), updatedAt: str(i.updatedAt) || null,
+      // the block still being written ('thinking' | 'text'); null from a server that saves no thoughts
+      open: i.open === 'thinking' || i.open === 'text' ? i.open : null,
     };
   }
   return { runId: str(d.runId) || null, updatedAt: str(d.updatedAt) || null, instances };
@@ -129,13 +131,18 @@ function teamLine(x, tail, gate) {
   }
 }
 
-function teamAgent(state, x, id, tails, { name, role, gate, tailId = id }) {
+function teamAgent(state, x, id, tails, { name, role, gate, tailId = id, asRole = false }) {
   const active = ACTIVE.has(x.status);
   const tail = active && tails ? own(tails, tailId) ?? null : null;
   const shown = active || x.status === 'error' || x.status === 'blocked' ? null : gate;
+  // a lane that is over says how it ended, not only that it did
+  const status = settledStatus(state, x, { role: asRole });
+  let line = teamLine(x, tail, shown);
+  if (status === 'stopped') line = /^(Done|Idle)$/.test(line) ? 'Stopped with the run' : line.replace(/^Failed: /, '');
+  else if (status === 'unused') line = 'Not used in this run';
   return {
-    id, agent: x.agent ?? id, name, role, status: x.status, live: isLive(x) && x.status !== 'idle', busy: isBusy(x),
-    line: teamLine(x, tail, shown), gate: shown?.result ?? null, ...liveText(tail), files: x.touchedFiles ?? [],
+    id, agent: x.agent ?? id, name, role, status, live: isLive(x) && x.status !== 'idle', busy: isBusy(x),
+    line, gate: shown?.result ?? null, ...liveText(tail), files: x.touchedFiles ?? [],
   };
 }
 
@@ -154,7 +161,7 @@ export function teamAgents(state, tails = null) {
   const milestone = state.activeMilestoneIds?.length === 1 && state.activeMilestoneIds[0] === current
     && state.milestones.some((m) => m.id === current && m.status === 'active') ? current : null;
   return activeRoles(state).filter((id) => own(state.agents, id)).map((id) => teamAgent(state, state.agents[id], id, tails, {
-    name: displayName(id, state), role: laneRole(id, state), gate: isGate(state, id) ? gateView(state, id, null) : null,
+    name: displayName(id, state), role: laneRole(id, state), gate: isGate(state, id) ? gateView(state, id, null) : null, asRole: true,
     tailId: id === 'michael' ? id : milestone ? `${id}-${milestone}` : current || state.activeMilestoneIds?.length ? null : id,
   }));
 }
@@ -499,7 +506,27 @@ export function pipelineUsage(run, list = null) {
 export function teamRunView({ state, live = null, runs = [], now = Date.now() } = {}) {
   const going = ['planning', 'running', 'paused'].includes(state?.status);
   const agents = teamAgents(state, going ? liveTails(live, state?.runId, now) : null);
-  return { runId: state?.runId ?? null, live: going, agents, board: teamBoard(state, agents), usage: teamUsage(state, runs) };
+  const board = teamBoard(state, agents);
+  return { runId: state?.runId ?? null, live: going, agents, board, usage: teamUsage(state, runs), outcome: going ? null : teamOutcome(state, board) };
+}
+
+// How a run that is over ended, for the head of the run panel: { label, tone: 'ok' | 'warn' | 'bad', unit, done,
+// duration }; null while it is going or when nothing says how it ended.
+const TEAM_OUTCOME = { success: ['Succeeded', 'ok'], partial: ['Partly done', 'warn'], failed: ['Failed', 'bad'], aborted: ['Aborted', 'bad'] };
+const PIPELINE_OUTCOME = { succeeded: ['Succeeded', 'ok'], failed: ['Failed', 'bad'], suspended: ['Suspended', 'warn'], rejected: ['Rejected', 'bad'], cancelled: ['Cancelled', 'bad'] };
+const doneOf = (board) => (board?.total ? `${board.counts.done}/${board.total}` : '');
+
+export function teamOutcome(state, board) {
+  if (!state?.runId) return null;
+  const [label, tone] = TEAM_OUTCOME[state.result] ?? (state.status === 'exited' ? ['Exited', 'bad'] : []);
+  if (!label) return null;
+  const ms = runElapsed(state);
+  return { label, tone, unit: 'Milestones', done: doneOf(board), duration: ms === null ? '' : formatDuration(ms) };
+}
+
+export function pipelineOutcome(run, board) {
+  const [label, tone] = PIPELINE_OUTCOME[run?.status?.status] ?? [];
+  return label ? { label, tone, unit: 'Steps', done: doneOf(board), duration: '' } : null;
 }
 
 // run: the run document as the pipeline view holds it ({ runId, status, live, events, plan, usage, calls, liveText,
@@ -507,7 +534,8 @@ export function teamRunView({ state, live = null, runs = [], now = Date.now() } 
 export function pipelineRunView({ run = null, list = null, now = Date.now() } = {}) {
   const going = Boolean(run?.status) && !TERMINAL.has(run.status.status);
   const tails = going && run.liveText ? liveTails({ doc: { ...run.liveText, runId: run.liveText.runId ?? run.runId }, at: run.liveAt ?? now }, run.runId, now) : null;
-  return { runId: run?.runId ?? null, live: going, agents: pipelineAgents(run, tails), board: pipelineBoard(run), usage: pipelineUsage(run, list) };
+  const board = pipelineBoard(run);
+  return { runId: run?.runId ?? null, live: going, agents: pipelineAgents(run, tails), board, usage: pipelineUsage(run, list), outcome: going ? null : pipelineOutcome(run, board) };
 }
 
 // ------------------------------------------------------------ what the rail says in one line

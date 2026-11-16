@@ -6,10 +6,12 @@ import {
   hitlAnnouncement, openPending, exitToShow, exitSettleLeft, exitKey, runInterrupted, notificationFor, documentTitle, humanWhere,
   errorField, modelErrorRoles, controlGates, clip, executionDefaults, exitHint, runModeOf,
   WORKFLOW_KEY, WORKFLOW_DEFAULT, WORKFLOW_ERROR, parseStoredWorkflow, workflowGates, buildWorkflow, configuredChoice, workflowNote,
-  gateCatalog, roleIds, customNames, stagesOf, canReleaseOrphan, releaseOffered, recoveryText, recoveryTimes,
+  gateCatalog, roleIds, customNames, stagesOf, canReleaseOrphan, releaseOffered, recoveryText, recoveryTimes, startBlock,
 } from './control.js';
+import { trustKey, isTrusted, rememberTrust } from './trust.js';
 import { formatClock, stripBidi } from './format.js';
 import { workflowText } from './state.js';
+import { RUN_DEFAULTS_KEY, parseRunDefaults } from './prefs.js';
 import { scopedUrl, runStartError, buildFollowUp } from './scope.js';
 
 const POLL_ALIVE_MS = 1000;
@@ -63,10 +65,11 @@ export async function sendJson(method, url, body = {}) {
 // limits(): { running, maxConcurrentRuns } for the 429 text. onNewRun(): true when it handled New run itself.
 // replaying(): an archived run is on screen, so New run waits until the live run is back.
 // pipelineForm: the drawer's Pipeline part (pipeline-form.js); a target with startPipeline offers it.
+// chatKey(): the chat on screen as trust.js names it; the no-sandbox acknowledgement is kept per chat.
 export function createControlPanel({
   dashboard, pipeline, lanes, models, getState, onRender,
   url = (suffix) => scopedUrl(null, suffix), workspace = () => null, limits = () => null, onNewRun = () => false,
-  replaying = () => false, pipelineForm = null,
+  replaying = () => false, pipelineForm = null, chatKey = () => null,
 }) {
   const e = {
     actions: $('run-actions'), newRun: $('new-run'), stop: $('stop-run'), bell: $('notify-toggle'),
@@ -76,7 +79,7 @@ export function createControlPanel({
     exit: $('exit-panel'), exitTitle: $('exit-title'), exitAside: $('exit-aside'), exitTail: $('exit-tail'), exitDismiss: $('exit-dismiss'),
     emptyCli: $('empty-cli'), emptyControl: $('empty-control'), emptyTitle: $('empty-control-title'), emptyDetail: $('empty-control-detail'),
     runDialog: $('run-dialog'), runForm: $('run-form'), runSubmit: $('run-submit'), runBusy: $('run-busy'), runError: $('run-error'),
-    advanced: $('run-advanced'), fRequest: $('f-request'), fRequestOpt: $('f-request-opt'), fRequestCount: $('f-request-count'),
+    advanced: $('run-advanced'), options: $('run-options'), optionsSummary: $('run-options-summary'), trustKept: $('f-trust-kept'), fRequest: $('f-request'), fRequestOpt: $('f-request-opt'), fRequestCount: $('f-request-count'),
     fWorkspace: $('f-workspace'), fCycles: $('f-cycles'), fNoPlan: $('f-noplan'), fDemo: $('f-demo'),
     fScenario: $('f-scenario'), fDelay: $('f-delay'), demoFields: $('demo-fields'), fDemoRow: $('f-demo-row'), demoNone: $('f-demo-none'),
     exec: $('exec-fields'), fParallel: $('f-parallel'), fDocker: $('f-sandbox-docker'), fHost: $('f-sandbox-host'),
@@ -113,6 +116,8 @@ export function createControlPanel({
   let releaseNote = '';
   let workspaceTouched = false;
   let parallelTouched = false;
+  // the human picked Docker or Trusted host; the configured default no longer moves the radio buttons
+  let sandboxTouched = false;
   let recoveryKey = '';
   // the orphan and its owner status: a heartbeat moving on is not news worth announcing
   let recoveryNews = '';
@@ -138,6 +143,12 @@ export function createControlPanel({
   // the New run drawer starts somewhere else than the chat on screen (+ New chat): { title, start(body) }
   let runTarget = null;
   let onStarted = null;
+  // the target is the chat on screen (a pipeline chat's own drawer), not a chat made for the run
+  let targetHere = false;
+  // the chat on screen was started on the trusted host before: its acknowledgement is given
+  let keptTrust = false;
+  // the chat the acknowledgement box was last filled for: a tick given to one chat is not carried to another
+  let trustFor = null;
 
   const gates = () => controlGates({ control, mode, submitting, sending, stopping, releasing });
 
@@ -434,9 +445,11 @@ export function createControlPanel({
     e.stop.setAttribute('aria-disabled', String(stopping));
     e.stop.textContent = stopping ? 'Stopping...' : 'Stop run';
     e.stop.title = stopping ? 'Stop requested - waiting for the run to exit' : 'Stop the run (finishes it as aborted)';
-    e.runBusy.hidden = Boolean(runTarget) || (!alive && !g.recovery);
-    e.runBusy.textContent = g.recovery ? 'Recovery required' : 'A run is in progress';
-    e.runSubmit.disabled = runTarget ? !g.on || submitting : !g.canStart;
+    // a Start that cannot be pressed says why, beside it
+    const why = startBlock({ control, mode, target: Boolean(runTarget), replaying: replay, submitting });
+    e.runBusy.hidden = !why;
+    e.runBusy.textContent = why || 'A run is in progress';
+    e.runSubmit.disabled = runTarget ? !g.on || submitting : !g.canStart || replay;
     e.runSubmit.textContent = submitting ? 'Starting...' : 'Start run';
     renderBell();
   }
@@ -806,6 +819,7 @@ export function createControlPanel({
     e.fHost.disabled = demo;
     e.trustRow.hidden = demo || !host;
     if (!host) e.fTrusted.checked = false;
+    e.trustKept.hidden = !(keptTrust && host);
     e.fImage.disabled = demo || host;
     e.fNetwork.disabled = demo || host;
     e.dockerFields.dataset.disabled = String(demo || host);
@@ -833,16 +847,40 @@ export function createControlPanel({
     if (built.field !== 'workflow') firstGate()?.removeAttribute('aria-invalid');
     for (const [id, row] of gateRows) if (built.field !== `stage.${id}`) row.stage.removeAttribute('aria-invalid');
     models?.sync({ demo, host: e.fHost.checked, noPlan: e.fNoPlan.checked, configured: control.models, gates: stages, agents: control.agents, names });
+    syncOptions(demo ? null : bad ? 'workflow needs a fix' : workflowText(stages, names));
   }
 
+  // What the closed Options fold holds, in a line: the gates, where the agents run, how many milestones at once.
+  let gatesLine = '';
+  function syncOptions(gatesText = gatesLine) {
+    gatesLine = gatesText;
+    const n = Number(e.fParallel.value.trim() || e.fParallel.placeholder);
+    e.optionsSummary.textContent = gatesText === null ? `Demo with scripted agents${e.fScenario.value ? `: ${e.fScenario.value}` : ''}` : [
+      gatesText, e.fHost.checked ? 'this computer' : 'Docker', n > 1 ? `${n} in parallel` : 'one at a time', e.fNoPlan.checked && 'no planning',
+    ].filter(Boolean).join(' \u00b7 ');
+  }
 
-  function fillExecution() {
-    const d = executionDefaults(control);
+  // key: the chat whose kept acknowledgement counts (null: a chat made for this run has none yet)
+  function fillExecution(key = null) {
+    // what the human set in Settings for this computer wins over the project's configuration
+    const d = { ...executionDefaults(control), ...parseRunDefaults(store.get(RUN_DEFAULTS_KEY)) };
     if (!parallelTouched || !e.fParallel.value.trim()) {
       e.fParallel.value = String(d.maxParallel);
       parallelTouched = false;
     }
     e.fParallel.placeholder = String(d.maxParallel);
+    if (!sandboxTouched) {
+      e.fHost.checked = d.sandbox === 'host';
+      e.fDocker.checked = d.sandbox === 'docker';
+      // the acknowledgement belongs to a host the human sees; it is never given here
+      if (!e.fHost.checked) e.fTrusted.checked = false;
+    }
+    // asked once per chat: a chat that already ran on the trusted host does not ask again
+    keptTrust = isTrusted(store, key);
+    if (key !== trustFor) e.fTrusted.checked = false;
+    trustFor = key;
+    if (keptTrust && e.fHost.checked) e.fTrusted.checked = true;
+    e.trustKept.hidden = !(keptTrust && e.fHost.checked);
     e.fImage.placeholder = d.image;
     if (!e.fNetwork.dataset.touched) e.fNetwork.value = d.network;
     e.configError.textContent = control.configurationError
@@ -895,6 +933,8 @@ export function createControlPanel({
     const input = fieldInput(field);
     if (!input) return;
     input.setAttribute('aria-invalid', 'true');
+    // everything but the request and the acknowledgement lives in the Options fold: a mistake there opens it
+    if (input !== e.fRequest && input !== e.fTrusted) e.options.open = true;
     if (e.advanced.contains(input)) e.advanced.open = true;
     if (!input.disabled) return input.focus();
     // a select locked to its agent default (Docker) cannot take focus: Agents fixes it, else the message is read
@@ -910,6 +950,7 @@ export function createControlPanel({
   //         the inputs it is about }
   function openRun(opts = {}) {
     runTarget = opts.target ?? null;
+    targetHere = Boolean(runTarget) && opts.engine === 'pipeline';
     onStarted = opts.onStarted ?? null;
     if (!runTarget && (gates().alive || gates().recovery || replaying())) return;
     runPin = runTarget ? null : pin('runs');
@@ -927,13 +968,17 @@ export function createControlPanel({
       e.fRequest.value = opts.request;
       updateCount(e.fRequest, e.fRequestCount, REQUEST_MAX);
     }
-    fillExecution();
+    fillExecution(runTarget ? null : chatKey());
     fillScenarios();
     syncDemo();
     clearRunError();
+    e.options.open = false;
     renderButtons();
     models?.open();
-    pipelineForm?.open({ choice: Boolean(runTarget?.startPipeline), fixed: opts.engine === 'pipeline', project: runTarget?.project ?? null, task: opts.task ?? '' });
+    pipelineForm?.open({
+      choice: Boolean(runTarget?.startPipeline), fixed: opts.engine === 'pipeline', project: runTarget?.project ?? null, task: opts.task ?? '',
+      trusted: targetHere && isTrusted(store, chatKey()),
+    });
     e.runDialog.showModal();
     if (pipelineForm?.active()) pipelineForm.focus();
     else e.fRequest.focus();
@@ -962,14 +1007,23 @@ export function createControlPanel({
   });
   e.fRequest.addEventListener('input', () => updateCount(e.fRequest, e.fRequestCount, REQUEST_MAX));
   e.fWorkspace.addEventListener('input', () => { workspaceTouched = true; });
-  e.fParallel.addEventListener('input', () => { parallelTouched = true; });
+  e.fParallel.addEventListener('input', () => {
+    parallelTouched = true;
+    syncOptions();
+  });
+  e.fScenario.addEventListener('change', () => syncOptions());
   e.fNetwork.addEventListener('change', () => { e.fNetwork.dataset.touched = '1'; });
   e.fDemo.addEventListener('change', syncDemo);
   e.fNoPlan.addEventListener('change', syncSandbox);
-  e.fDocker.addEventListener('change', syncSandbox);
-  e.fHost.addEventListener('change', () => {
+  e.fDocker.addEventListener('change', () => {
+    sandboxTouched = true;
     syncSandbox();
-    if (e.fHost.checked) e.fTrusted.focus();
+  });
+  e.fHost.addEventListener('change', () => {
+    sandboxTouched = true;
+    syncSandbox();
+    if (e.fHost.checked && keptTrust) e.fTrusted.checked = true;
+    else if (e.fHost.checked) e.fTrusted.focus();
   });
   e.runForm.addEventListener('input', (ev) => ev.target.removeAttribute?.('aria-invalid'));
   e.fRequest.addEventListener('keydown', (ev) => {
@@ -996,6 +1050,7 @@ export function createControlPanel({
     if (pipelineForm?.active()) return submitPipeline();
     const target = runTarget;
     const to = runPin;
+    const here = target ? null : chatKey();
     if (target ? !gates().on || submitting : !gates().canStart || replaying() || !to) return;
     if (to?.stale()) return runError(MOVED);
     clearRunError();
@@ -1017,6 +1072,8 @@ export function createControlPanel({
     renderButtons();
     const r = target ? await target.start(built.body) : await postJson(to.url, built.body);
     submitting = false;
+    // the chat the run started in keeps the acknowledgement (r.chat: the chat that was made for it)
+    if (r.ok && built.body.trustedHost === true) rememberTrust(store, r.chat ? trustKey(r.chat) : here);
     // the drawer was closed meanwhile (a chat switch closes it too): whatever happened belongs to that chat
     if (!e.runDialog.open || (to && to.stale())) {
       renderButtons();
@@ -1043,6 +1100,7 @@ export function createControlPanel({
   // Pipeline runs always go to a target: a new chat made for it, or the pipeline chat on screen.
   async function submitPipeline() {
     const target = runTarget;
+    const here = targetHere ? chatKey() : null;
     if (!target?.startPipeline || !gates().on || submitting) return;
     clearRunError();
     const built = pipelineForm.build();
@@ -1054,6 +1112,7 @@ export function createControlPanel({
     renderButtons();
     const r = await target.startPipeline(built.body);
     submitting = false;
+    if (r.ok && built.body?.sandbox?.trustHost === true) rememberTrust(store, r.chat ? trustKey(r.chat) : here);
     if (!e.runDialog.open) {
       renderButtons();
       if (r.ok) say('Pipeline run started');
@@ -1082,7 +1141,8 @@ export function createControlPanel({
   async function startPipelineFollowUp(task, target) {
     if (!pipelineForm || !target?.startPipeline || !gates().on || submitting) return { error: 'A run cannot be started here right now.' };
     const to = pin('control');
-    await pipelineForm.open({ fixed: true, project: target.project ?? null });
+    const here = chatKey();
+    await pipelineForm.open({ fixed: true, project: target.project ?? null, trusted: isTrusted(store, here) });
     if (to.stale()) return { error: MOVED };
     const built = pipelineForm.build({ task, demo: false });
     if (built.error) return built.field === 'task' ? { error: built.error, field: 'request' } : { error: built.error, field: built.field ?? null, options: true };
@@ -1091,6 +1151,7 @@ export function createControlPanel({
     const r = await target.startPipeline(built.body);
     submitting = false;
     renderButtons();
+    if (r.ok && built.body?.sandbox?.trustHost === true) rememberTrust(store, here);
     if (!r.ok) {
       const field = r.status === 400 ? pipelineForm.errorField(r.error) : null;
       if (field === 'task') return { error: startError(r), field: 'request' };
@@ -1107,7 +1168,8 @@ export function createControlPanel({
     const g = gates();
     if (!g.canStart) return { error: g.alive ? 'A run is already in progress in this chat.' : 'A run cannot be started here right now.' };
     const to = pin('runs');
-    fillExecution();
+    const here = chatKey();
+    fillExecution(here);
     await models?.open();
     if (to.stale()) return { error: MOVED };
     const execution = executionForm();
@@ -1128,6 +1190,7 @@ export function createControlPanel({
     const r = await postJson(to.url, built.body);
     submitting = false;
     renderButtons();
+    if (r.ok && built.body.trustedHost === true) rememberTrust(store, here);
     if (to.stale()) return r.ok ? { ok: true } : { error: startError(r) };
     if (!r.ok) {
       if (r.status === 409) refresh();

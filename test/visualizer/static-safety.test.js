@@ -58,8 +58,14 @@ test('the message composer and run form keep their bounds and labels', () => {
   assert.match(html, /<label class="chat-to-label" for="chat-to">/);
   assert.match(html, /<label class="sr-only" for="chat-text">/);
   assert.match(html, /id="chat-status" role="status" aria-live="polite"/);
-  assert.match(html, /<input type="radio" name="sandbox" value="docker" id="f-sandbox-docker" checked>/, 'docker is the default');
-  assert.match(html, /id="f-trust-row" hidden/, 'the trust confirmation only appears for host execution');
+  for (const [docker, host] of [['f-sandbox-docker', 'f-sandbox-host'], ['pf-docker', 'pf-host']]) {
+    assert.match(html, new RegExp(`<input type="radio" name="[a-z-]+" value="host" id="${host}" checked>`), `${host}: the trusted host is the default`);
+    assert.match(html, new RegExp(`<input type="radio" name="[a-z-]+" value="docker" id="${docker}">`), `${docker}: Docker is not preselected`);
+  }
+  // the acknowledgement of the default host is shown, and never given in the page: a chat that already ran on the
+  // host has it ticked by the drawer (trust.js), a new one does not
+  assert.match(html, /<label class="check trust team-only" id="f-trust-row"><input type="checkbox" id="f-trusted" name="trustedHost"><span>/);
+  assert.match(html, /<label class="check trust" id="pf-trust-row"><input type="checkbox" id="pf-trust"><span>I accept that the checks run model-written code on this computer without OS isolation/);
 });
 
 test('sign-in controls start hidden, keep their bounds and announce progress', () => {

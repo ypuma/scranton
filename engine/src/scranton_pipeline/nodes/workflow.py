@@ -8,6 +8,7 @@ from langgraph.types import interrupt
 
 from scranton_pipeline.agents.prompts import build_implementer_prompt, build_reviewer_prompt
 from scranton_pipeline.conversation import agent_message
+from scranton_pipeline.dreaming import attempt_counter_key, emit_attempt
 from scranton_pipeline.errors import EngineError, FailureClass, SuspendRequested
 from scranton_pipeline.grounding import check_id, digest, recompute_summary, register, registry_row
 from scranton_pipeline.models import ContextRequest, ImplementerTurn, Review
@@ -219,9 +220,10 @@ def apply_edits(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     result = validate_and_apply(turn.edits, workspace=deps.workspace, policy=deps.policy(), declared=declared,
                                 scope="strict" if state.get("mode") == "integration" else deps.cfg.policy.scope, undeclared_budget=deps.cfg.policy.max_undeclared_files,
                                 limits=deps.cfg.limits)
-    update: dict[str, Any] = {"counters": {key: 1}, "pending_edits": None}
+    update: dict[str, Any] = {"counters": {key: 1, attempt_counter_key(state): 1}, "pending_edits": None}
     if not result.ok:
         deps.events.emit("edits_rejected", count=len(result.rejected))
+        emit_attempt(state, deps, rejected=True)
         if counter(state, key) + 1 >= deps.cfg.limits.max_step_attempts:
             update.update(request_replan(state, deps, EngineError(FailureClass.IMPLEMENTATION, "edits_rejected", "Edit attempts exhausted"), "apply_edits"))
         else:
@@ -238,6 +240,7 @@ def verify(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     results = checked(state, deps)
     if deps.stop.cancel_requested():
         return {"checks": results, "outcome": "cancelled"}
+    emit_attempt(state, deps, results=results)
     failed = [r for r in results if r["required"] and r["status"] != "passed"]
     if failed:
         if any(r["status"] == "error" for r in failed):

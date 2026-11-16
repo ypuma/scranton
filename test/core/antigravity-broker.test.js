@@ -117,7 +117,7 @@ test('client cancellation aborts host upstream and cleanup revokes capability be
   const root = path.resolve('.scratch/antigravity-backend/tests'); fs.mkdirSync(root, { recursive: true }); const dir = fs.mkdtempSync(path.join(root, 'cleanup-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const workspace = path.join(dir, 'work'), sessionDir = path.join(dir, 'session'); fs.mkdirSync(workspace); fs.mkdirSync(sessionDir); fs.writeFileSync(path.join(workspace, '.git'), 'gitdir: private'); const prompt = path.join(dir, 'prompt'); fs.writeFileSync(prompt, 'system');
   let closed = false;
-  const execution = await prepareSandbox({ provider: 'google-antigravity', workspace, sessionDir, systemPromptFile: prompt, runId: 'run', env: {} }, {
+  const execution = await prepareSandbox({ sandbox: { mode: 'docker' }, provider: 'google-antigravity', workspace, sessionDir, systemPromptFile: prompt, runId: 'run', env: {} }, {
     executable: 'docker', run: async (_exe, args) => { if (args[0] === 'info' || args[0] === 'image') return 'linux'; if (args[0] === 'network') return '172.17.0.1'; assert.ok(closed); throw Error('cleanup unavailable'); },
     auth: { mintAccessToken: async () => authKey() },
     startBroker: async () => ({ port: 12345, capability: 'run-capability', close: async () => { closed = true; } })
@@ -165,7 +165,7 @@ test('Docker auth preflight fails before broker/container and later auth failure
   const workspace = path.join(dir, 'work'), sessionDir = path.join(dir, 'session'); fs.mkdirSync(workspace); fs.mkdirSync(sessionDir);
   fs.writeFileSync(path.join(workspace, '.git'), 'gitdir: private'); const prompt = path.join(dir, 'prompt'); fs.writeFileSync(prompt, 'system');
   for (const reason of ['signed out SECRET', 'revoked REFRESH_SECRET']) {
-    await assert.rejects(prepareSandbox({ provider: 'google-antigravity', workspace, sessionDir, systemPromptFile: prompt, env: {} }, {
+    await assert.rejects(prepareSandbox({ sandbox: { mode: 'docker' }, provider: 'google-antigravity', workspace, sessionDir, systemPromptFile: prompt, env: {} }, {
       executable: 'docker', run: async (_exe, args) => { assert.ok(['info', 'image', 'network'].includes(args[0])); return args[0] === 'network' ? '172.17.0.1' : 'linux'; },
       auth: { mintAccessToken: async () => { throw Error(reason); } }, startBroker: () => assert.fail('preflight must reject before broker')
     }), /^Error: Google Antigravity sign-in unavailable; sign in again in Accounts before launching Docker$/);

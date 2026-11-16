@@ -103,7 +103,7 @@ test('the server 400 about models maps onto the Oscar and Hank selects', () => {
 // ------------------------------------------------------------ the drawer
 
 test('drawer: a new user gets review and security side by side, then the tests, and every role needs an agent default in Docker', async (t) => {
-  const h = harness({ control: { ...CONTROL, defaults: { models: { michael: PICK, dwight: PICK, oscar: null, hank: null, angela: PICK } } } });
+  const h = harness({ control: { ...CONTROL, defaults: { execution: { sandbox: { mode: 'docker' } }, models: { michael: PICK, dwight: PICK, oscar: null, hank: null, angela: PICK } } } });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.deepEqual(h.ids(), ['oscar', 'hank', 'angela'], 'an older server: the built-in gates');
@@ -247,6 +247,7 @@ test('follow-up: the drawer\'s gates go along, and the Docker check covers them'
   t.after(() => h.panel.setMode('demo'));
   h.panel.setMode('live');
   await h.tick();
+  await h.sandbox(false);
   const r = await h.panel.startFollowUp('Next step');
   assert.deepEqual(h.posts, []);
   assert.equal(r.options, true);
@@ -267,7 +268,7 @@ test('follow-up: the drawer\'s gates go along, and the Docker check covers them'
 
 // ------------------------------------------------------------ the server's configured workflow
 
-const configured = (gates) => ({ ...CONTROL, defaults: { workflow: { gates }, models: Object.fromEntries(ROLES5.map((r) => [r, PICK])) } });
+const configured = (gates) => ({ ...CONTROL, defaults: { execution: { sandbox: { mode: 'docker' } }, workflow: { gates }, models: Object.fromEntries(ROLES5.map((r) => [r, PICK])) } });
 const ALL = Object.fromEntries(ROLES5.map((r) => [r, GPT]));
 
 test('configuredChoice: the engine default means nothing is configured; other gates become the stages', () => {

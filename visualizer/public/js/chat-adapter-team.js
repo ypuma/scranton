@@ -4,6 +4,7 @@ import { displayName, roleTitle, roleOf } from './state.js';
 import { formatTokens, formatCost, formatDuration } from './format.js';
 import { DECISION_LABEL } from './control.js';
 import { cleanText, cleanLine, REPLY_KINDS } from './chat-entries.js';
+import { parsePlanText } from './plan.js';
 
 // What the adapter reads. A page that buffers a live stream keeps these and drops the rest (agent_status is half
 // of a run's events and says nothing here).
@@ -60,6 +61,16 @@ function outcome(status, t) {
   ].filter(Boolean).join(' · ');
 }
 
+// The engine's own summary without what the page already shows around it: the status (the outcome line under the
+// reply) and the request (the message the run starts with).
+function plainSummary(raw, request) {
+  const text = typeof raw === 'string' ? raw : '';
+  const asked = cleanLine(request ?? '', 4000);
+  const lines = text.replace(/^Run finished with status "[a-z_]+": */, '').split('\n')
+    .filter((l) => !(asked && l.startsWith('Request: ') && cleanLine(l.slice(9), 4000) === asked));
+  return lines.join('\n').trim() || text;
+}
+
 // One run from its events, in the order they happened.
 function detail(runId, events, { state, listed, outbox }) {
   const names = namesFor(runId, events, state);
@@ -70,6 +81,9 @@ function detail(runId, events, { state, listed, outbox }) {
   const tools = new Map();
   const chats = new Map();
   const milestones = new Set();
+  // the last message of every instance, and the lines of milestones that were aborted
+  const spoken = new Map();
+  const aborted = [];
   const t = { input: 0, output: 0, cost: 0, turns: 0, passed: 0, total: 0, startedAt: null, finishedAt: null };
   let asked = null;
   let reply = null;
@@ -98,10 +112,21 @@ function detail(runId, events, { state, listed, outbox }) {
       case 'agent_message': {
         tools.delete(e.instanceId || e.agent);
         const body = cleanText(e.text);
-        out.push({
+        // a turn that ends on the words it already said repeats them as its final message: said once, marked final
+        const last = spoken.get(e.instanceId || e.agent);
+        if (e.final === true && last && !last.final && last.text === body.text && last.context === where(e.milestoneId, e.cycle)) {
+          last.final = true;
+          break;
+        }
+        const plan = parsePlanText(body.text);
+        const said = {
           id: `msg-${runId}-${e.seq}`, runId, kind: 'agent', ts: ts(e), who: sender(e.agent, names), context: where(e.milestoneId, e.cycle),
           text: body.text, final: e.final === true, truncated: body.truncated || e.truncated === true,
-        });
+          // the planner's message is its plan as JSON: the view shows it as a plan
+          ...(plan ? { plan } : {}),
+        };
+        spoken.set(e.instanceId || e.agent, said);
+        out.push(said);
         break;
       }
 
@@ -154,6 +179,7 @@ function detail(runId, events, { state, listed, outbox }) {
           id: `ms-${runId}-${e.seq}`, runId, kind: 'activity', ts: ts(e),
           text: cleanLine(`${e.milestoneId} ${e.status}${e.reason ? `: ${e.reason}` : ''}`, 240), tone: MILESTONE_TONE[e.status] ?? 'fail',
         });
+        if (e.status === 'aborted' && !e.reason) aborted.push(out.at(-1));
         break;
 
       case 'cycle_result':
@@ -217,7 +243,7 @@ function detail(runId, events, { state, listed, outbox }) {
 
       case 'run_reply': {
         if (reply) break;
-        const body = cleanText(e.text);
+        const body = cleanText(e.from === 'system' ? plainSummary(e.text, request?.text) : e.text);
         reply = {
           id: `rep-${runId}`, runId, kind: 'reply', ts: ts(e), who: sender(e.from, names), context: '',
           text: body.text, truncated: body.truncated || e.truncated === true, tone: null,
@@ -241,6 +267,8 @@ function detail(runId, events, { state, listed, outbox }) {
         }
         reply.tone = e.status === 'success' ? 'ok' : 'fail';
         reply.context = outcome(e.status, t);
+        // an aborted run names its aborted milestones in its reply: their own lines would say it again
+        if (e.status === 'aborted') for (const x of aborted) out.splice(out.indexOf(x), 1);
         break;
 
       default:

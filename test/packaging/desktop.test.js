@@ -47,6 +47,27 @@ test('bundled Node loads Pi CLI without system Node/Pi PATH or host credentials'
   assert.notEqual(missing.status, 0);
 });
 
+test('staged dreaming helper matches source and resolves runtime dependencies offline', { skip: !staged && 'Run npm.cmd run app:prepare first' }, async (t) => {
+  for (const file of ['tools/dreaming-pi-complete.js', 'src/core/dreaming-completion.js']) {
+    assert.deepEqual(await fs.readFile(path.join(app, file)), await fs.readFile(path.join(root, file)), file);
+  }
+  const scratch = path.join(root, '.scratch/packaging'); await fs.mkdir(scratch, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(scratch, 'dreaming-')); t.after(() => fs.rm(profile, { recursive: true, force: true }));
+  const node = path.join(root, `src-tauri/binaries/${desktopPlatform().nodeFile}`);
+  const script = `
+    import assert from 'node:assert/strict';
+    const helper = await import(${JSON.stringify(new URL('../../src-tauri/staged/app/tools/dreaming-pi-complete.js', import.meta.url).href)});
+    assert.equal(typeof helper.runDreamingCompletion, 'function');
+    const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
+    assert.equal(typeof ModelRuntime.create, 'function');
+    const provider = await import(${JSON.stringify(new URL('../../src-tauri/staged/app/src/core/antigravity/provider.js', import.meta.url).href)});
+    assert.equal(typeof provider.antigravityProvider, 'function');
+  `;
+  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, PI_CODING_AGENT_DIR: profile };
+  const run = spawnSync(node, ['--input-type=module', '--eval', script], { cwd: app, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
+  assert.equal(run.status, 0, run.stderr || run.error?.message);
+});
+
 test('desktop sidecar uses registry data, legacy import and authenticated aggregate control', async () => {
   const source = await fs.readFile(path.join(root, 'src-tauri/src/main.rs'), 'utf8');
   assert.match(source, /\["app-server", "--data"\]/);

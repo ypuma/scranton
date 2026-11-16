@@ -3,8 +3,8 @@
 ## Zwei unterschiedliche Grenzen
 
 - **Private Worktrees** isolieren Dateistände zwischen Instanzen. Sie beschränken keine Prozessrechte.
-- **Docker** bildet die beabsichtigte OS-Grenze. Echte Standardläufe verlangen Docker; fehlende Engine oder fehlendes lokales Image führen zum Fehler, **nicht** zum Host-Fallback.
-- **Trusted-Host** (`--trusted-host`, in der API `trustedHost:true`) ist eine bewusste Ausnahme für vertrauenswürdige Aufgaben. Pi und gestartete Shellbefehle haben Benutzerrechte. Angelas Tool-Allowlist ohne `write`/`edit` verhindert keine Schreibzugriffe über Shellbefehle.
+- **Docker** bildet die optionale OS-Grenze. Ausdrücklich gewählte oder konfigurierte Docker-Läufe verlangen Docker; fehlende Engine oder fehlendes lokales Image führen zum Fehler, **nicht** zum Host-Fallback.
+- **Trusted-Host** (`--trusted-host`, in der API `trustedHost:true`) ist der Standard für neue Läufe ohne Sandboxvorgabe und nur für vertrauenswürdige Aufgaben geeignet. Explizite CLI-/HTTP-Hostauswahl verlangt weiterhin die Bestätigung; die UI lässt ihre Bestätigungscheckbox zunächst leer. Pi und gestartete Shellbefehle haben Benutzerrechte. Angelas Tool-Allowlist ohne `write`/`edit` verhindert keine Schreibzugriffe über Shellbefehle.
 
 Legacy-`execution.isolation:"shared"` benötigt `maxParallel:1` und expliziten Host-Modus; shared+Docker wird abgewiesen. Shared-Instanzen melden `worktree:null` und bieten keine private Dateigrenze. Die folgenden Worktree-Garantien gelten für den Standardmodus `worktree`.
 

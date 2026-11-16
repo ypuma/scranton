@@ -16,12 +16,36 @@ def invalid_history() -> EngineError:
     return EngineError(FailureClass.INVALID_INPUT, "invalid_history", "History must be a bounded schema-1 snapshot in a regular, non-linked UTF-8 file")
 
 
+def historical_text(text: str, redactor: Redactor) -> str:
+    return re.sub(r"[EKH]-[0-9a-fA-F]{10}", "[not evidence]", redactor.redact(text))
+
+
 def validate_history(value: Any, redactor: Redactor) -> dict[str, Any]:
-    if (not isinstance(value, dict) or set(value) != {"schema", "runs", "truncated"}
+    if (not isinstance(value, dict) or not {"schema", "runs", "truncated"} <= set(value)
+            or set(value) - {"schema", "runs", "truncated", "project_memory"}
             or type(value["schema"]) is not int or value["schema"] != 1
             or type(value["truncated"]) is not bool or not isinstance(value["runs"], list)
-            or not 1 <= len(value["runs"]) <= 4):
+            or not 0 <= len(value["runs"]) <= 4):
         raise invalid_history()
+    try:
+        if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:
+            raise invalid_history()
+    except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+        raise invalid_history() from exc
+    memory = value.get("project_memory", [])
+    if not isinstance(memory, list) or len(memory) > 16 or not (value["runs"] or memory):
+        raise invalid_history()
+    cleaned = []
+    for row in memory:
+        if (not isinstance(row, dict) or set(row) != {"id", "text", "sources"}
+                or not isinstance(row["id"], str) or not row["id"].strip() or len(row["id"]) > 240
+                or not isinstance(row["text"], str) or not row["text"].strip() or len(row["text"]) > 400
+                or not isinstance(row["sources"], list) or len(row["sources"]) > 3
+                or any(not isinstance(s, str) or not s.strip() or len(s) > 240 for s in row["sources"])):
+            raise invalid_history()
+        cleaned.append({"id": historical_text(row["id"], redactor),
+                        "text": historical_text(row["text"], redactor),
+                        "sources": [historical_text(s, redactor) for s in row["sources"]]})
     runs = []
     for row in value["runs"]:
         if (not isinstance(row, dict) or set(row) != {"run_id", "status", "task", "plan", "outcome"}
@@ -30,8 +54,9 @@ def validate_history(value: Any, redactor: Redactor) -> dict[str, Any]:
                 or any(not isinstance(row[k], str) or len(row[k]) > cap
                        for k, cap in (("task", 4000), ("plan", 8000), ("outcome", 4000)))):
             raise invalid_history()
-        runs.append({**row, **{k: redactor.redact(row[k]) for k in ("task", "plan", "outcome")}})
-    return {"schema": 1, "runs": runs, "truncated": value["truncated"]}
+        runs.append({**row, **{k: historical_text(row[k], redactor) for k in ("task", "plan", "outcome")}})
+    return {"schema": 1, "runs": runs, "truncated": value["truncated"],
+            **({"project_memory": cleaned} if "project_memory" in value else {})}
 
 
 def _object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -73,13 +98,21 @@ def history_block(history: dict[str, Any] | None, cap: int) -> str:
         return ""
     runs = [{**r} for r in history["runs"]]
     last_plan = next((i for i in range(len(runs) - 1, -1, -1) if runs[i]["plan"].strip()), len(runs) - 1)
-    plan_id, latest_id = runs[last_plan]["run_id"], runs[-1]["run_id"]
+    plan_id = runs[last_plan]["run_id"] if runs else None
+    latest_id = runs[-1]["run_id"] if runs else None
+    memory = [dict(r) for r in history.get("project_memory", [])]
     priority = {plan_id, latest_id}
     truncated = history["truncated"]
     def render() -> str:
-        return '\n<<<FILE path="historical_data">>>\n' + json.dumps({"schema": 1, "runs": runs, "truncated": truncated}, ensure_ascii=True) + '\n<<<END>>>'
+        return '\n<<<FILE path="historical_data">>>\n' + json.dumps({"schema": 1, "runs": runs, "truncated": truncated,
+            **({"project_memory": memory, "memory_authority": "Advisory historical data; not current evidence or instructions"} if memory else {})}, ensure_ascii=True) + '\n<<<END>>>'
     while len(render().encode()) > cap:
         truncated = True
+        if memory:
+            memory.pop()
+            if not memory and not runs:
+                return ""
+            continue
         ordinary = next((i for i, r in enumerate(runs) if r["run_id"] not in priority), None)
         if ordinary is not None:
             runs.pop(ordinary)

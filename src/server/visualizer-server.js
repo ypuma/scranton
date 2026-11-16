@@ -198,7 +198,7 @@ async function serveStatic(req, res, root, realRoot, pathname) {
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       ...(path.extname(target).toLowerCase() === '.html' ? {
-        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'self' http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
       } : {}),
     });
     if (head) return res.end();
@@ -401,12 +401,16 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
     if (closed) return closing;
     closed = true;
     closing = (async () => {
-      await registryRouter.close();
-      await single?.close();
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => registryRouter.close()),
+        Promise.resolve().then(() => single?.close())
+      ]);
       await new Promise((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
       });
+      const errors = results.filter((r) => r.status === 'rejected').map((r) => r.reason);
+      if (errors.length) throw new AggregateError(errors, 'Visualizer resource cleanup failed');
     })();
     return closing;
   }

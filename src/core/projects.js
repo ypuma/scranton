@@ -5,6 +5,10 @@ import { randomUUID } from 'node:crypto';
 import { sleepSync, writeFileAtomicSync } from './util.js';
 import { readRunLease } from './run-lease.js';
 import { cleanupIsolationStorage } from './worktree.js';
+import { createDreaming } from './dreaming/index.js';
+import { createDreamingSources } from './dreaming-sources.js';
+import { createDreamingReflectionSources } from './dreaming-reflection-sources.js';
+import { completeDreaming } from './dreaming-completion.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -199,5 +203,12 @@ export function createProjectRegistry({ dataDir, projectsRoot = path.join(os.hom
       write(file, { v: 1, projects: [project] });
     });
   }
-  return { dataDir: data, locked, listProjects, getProject, addProject, renameProject, removeProject, listChats, getChat, createChat, updateChat, removeChat, importLegacy };
+  function dreaming(projectId, options = {}) {
+    getProject(projectId);
+    const source = createDreamingSources({ dataDir: data, projectId });
+    const reflection = createDreamingReflectionSources({ dataDir: data, projectId });
+    return createDreaming({ dataDir: data, projectId, collect: source.collect, collectReflection: reflection.collectReflection,
+      completeReflection: options.completeReflection ?? ((request) => completeDreaming({ ...request, dataDir: data })), isBusy: () => source.isBusy() || Boolean(options.isBusy?.()), ...(options.now ? { now: options.now } : {}) });
+  }
+  return { dreaming, dataDir: data, locked, listProjects, getProject, addProject, renameProject, removeProject, listChats, getChat, createChat, updateChat, removeChat, importLegacy };
 }

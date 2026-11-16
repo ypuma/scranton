@@ -1,4 +1,4 @@
-"""Scripted conversation protocol; legacy projections verified against committed HEAD."""
+"""Scripted conversation protocol; legacy projections plus typed dreaming events."""
 import hashlib
 import json
 import re
@@ -63,6 +63,7 @@ def test_legacy_run_projection(tmp_path, scenario):
     assert sorted(status.model_dump(by_alias=True)) == golden["status_keys"]
     assert sorted(status.progress) == golden["progress_keys"]
     events = _rows(run_dir / "events.jsonl")
+    # Legacy status/files remain pinned; only dreaming's additive events extend the fixture.
     # Independent prepare and lane events have no total-order guarantee.
     projection = [[e["type"], e["node"]] for e in events if e["node"] not in ("index_repo", "baseline_checks") and e["type"] != "check_finished"]
     if scenario == "parallel":

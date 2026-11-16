@@ -8,9 +8,11 @@ import { createLanes } from './lanes.js';
 import { createChatPanel } from './chat-panel.js';
 import { createAccountsPanel, createModelPicker } from './accounts-panel.js';
 import { createAgentsPanel } from './agents-panel.js';
+import { createDreamingPanel } from './dreaming-panel.js';
 import { CLIENT_HEADERS } from './control.js';
 import { createScope, parseHash, hashFor, pickScope, scopeGone, findProject, chatEngine } from './scope.js';
 import { createPipelineForm } from './pipeline-form.js';
+import { trustKey } from './trust.js';
 import { createPipelineView } from './pipeline-view.js';
 import { createNav } from './nav.js';
 import { createThread } from './thread.js';
@@ -20,11 +22,19 @@ import { createViewMode, createDock } from './view-mode.js';
 import { createChatView } from './chat-view.js';
 import { teamChatAdapter, CHAT_EVENT_TYPES } from './chat-adapter-team.js';
 import { pipelineChatAdapter } from './chat-adapter-pipeline.js';
-import { teamRunView, pipelineRunView, boardSummary } from './activity-model.js';
+import { teamRunView, pipelineRunView, boardSummary, liveTails } from './activity-model.js';
 import { createBoard } from './board.js';
+import { createFolds } from './folds.js';
+import { createSidePanel } from './side-panel.js';
+import { renderPlan, renderPlanBrief } from './plan-render.js';
+import { createViewBar } from './viewbar.js';
+import { createSettings } from './settings-panel.js';
 import { createUsage } from './usage-chart.js';
 import { createRunRail } from './run-rail.js';
 import { createLivePoll } from './live-poll.js';
+import { createThoughtLog, thoughtColumns } from './thoughts.js';
+import { createThinkingView } from './thinking-view.js';
+import { createChatLive } from './chat-live.js';
 
 const params = new URLSearchParams(location.search);
 const mode = params.has('demo') ? 'demo' : params.has('live') ? 'live' : 'auto';
@@ -135,6 +145,8 @@ function chatEntries() {
   return entries;
 }
 const chatView = createChatView({
+  // the message names the milestones; the Plan panel is where the plan is read
+  plan: { brief: true, render: (items) => renderPlanBrief(items), open: () => side.set('plan', { focus: true }) },
   getEntries: chatEntries,
   currentRunId: () => (engine === 'pipeline' ? pipelineView.chat().current : live.runId),
   loadRun: (runId) => (engine === 'pipeline' ? pipelineView.loadRun(runId) : thread.loadRun(runId)),
@@ -196,6 +208,33 @@ function runView() {
   if (engine === 'pipeline') return pipelineRunView(pipelineView.activity());
   return teamRunView({ state: view(), live: replay ? null : livePoll.get(), runs: thread?.runs() ?? [] });
 }
+// What the agents reasoned and wrote, saved with the run: asked for while the Thinking view is open.
+const thoughtLog = createThoughtLog({
+  url: (runId) => (engine === 'team' && runId ? urlFor(`runs/${encodeURIComponent(runId)}/thoughts`) : null),
+  onChange: () => schedule(),
+});
+const thinking = createThinkingView({ onToggle: () => renderActivity() });
+const chatLive = createChatLive({ openThinking: () => thinking.open() });
+function renderThinking(rv) {
+  chatLive.render(rv);
+  thoughtLog.want(engine === 'team' ? rv.runId : null, { live: rv.live, open: thinking.isOpen() });
+  if (!thinking.isOpen()) return;
+  const log = thoughtLog.get();
+  // a pipeline run saves no thinking: its columns show the thought in progress the run view already carries
+  const saved = engine === 'team' && !log.off;
+  const tools = engine === 'team' ? [...(thread?.details() ?? []), ...liveEvents].filter((e) => e.type === 'agent_tool' && e.runId === rv.runId) : [];
+  const columns = thoughtColumns({
+    agents: rv.agents, thoughts: log.runId === rv.runId ? log.thoughts : [], tools, saved,
+    tails: engine === 'team' && !replay ? liveTails(livePoll.get(), rv.runId) : null,
+  });
+  // without /live tails of its own, a pipeline agent's open block is the text of its run view entry
+  if (engine !== 'team') for (const c of columns) c.open = rv.agents.find((a) => a.id === c.id)?.text ?? null;
+  thinking.render({ runId: rv.runId, columns, off: !saved, live: rv.live });
+}
+createFolds($('dash'));
+createSettings();
+createViewBar();
+const side = createSidePanel({ onChange: () => renderActivity() });
 const boards = {
   dash: createBoard($('board'), { name: 'board' }),
   details: createBoard($('pv-board'), { name: 'pv-board' }),
@@ -235,7 +274,30 @@ function renderActivity(v = view()) {
   boards.dialog.render(rv.board);
   $('board-dialog-aside').textContent = summary;
   rail.render(rv);
+  renderThinking(rv);
+  side.render(rv, engine === 'pipeline' ? pipelineView.changes() : teamChanges(rv, summary));
   livePoll.sync();
+}
+
+// The line diff of a team run, for the Changes side panel: what the run integrated so far, read from its private
+// repository. Asked for while the panel is open, and again when the board moved (a milestone was integrated).
+// A run that kept no diff (404: it ran without worktrees) leaves the panel its list of files.
+let teamDiff = null;
+function teamChanges(rv, progress) {
+  if (side.get() !== 'changes' || !rv.runId) return teamDiff?.runId === rv.runId ? teamDiff : null;
+  const url = urlFor(`runs/${encodeURIComponent(rv.runId)}/diff`);
+  if (!url) return null;
+  const key = JSON.stringify([url, progress, rv.live]);
+  if (teamDiff?.key === key) return teamDiff;
+  const mine = { key, runId: rv.runId, loading: true, content: teamDiff?.runId === rv.runId ? teamDiff.content : '', truncated: false, error: '' };
+  teamDiff = mine;
+  fetch(url, { headers: CLIENT_HEADERS, cache: 'no-store' })
+    .then(async (res) => (res.ok ? res.json() : res.status === 404 ? null : Promise.reject(new Error(`HTTP ${res.status}`))))
+    // known: the run has a diff to read, even when it is empty
+    .then((doc) => Object.assign(mine, { loading: false, known: typeof doc?.content === 'string', content: typeof doc?.content === 'string' ? doc.content : '', truncated: doc?.truncated === true }),
+      (err) => Object.assign(mine, { loading: false, error: `It could not be loaded (${err.message}).` }))
+    .then(() => { if (teamDiff === mine) renderActivity(); });
+  return mine;
 }
 
 const pipelineView = createPipelineView({
@@ -252,6 +314,7 @@ const pipelineView = createPipelineView({
 control = createControlPanel({
   dashboard, pipeline, lanes, models, getState: current, pipelineForm: createPipelineForm(),
   url: urlFor,
+  chatKey: () => trustKey(scope.get(), { projects: projectsMode }),
   workspace: () => (projectsMode ? findProject(nav?.doc(), scope.get()?.project)?.workspace || null : null),
   limits: () => nav?.doc() ?? null,
   replaying: () => Boolean(replay),
@@ -285,6 +348,12 @@ control = createControlPanel({
 accounts = createAccountsPanel({ getControl: () => control.snapshot(), confirm: control.confirm, onChange: (list) => models.setAccounts(list) });
 // a created, changed or deleted agent changes the gates and agent defaults the New run drawer offers
 agents = createAgentsPanel({ getControl: () => control.snapshot(), confirm: control.confirm, onChange: () => control.refresh() });
+// a project's Dreams: opened from the sidebar, never moves the page to another chat
+const dreams = createDreamingPanel({
+  confirm: control.confirm,
+  getProjects: () => nav?.doc() ?? null,
+  announce: (text) => { $('control-announcer').textContent = text; },
+});
 
 function render() {
   frame = 0;
@@ -342,6 +411,8 @@ function bind(next) {
   chatView.reset();
   livePoll.reset();
   rail.reset();
+  chatLive.reset();
+  thinking.reset();
   thread.setScope();
   nav.render();
   attach();
@@ -403,6 +474,7 @@ nav = createNav({
   openRun: (opts) => control.openRun(opts),
   // a chat removed elsewhere (or the one on screen) moves the page to another one
   onProjects: (doc) => {
+    dreams.projects(doc);
     if (projectsMode && scopeGone(doc, scope.get())) follow({ replace: true });
     else if (projectsMode && bound && applyEngine()) {
       forgetLive();
@@ -417,6 +489,7 @@ nav = createNav({
     }
   },
   announce: (text) => { $('control-announcer').textContent = text; },
+  openDreams: (projectId) => dreams.open(projectId),
 });
 thread = createThread({
   scope, nav, control, onReplay,

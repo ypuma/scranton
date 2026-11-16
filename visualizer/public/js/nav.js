@@ -15,6 +15,7 @@ const COLLAPSED_KEY = 'scranton.navCollapsed';
 const enc = encodeURIComponent;
 // the maxlength of #p-folder
 const FOLDER_MAX = 1024;
+const SINGLE_DREAMS = 'Dreams need the project registry; this server serves a single project.';
 
 // The desktop app's folder picker (Tauri dialog plugin). A browser never hands out an absolute path, so it has none.
 function dialogInvoke() {
@@ -47,7 +48,8 @@ async function getDoc(url) {
 }
 
 // getScope(): the scope on screen. navigate(scope, { replace }) shows another one. openRun(opts): the New run drawer.
-export function createNav({ getScope, navigate, openRun, onProjects, announce }) {
+// openDreams(projectId): the project's Dreams drawer; it leaves the chat on screen as it is.
+export function createNav({ getScope, navigate, openRun, onProjects, announce, openDreams = null }) {
   const e = {
     nav: $('sidebar'), toggle: $('nav-toggle'), toggleLabel: $('nav-toggle-label'), alert: $('nav-alert'), scrim: $('nav-scrim'),
     mode: $('nav-mode'), add: $('project-new'), status: $('nav-status'), list: $('projects'), empty: $('nav-empty'), capacity: $('nav-capacity'),
@@ -209,6 +211,18 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce })
         row.append(remove);
       }
     }
+    if (kind === 'project' && openDreams) {
+      const dreams = button('btn btn-small', 'Dreams', `Dreams of ${project.name}`);
+      dreams.dataset.act = 'dreams';
+      dreams.setAttribute('aria-haspopup', 'dialog');
+      row.append(dreams);
+      // Dreams are kept per registry project; a single-project server has nowhere to keep them
+      if (model.single) {
+        dreams.setAttribute('aria-disabled', 'true');
+        dreams.title = SINGLE_DREAMS;
+        row.append(el('span', 'hint', SINGLE_DREAMS));
+      }
+    }
     row.dataset.kind = kind;
     row.dataset.project = project.id;
     if (kind === 'chat') row.dataset.chat = item.id;
@@ -280,7 +294,7 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce })
       row.append(add);
     }
     li.append(row);
-    if (!model.single) {
+    if (!model.single || openDreams) {
       const id = `nav-act-p-${p.id}`;
       row.append(moreButton(id, `Actions for project ${p.name}`));
       li.append(actionsRow(id, 'project', p, p));
@@ -339,6 +353,10 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce })
       const row = act.closest('.nav-actions');
       const target = { project: row.dataset.project, chat: row.dataset.chat ?? null };
       if (act.dataset.act === 'rename') return rename(row.dataset.kind, target);
+      if (act.dataset.act === 'dreams') {
+        if (act.getAttribute('aria-disabled') === 'true') return status(act.title, 'error');
+        return openDreams?.(target.project);
+      }
       if (act.getAttribute('aria-disabled') === 'true') return status(act.title, 'error');
       return remove(row.dataset.kind, target);
     }
@@ -627,6 +645,8 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce })
         ran = true;
         await refresh();
         navigate({ project: p.id, chat: chatId });
+        // the chat the run started in: the drawer keeps the no-sandbox acknowledgement for it
+        return { ...r, chat: { project: p.id, chat: chatId } };
       }
       return r;
     }

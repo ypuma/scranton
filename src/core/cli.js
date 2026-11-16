@@ -21,7 +21,9 @@ import { createAuthService } from './auth.js';
 import { validateDockerModels } from './sandbox.js';
 import { activeRoles } from './workflow.js';
 import os from 'node:os';
+import { dreamingCap, teamDreamingCohort, teamDreamingContext } from './dreaming-sources.js';
 import { createProjectRegistry, derivedChatTitle } from './projects.js';
+import { resolveReflectionModel } from './dreaming-reflection-sources.js';
 import { listRuns, formatThreadContext } from './thread.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -48,6 +50,10 @@ Usage:
   scranton logout <claude|chatgpt>          Remove one stored provider credential
   scranton accounts                        Show account status (no token refresh)
   scranton projects list|add <name> [--workspace PATH] [--create]|remove <id> [--delete-history]
+  scranton dreaming status|preview|run|on|off|rollback --data DIR --project ID [--json]
+                                           Local deterministic project memory (default off)
+  scranton dreaming propose [--provider P --model M]|apply --proposal ID|reject --proposal ID|cancel
+                                           Reviewed model reflection; requires --data DIR --project ID
   scranton chats <project>                 List threads in a project
   scranton agents                          List agents and effective settings
   scranton agent set-model <id> --provider P --model M [--thinking T]
@@ -60,7 +66,7 @@ Options:
   --gates STAGES       Ordered gates, e.g. oscar+hank,angela
   --parallel N         Maximum concurrent milestone pipelines (default 3)
   --trusted-host       Explicitly run outside Docker (worktrees remain isolated)
-  --sandbox MODE       docker (default); host requires --trusted-host
+  --sandbox MODE       host (default, no OS isolation); explicit host requires --trusted-host
   --sandbox-image IMG  Docker image (default scranton-sandbox:1.5.0-r2)
   --sandbox-network N  none | bridge (default bridge)
   --workspace DIR      Where the agents work (default ./workspace; demo: ./demo-workspace)
@@ -81,6 +87,8 @@ Environment and .env: see .env.example. Precedence: flags > env > scranton.confi
 `;
 
 const OPTIONS = {
+  json: { type: 'boolean' },
+  proposal: { type: 'string' },
   data: { type: 'string' },
   'single-hive': { type: 'boolean' },
   project: { type: 'string' },
@@ -152,7 +160,7 @@ function policyOf(values, config) {
 }
 
 /** Runs the CLI and returns the exit code. */
-export async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, stdin = process.stdin, env = process.env, cwd = process.cwd(), auth } = {}) {
+export async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, stdin = process.stdin, env = process.env, cwd = process.cwd(), auth, completeReflection } = {}) {
   const startup = registerParentStartup({ env });
   let begun = false;
   const begin = async () => { begun = true; await startup.begin(); };
@@ -173,6 +181,7 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
       // Keep workspace dotenv values out of the inherited environment used by later runs.
       loadDotEnv(registryRun ? PACKAGE_ROOT : cwd, (file) => { env = { ...parseEnv(readFileSync(file, 'utf8')), ...env }; });
     } else loadDotEnv(cwd);
+    if (command === 'dreaming') return await cmdDreaming(rest, values, { stdout, env, cwd, auth, completeReflection });
     if (['accounts', 'login', 'logout', 'provider'].includes(command)) {
       return await cmdAuth(command, rest, values, { stdout, stderr, stdin, auth: auth ?? createAuthService({ env }) });
     }
@@ -372,6 +381,29 @@ async function cmdAuth(command, args, values, { stdout, stderr, stdin, auth }) {
   finally { off(); rl.close(); await auth.close(); }
 }
 
+async function cmdDreaming(args, values, { stdout, env, cwd, auth, completeReflection }) {
+  if (args.length !== 1 || !['status', 'preview', 'run', 'on', 'off', 'rollback', 'propose', 'apply', 'reject', 'cancel'].includes(args[0]) || !(values.data || env.SCRANTON_DATA) || !values.project || values['single-hive']) throw new UsageError('dreaming requires status|preview|run|on|off|rollback|propose|apply|reject|cancel --data DIR --project ID (Registry projects only)');
+  const registry = createProjectRegistry({ dataDir: path.resolve(cwd, values.data || env.SCRANTON_DATA) });
+  const dream = registry.dreaming(values.project, { completeReflection });
+  const ownAuth = !auth && args[0] === 'propose' ? createAuthService({ env }) : null;
+  try {
+    const action = args[0];
+    if (['apply', 'reject'].includes(action) && !values.proposal) throw new UsageError('--proposal ID is required');
+    if (!['apply', 'reject'].includes(action) && values.proposal) throw new UsageError('--proposal is only valid for apply/reject');
+    const model = action === 'propose' ? await resolveReflectionModel(auth ?? ownAuth, values.provider === undefined ? values.model ?? dream.status().reflectionModel : `${values.provider}/${values.model ?? ''}`) : null;
+    const off = action === 'propose' ? onInterrupt(() => { void dream.cancelReflection(); }) : () => {};
+    let result;
+    try { result = action === 'propose' ? await dream.propose({ model })
+      : action === 'apply' ? dream.applyProposal(values.proposal)
+      : action === 'reject' ? dream.rejectProposal(values.proposal)
+      : action === 'cancel' ? dream.cancelReflection()
+      : action === 'on' || action === 'off' ? dream.configure({ enabled: action === 'on' }) : dream[action === 'run' ? 'sweep' : action](); }
+    finally { off(); }
+    stdout.write(values.json ? JSON.stringify(result) + '\n' : `Dreaming ${action}: ${result.state}; automatic sweeps ${result.enabled ? 'on' : 'off'}; policy adoption ${result.applyPolicy ? 'on' : 'off'}; ${result.counts.promoted} memories, ${result.counts.worlds} replay worlds.\nReflection: ${result.reflection.state}${result.reflection.proposal ? `; proposalId: ${result.reflection.proposal.id}` : ''}.\n${[...result.limitations, ...result.reflection.limitations].join('\n')}\n`);
+    return 0;
+  } finally { await dream.close(); await ownAuth?.close(); }
+}
+
 function cmdProjects(command, args, values, config, { stdout }) {
   const registry = createProjectRegistry({ dataDir: config.dataDir ?? path.join(process.env.APPDATA ?? path.join(os.homedir(), '.local', 'share'), 'dev.scranton.desktop') });
   if (command === 'chats') {
@@ -404,8 +436,20 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
     const registry = createProjectRegistry({ dataDir: config.dataDir });
     const project = registry.getProject(values.project);
     const chat = values.chat ? registry.getChat(project.id, values.chat) : registry.createChat(project.id, { title: derivedChatTitle(request) });
+    if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
     if (!values['thread-context']) threadContext = formatThreadContext(listRuns(chat.hiveDir), { maxChars: 8000 });
     config = loadConfig({ cwd: PACKAGE_ROOT, env, flags: { ...toFlags(values), config: undefined, workspace: project.workspace, hive: chat.hiveDir } });
+    try {
+      const dream = registry.dreaming(project.id);
+      try { Promise.resolve(dream.cancelReflection?.()).catch(() => {}); } catch {}
+      let context, maxFailedCycles;
+      try {
+        context = teamDreamingContext(threadContext, dream.context());
+        maxFailedCycles = dreamingCap(dream, 'team', config.maxFailedCycles, teamDreamingCohort(config));
+      } finally { dream.close(); }
+      threadContext = context;
+      config = { ...config, maxFailedCycles };
+    } catch { /* Optional dreaming must not prevent a run or replace its existing context/ceiling on failure. */ }
     acquire = (hive, info) => registry.locked(() => {
       registry.getChat(project.id, chat.id);
       if (readRunLease(hive)) throw Object.assign(Error('Chat is already owned'), { code: 'EEXIST' });

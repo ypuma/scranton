@@ -45,7 +45,7 @@ test('registry runs reject workspace-only data sources before loading execution 
     assert.equal(process.env.SCRANTON_DATA, undefined);
     assert.equal(await runCli(['run', 'goal', '--project', project.id, '--data', data], { ...options, env: { ...options.env, ...Object.fromEntries(['MICHAEL', 'DWIGHT', 'ANGELA'].flatMap((role) => [[`SCRANTON_${role}_PROVIDER`, 'openai'], [`SCRANTON_${role}_MODEL`, 'test-model']])) } }), 0);
     assert.notDeepEqual(seen.at(-1).pi.command, ['workspace-pi']);
-    assert.equal(seen.at(-1).execution.sandbox.mode, 'docker');
+    assert.equal(seen.at(-1).execution.sandbox.mode, 'host');
     seen.length = 0;
   }
 });

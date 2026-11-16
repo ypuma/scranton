@@ -108,3 +108,18 @@ def test_error_taxonomy_and_run_status_alias():
     assert not issubclass(SuspendRequested, EngineError)
     status = RunStatus(run_id="abcdefgh", status="running", phase="prepare")
     assert status.model_dump(by_alias=True)["schema"] == 1
+
+
+def test_sandbox_default_host_and_explicit_docker_with_trust_guard(tmp_path):
+    from scranton_pipeline.config import SandboxConfig
+    from scranton_pipeline.tools.sandbox import DockerSandbox, HostSandbox, build_sandbox
+
+    cfg = EngineConfig.model_validate(config_data())
+    assert cfg.sandbox.mode == "host"
+    with pytest.raises(EngineError, match="trust"):
+        build_sandbox(cfg.sandbox, workspace=tmp_path, run_id="12345678", trust_host=False)
+    assert isinstance(build_sandbox(cfg.sandbox, workspace=tmp_path, run_id="12345678",
+                                    trust_host=True), HostSandbox)
+    docker = SandboxConfig(mode="docker")
+    assert isinstance(build_sandbox(docker, workspace=tmp_path, run_id="12345678",
+                                    trust_host=False), DockerSandbox)

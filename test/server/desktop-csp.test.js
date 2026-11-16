@@ -31,6 +31,9 @@ test('dashboard HTTP CSP permits only same-origin and Tauri IPC connections', as
         ['script-src', "'self'"],
         ['style-src', "'self'"],
         ['img-src', "'self'", 'data:'],
+        // the Browser side panel frames a dev server on this computer: loopback over HTTP only, any port; the
+        // frame is sandboxed in index.html and scripts, styles and connections keep to the app's own origin
+        ['frame-src', "'self'", 'http://localhost:*', 'http://127.0.0.1:*'],
         ['object-src', "'none'"],
         ['base-uri', "'none'"],
         ['frame-ancestors', "'none'"],

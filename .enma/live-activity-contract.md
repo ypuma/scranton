@@ -86,6 +86,26 @@ Routes, with the same guards as the neighbouring state routes:
   only when `runId` matches the shown run and the instance is active in reducer state. A 404 or an error
   means the feature is quietly off. Rendered with `textContent` only.
 
+## 3a. Saved thinking (v1.3)
+
+A block of reasoning or visible text that is done is also kept with the run, so a finished or reopened run can
+show what its models thought. Still not journaled: it has a file of its own, `hive/thoughts.jsonl`, archived to
+`hive/runs/<runId>/thoughts.jsonl` together with the journal. One line per block:
+
+    { v: 1, n, ts, runId, instanceId, agent, kind: "reasoning" | "answer", text, cut }
+
+- `n` counts from 1 per run. `text` is the block's first 20,000 chars, sanitised and redacted like the tails;
+  `cut` is true when it was shortened or when the block never ended (the agent stopped mid-block: what was
+  seen of it, at most its last 4,000 chars, is kept).
+- A run keeps at most 8 MiB; blocks after that are dropped. A failed write never stops a run.
+- Route: `GET /api/projects/:p/chats/:c/runs/:runId/thoughts?after=<n>` (single mode: project and chat
+  `default`). 200: `{ v: 1, runId, thoughts: [...], next }` with the blocks of `n > after`; 404: the run kept
+  none (an older run, or a pipeline chat).
+- `live.json` instances gain `open: "thinking" | "text" | null`: the kind of block still being written. A
+  client that shows the saved blocks shows the live tail only for that kind, so a block is never shown twice.
+- Tool calls are not repeated here: the journal's `agent_tool` events carry them, and a client orders both by `ts`.
+- Pipeline runs save no thinking.
+
 ## 4. Pipeline
 
 Pipeline has no tool calls and no SSE; its view polls `.../pipeline/runs/:runId`.

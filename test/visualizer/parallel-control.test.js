@@ -6,7 +6,8 @@ import {
 import {
   chatRecipients, buildChatRequest, transcript, pruneOutbox, outboxStale, deliveryNews, composerBlock, matchOutbox, CHAT_MAX, OUTBOX_STALE_MS,
 } from '../../visualizer/public/js/chat.js';
-import { reduceAll } from '../../visualizer/public/js/state.js';
+import { reduceAll, normalizeExecution } from '../../visualizer/public/js/state.js';
+import { executionBadges } from '../../visualizer/public/js/lanes.js';
 
 const RUN = { pid: 42, mode: 'run', request: 'Todo', workspace: 'C:\\ws', startedAt: '2026-11-08T12:00:00.000Z', runId: 'r1', exitCode: null };
 const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'none' } } };
@@ -62,9 +63,27 @@ test('parseControl reads defaults.execution, instances and recovery', () => {
   assert.equal(parseControl(null).recoveryRequired, false);
 });
 
-test('executionDefaults: the server defaults, else the engine defaults', () => {
+test('executionDefaults: the server defaults, else the engine defaults; Docker only when the configuration names it', () => {
   assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'none' });
-  assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'docker', image: EXECUTION_DEFAULTS.sandbox.image, network: 'bridge' });
+  assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'host', image: EXECUTION_DEFAULTS.sandbox.image, network: 'bridge' });
+  const host = { execution: { ...DEFAULTS.execution, sandbox: { mode: 'host' } } };
+  assert.equal(executionDefaults(parseControl(doc({ defaults: host }))).sandbox, 'host');
+  for (const mode of [undefined, '', 'vm', 7]) {
+    const odd = { execution: { maxParallel: 2, sandbox: mode === undefined ? undefined : { mode } } };
+    assert.equal(executionDefaults(parseControl(doc({ defaults: odd }))).sandbox, 'host', `mode ${String(mode)}`);
+  }
+  assert.equal(EXECUTION_DEFAULTS.trustedHost, false, 'the acknowledgement is never a default');
+  // what a run reported stays as reported: an execution without a sandbox mode is not read as the host
+  assert.deepEqual(parseControl(doc({ defaults: { execution: { maxParallel: 2 } } })).execution.sandbox, { mode: null, image: null, network: null });
+  assert.equal(parseControl(doc({ defaults: { execution: { maxParallel: 2 } } })).execution.trustedHost, false);
+});
+
+test('the host default of the form never colours a recorded run: an unknown sandbox gets no badge', () => {
+  const labels = (x) => executionBadges(normalizeExecution(x)).map(([t]) => t);
+  assert.deepEqual(labels(null), [], 'an older run without execution');
+  assert.deepEqual(labels({ maxParallel: 2, isolation: 'worktree' }), ['max 2 parallel', 'worktrees'], 'no sandbox reported: neither host nor Docker');
+  assert.deepEqual(labels({ maxParallel: 2, sandbox: { mode: 'docker', image: 'x:1' } }), ['max 2 parallel', 'docker']);
+  assert.deepEqual(labels({ maxParallel: 2, sandbox: { mode: 'host' } }), ['max 2 parallel', 'trusted host']);
 });
 
 test('buildRunRequest: parallelism and the docker sandbox by default', () => {

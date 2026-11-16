@@ -39,6 +39,8 @@ function harness({ alive = false, realModels = false } = {}) {
     dashboard: stub, pipeline: stub, lanes: stub, models, getState: () => createState(),
     url: (suffix) => `/api/projects/core/chats/${scope.chat}/${suffix}`,
   });
+  // the human acknowledged the default trusted host earlier, so only the chat switch can stop a post
+  $('f-trusted').checked = true;
   // what main.js bind() does on a chat switch
   const switchTo = (chat) => {
     scope.chat = chat;

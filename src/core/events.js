@@ -39,6 +39,8 @@ export class EventRecorder {
     fs.mkdirSync(this.hiveDir, { recursive: true });
     archivePreviousRun(this.hiveDir);
     withFsRetry(() => fs.writeFileSync(this.eventsFile, ''));
+    // the previous run's thoughts went to its archive; a copy a reader held on to is not this run's
+    try { fs.rmSync(path.join(this.hiveDir, 'thoughts.jsonl'), { force: true }); } catch { /* its lines carry their own runId */ }
     this.live = createLiveActivity(this.hiveDir, this.runId);
   }
 
@@ -129,6 +131,9 @@ function archivePreviousRun(hiveDir) {
   if (files.length === 0) return;
   const hasContent = files.some((f) => fs.statSync(f).size > 0);
   if (!hasContent) return;
+  // what the run's models thought goes with its journal
+  const thoughts = path.join(hiveDir, 'thoughts.jsonl');
+  if (fs.existsSync(thoughts)) files.push(thoughts);
   const id = previousRunId(hiveDir) ?? `unknown-${Date.now()}`;
   let dest = path.join(hiveDir, 'runs', id);
   for (let n = 2; fs.existsSync(dest); n++) dest = path.join(hiveDir, 'runs', `${id}-${n}`);

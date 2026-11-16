@@ -307,7 +307,9 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                     raise invalid("stale_digest", "Gate artifact changed")
             cleanup_provider(deps)
             cleanup_sandbox(deps)
-            deps.events.emit("run_resumed")
+            deps.events.emit("run_resumed", gate=gate if not cancelling else None,
+                             decision=decision if not cancelling else None,
+                             has_feedback=bool(comment) if status.pending and not cancelling else False)
             return drive(deps, value)
 
 

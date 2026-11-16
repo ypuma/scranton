@@ -26,9 +26,13 @@ const CONTROL = {
   instances: {}, recoveryRequired: false,
 };
 const SOL = { provider: 'openai', model: 'gpt-6.1-sol' };
+// a workspace configured for Docker: the drawer opens on it
+const DOCKER = { execution: { sandbox: { mode: 'docker' } } };
+// a server that reports no agent defaults, in a Docker workspace
+const NO_DEFAULTS = { ...CONTROL, defaults: DOCKER };
 // a current server: Michael's model comes from Scranton's configuration, the others have none
-const CONFIGURED = { ...CONTROL, defaults: { models: { michael: SOL, dwight: null, angela: null } } };
-const EVERY = { ...CONTROL, defaults: { models: { michael: SOL, dwight: SOL, angela: SOL } } };
+const CONFIGURED = { ...CONTROL, defaults: { ...DOCKER, models: { michael: SOL, dwight: null, angela: null } } };
+const EVERY = { ...CONTROL, defaults: { ...DOCKER, models: { michael: SOL, dwight: SOL, angela: SOL } } };
 
 test('dockerGaps: Docker needs an agent default for every role it starts; the trusted host and a demo need none', () => {
   const every = { michael: SOL, dwight: SOL, angela: SOL };
@@ -176,7 +180,7 @@ async function openDrawer(h) {
 }
 
 test('drawer: a server that reports no agent defaults refuses Docker with its note; the trusted host and a demo run', async (t) => {
-  const h = harness();
+  const h = harness({ control: NO_DEFAULTS });
   t.after(() => h.panel.setMode('demo'));
   await openDrawer(h);
   assert.equal(h.$('models-need').hidden, false);
@@ -239,8 +243,7 @@ test('follow-up: Docker without agent defaults posts nothing and says why, with 
   assert.match(r.error, /Dwight and Angela have none\. Set one for each in Agents\./);
   assert.equal(h.$('run-dialog').open, false, 'the composer says it; the drawer opens only when asked');
 
-  h.$('f-sandbox-host').checked = true;
-  h.$('f-trusted').checked = true;
+  await h.host();
   assert.deepEqual(await h.panel.startFollowUp('Next step'), { ok: true }, 'the trusted host keeps pi default');
   assert.equal(h.posts[0].body.sandbox, 'host');
 });
@@ -260,7 +263,7 @@ test('follow-up: a server 400 about models also leads to Options', async (t) => 
 });
 
 test('composer: the reason goes to its status line, and Open Options shows it on the select', async (t) => {
-  const h = harness();
+  const h = harness({ control: NO_DEFAULTS });
   t.after(() => h.panel.setMode('demo'));
   h.panel.setMode('live');
   await h.tick();

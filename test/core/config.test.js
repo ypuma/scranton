@@ -145,3 +145,15 @@ test('registry data and maxConcurrentRuns follow flags, environment, file and de
   assert.equal(c.dataDir, path.join(base.cwd, 'flag-data')); assert.equal(c.maxConcurrentRuns, 2);
   assert.throws(() => loadConfig({ ...base, env: { SCRANTON_MAX_RUNS: '0' }, fileConfig: {} }), /maxConcurrentRuns/);
 });
+
+test('sandbox defaults to host while explicit Docker and host acknowledgements remain enforced', () => {
+  const config = (fileConfig = {}, flags = {}) => loadConfig({ ...base, env: {}, fileConfig, flags });
+  assert.equal(config().execution.sandbox.mode, 'host');
+  assert.equal(config().execution.isolation, 'worktree');
+  assert.equal(config({ execution: { sandbox: { mode: 'docker' } } }).execution.sandbox.mode, 'docker');
+  assert.equal(config({}, { sandbox: 'docker' }).execution.sandbox.mode, 'docker');
+  assert.equal(config({ execution: { sandbox: { mode: 'docker' } } }, { trustedHost: true }).execution.sandbox.mode, 'host');
+  assert.throws(() => config({}, { sandbox: 'host' }), /requires --trusted-host/);
+  assert.equal(config({}, { sandbox: 'host', trustedHost: true }).execution.sandbox.mode, 'host');
+  assert.throws(() => config({ execution: { isolation: 'shared', maxParallel: 1 } }), /requires explicit trusted-host/);
+});

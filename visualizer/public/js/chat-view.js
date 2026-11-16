@@ -30,7 +30,7 @@ function place(parent, nodes) {
 // announce(text, kind): the page's live region; called for a new reply and a question that waits, nothing else.
 // ask(entry) -> { label, open() } | null: the one button of a question that waits, for an engine whose answer
 //   controls are not docked under the transcript. The view itself never answers anything.
-export function createChatView({ getEntries, currentRunId = () => null, loadRun = null, announce = () => {}, ask = () => null }) {
+export function createChatView({ getEntries, currentRunId = () => null, loadRun = null, announce = () => {}, ask = () => null, plan = null }) {
   const e = { scroll: $('chat-view-scroll'), list: $('chat-view-list'), jump: $('chat-view-jump') };
   // runId -> { el, tools, toggle, note, items: Map(entry id -> { el, key }) }
   const sections = new Map();
@@ -132,11 +132,21 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
     if (text.trim()) {
       const body = el('div', model ? 'chat-body md' : 'chat-body');
       // what a person typed is shown as typed; what a model wrote goes through the Markdown subset
-      if (model) body.append(...renderMarkdown(text));
+      // an entry that carries a plan (the planner's message) is read as one, not as a long line of JSON
+      const planned = plan && Array.isArray(x.plan) && x.plan.length > 0;
+      if (planned) body.append(plan.render(x.plan));
+      else if (model) body.append(...renderMarkdown(text));
       else body.textContent = text;
       parts.push(body);
+      if (planned && plan.open) {
+        const b = el('button', 'btn btn-small chat-plan', 'Open the plan');
+        b.type = 'button';
+        b.dataset.plan = x.id;
+        parts.push(b);
+      }
     }
-    const long = isLong(text);
+    // a plan shown as its titles (plan.brief) is short whatever the length of the JSON it came as
+    const long = !(plan?.brief && Array.isArray(x.plan) && x.plan.length > 0) && isLong(text);
     node.dataset.long = String(long);
     node.toggleAttribute('data-open', expanded.has(x.id));
     if (long) {
@@ -312,6 +322,7 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
       toggleRun(run.dataset.runId);
       return;
     }
+    if (ev.target.closest('button[data-plan]')) { plan?.open?.(); return; }
     const asked = ev.target.closest('button[data-ask]');
     const entry = asked ? getEntries().find((x) => x.id === asked.dataset.ask) : null;
     if (entry) ask(entry)?.open();

@@ -946,7 +946,7 @@ test('consecutive same-speaker/context messages share a name line while tools an
   assert.match(css, /\.chat-entry\[data-kind="activity"\]\[data-cont="true"\] \{ margin-left: var\(--s3\); \}/);
 });
 
-test('Chat visual rules show project / title, suppress only success, and leave just status/elapsed/connection', () => {
+test('Chat visual rules show project / title, suppress only the outcome the reply states, and leave just status/elapsed/connection', () => {
   const h = threadHarness({ view: 'chat' });
   assert.equal(h.$('thread-project').hidden, false);
   assert.equal(h.$('thread-project').textContent, 'Core');
@@ -958,7 +958,7 @@ test('Chat visual rules show project / title, suppress only success, and leave j
   assert.equal(h.$('thread-sep').hidden, true);
   const css = read('styles.css');
   assert.match(css, /body\[data-view="chat"\] \.runline :is\(\.summary, \.more-toggle, \.run-more\) \{ display: none; \}/);
-  assert.match(css, /body\[data-view="chat"\] \.alert\[data-kind="finished"\] \{ display: none; \}/);
+  assert.match(css, /body\[data-view="chat"\] \.alert:is\(\[data-kind="finished"\], \[data-kind="ended"\]\) \{ display: none; \}/);
   assert.doesNotMatch(css, /body\[data-view="chat"\] \.alert\s*\{[^}]*display: none/);
   assert.doesNotMatch(css, /body\[data-view="chat"\] \.thread-project\s*\{[^}]*display: none/);
   const html = read('index.html');
@@ -991,7 +991,7 @@ test('Pipeline pending question opens Details through one button without duplica
   assert.doesNotMatch(main, /viewMode\.offer\(.*pipeline/);
 });
 
-test('only a successful Team outcome receives the redundant-finished marker; failures and partial results stay visible', () => {
+test('an outcome the reply states is marked redundant for Chat (success, failed, aborted); a partial result stays visible', () => {
   const $ = installTree();
   for (const cls of ['pill-glyph', 'pill-text']) {
     const span = document.createElement('span');
@@ -1005,6 +1005,6 @@ test('only a successful Team outcome receives the redundant-finished marker; fai
       { type: 'run_finished', runId: 'r', seq: 2, ts: '2026-11-11T10:01:00Z', status: result, summary: result },
     ]));
     assert.equal($('alert').hidden, false, 'Dashboard retains its outcome alert');
-    assert.equal($('alert').dataset.kind, result === 'success' ? 'finished' : 'attention');
+    assert.equal($('alert').dataset.kind, { success: 'finished', partial: 'attention' }[result] ?? 'ended');
   }
 });

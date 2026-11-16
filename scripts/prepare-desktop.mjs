@@ -205,7 +205,7 @@ export async function prepareDesktop() {
       path.isAbsolute(entrypoint) || entrypoint.split(/[\\/]/).includes('..')) throw new Error('Installed Pi identity/entrypoint does not match the supported lockfile.');
   await fs.access(path.join(root, piPath, entrypoint));
   const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
-    'tools/fake-pi.js', 'tools/fake-pi-rpc.js', 'tools/pi-agent-chat.js', 'tools/pipeline-pi-complete.js', 'scranton.config.json', 'package.json', 'package-lock.json'];
+    'tools/fake-pi.js', 'tools/fake-pi-rpc.js', 'tools/pi-agent-chat.js', 'tools/pipeline-pi-complete.js', 'tools/dreaming-pi-complete.js', 'scranton.config.json', 'package.json', 'package-lock.json'];
   for (const input of inputs) {
     try { await fs.access(path.join(root, input)); }
     catch { throw new Error(`Required desktop input is missing: ${input}`); }

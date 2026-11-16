@@ -46,8 +46,10 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
     rail: $('run-rail'), body: $('rail-body'), close: $('rail-close'), status: $('rail-status'),
     toggle: $('rail-toggle'), toggleFig: $('rail-toggle-fig'), line: $('run-live-line'), lineText: $('run-live-text'),
     dialog: $('rail-dialog'), dialogBody: $('rail-dialog-body'), dialogClose: $('rail-dialog-close'),
-    agents: $('rail-agents'), agentsAside: $('rail-agents-aside'), agentsEmpty: $('rail-agents-empty'), agentsMore: $('rail-agents-more'),
-    liveNote: $('rail-live-note'), usage: $('rail-usage'),
+    agents: $('rail-agents'), agentsTitle: $('rail-agents-title'), agentsAside: $('rail-agents-aside'), agentsEmpty: $('rail-agents-empty'), agentsMore: $('rail-agents-more'),
+    liveNote: $('rail-live-note'), usage: $('rail-usage'), usageMore: $('rail-usage-more'),
+    outcome: $('rail-outcome'), oResult: $('rail-outcome-result'), oUnit: $('rail-outcome-unit'), oDone: $('rail-outcome-done'), oDoneFig: $('rail-outcome-done-fig'),
+    oDuration: $('rail-outcome-duration'), oDurationFig: $('rail-outcome-duration-fig'), oCost: $('rail-outcome-cost'),
     board: $('rail-board'), boardSummary: $('rail-board-summary'), boardNotice: $('rail-board-notice'),
   };
   const usage = createUsage({ height: 132, id: 'rail-usage' });
@@ -56,6 +58,8 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
   let collapsed = parseRailChoice(store.get(RAIL_KEY));
   let overlay = false;
   let all = false;
+  // the diagram of a run that is over is opened by the human: { run, open }; a run that is going always shows it
+  let chart = { run: null, open: false };
   let view = null;
   // agent id -> the nodes of its entry
   const items = new Map();
@@ -99,6 +103,8 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
       fill(it, a);
       return it.el;
     }));
+    // "now" is only true while the run is going
+    say(e.agentsTitle, view.live ? 'Agents now' : 'Agents');
     say(e.agentsAside, agentsSummary(view.agents));
     e.agentsEmpty.hidden = view.agents.length > 0;
     e.agentsMore.hidden = !hidden && !(all && view.agents.length > RAIL_AGENTS_SHOWN);
@@ -107,6 +113,28 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
     const off = view.live && liveOff();
     e.liveNote.hidden = !off;
     say(e.liveNote, off ? LIVE_OFF : '');
+  }
+
+  // A run that is over: how it ended comes first, and its diagram is folded away until it is asked for.
+  function drawOutcome() {
+    const o = view.outcome;
+    e.outcome.hidden = !o;
+    if (o) {
+      say(e.oResult, o.label);
+      e.oResult.dataset.tone = o.tone;
+      say(e.oUnit, o.unit);
+      say(e.oDone, o.done);
+      e.oDoneFig.hidden = !o.done;
+      say(e.oDuration, o.duration);
+      e.oDurationFig.hidden = !o.duration;
+      say(e.oCost, usageFigures(view.usage).cost);
+    }
+    if (chart.run !== view.runId) chart = { run: view.runId, open: false };
+    const open = view.live || chart.open;
+    e.usage.dataset.chart = open ? 'open' : 'closed';
+    e.usageMore.hidden = view.live;
+    say(e.usageMore, open ? 'Hide chart' : 'Show chart');
+    e.usageMore.setAttribute('aria-expanded', String(open));
   }
 
   // Where the rail is, and what follows from it for the toggle, the drawer and the page.
@@ -135,6 +163,7 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
     // out of sight: nothing to draw, the next render that shows it does
     if (m !== 'open' && m !== 'overlay') return;
     say(e.status, [view.live ? 'live' : 'ended', agentsSummary(view.agents)].filter(Boolean).join(' · '));
+    drawOutcome();
     drawAgents();
     usage.render(view.usage, { live: view.live });
     say(e.boardSummary, boardSummary(view.board));
@@ -178,6 +207,10 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
   e.line.addEventListener('click', () => setOpen(true, { focus: e.toggle }));
   e.agentsMore.addEventListener('click', () => {
     all = !all;
+    render();
+  });
+  e.usageMore.addEventListener('click', () => {
+    chart = { run: view?.runId ?? null, open: !chart.open };
     render();
   });
   e.board.addEventListener('click', () => openBoard?.());

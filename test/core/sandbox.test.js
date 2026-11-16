@@ -20,7 +20,7 @@ async function fixture(t) {
   const systemPromptFile = path.join(root, 'prompt.md'); fs.writeFileSync(systemPromptFile, 'prompt');
   const extensionFile = path.join(root, 'extension.js'); fs.writeFileSync(extensionFile, 'export default () => {};');
   t.after(async () => { await manager.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { workspace: tree.dir, sessionDir, systemPromptFile, extensionFile, instanceId: 'dwight-m1', runId: 'r1' };
+  return { sandbox: { mode: 'docker' }, workspace: tree.dir, sessionDir, systemPromptFile, extensionFile, instanceId: 'dwight-m1', runId: 'r1' };
 }
 function docker() {
   const calls = [];
@@ -28,10 +28,10 @@ function docker() {
   return { calls, run, executable: path.resolve('docker-mock.exe') };
 }
 
-test('default docker fails closed with no CLI; host mode is explicit identity override', async () => {
-  const availability = await checkSandbox({}, { executable: null });
+test('explicit Docker fails closed with no CLI; host mode is identity override', async () => {
+  const availability = await checkSandbox({ mode: 'docker' }, { executable: null });
   assert.equal(availability.available, false); assert.match(availability.reason, /Docker CLI not found/);
-  await assert.rejects(prepareSandbox({ workspace: 'not-used' }, { executable: '' }), /Docker CLI not found/);
+  await assert.rejects(prepareSandbox({ sandbox: { mode: 'docker' }, workspace: 'not-used' }, { executable: '' }), /Docker CLI not found/);
   assert.equal((await checkSandbox({ mode: 'host' })).available, true);
   const env = { CUSTOM: 'value' };
   assert.deepEqual(await prepareSandbox({ sandbox: { mode: 'host' }, workspace: '/work', sessionDir: '/session', env }), {
@@ -41,17 +41,17 @@ test('default docker fails closed with no CLI; host mode is explicit identity ov
 
 test('engine and local Linux image preflight never pull/build or fallback', async () => {
   const deps = docker();
-  assert.equal((await checkSandbox({}, deps)).available, true);
+  assert.equal((await checkSandbox({ mode: 'docker' }, deps)).available, true);
   assert.deepEqual(deps.calls.map((c) => c.args[0]), ['info', 'image']);
-  assert.equal((await checkSandbox({}, { ...deps, run: async () => 'windows' })).available, false);
-  assert.equal((await checkSandbox({}, { ...deps, run: async (_exe, args) => args[0] === 'info' ? 'linux' : 'windows' })).available, false);
-  const failure = await checkSandbox({}, { ...deps, run: async () => { throw new Error('private diagnostic must not leak'); } });
+  assert.equal((await checkSandbox({ mode: 'docker' }, { ...deps, run: async () => 'windows' })).available, false);
+  assert.equal((await checkSandbox({ mode: 'docker' }, { ...deps, run: async (_exe, args) => args[0] === 'info' ? 'linux' : 'windows' })).available, false);
+  const failure = await checkSandbox({ mode: 'docker' }, { ...deps, run: async () => { throw new Error('private diagnostic must not leak'); } });
   assert.equal(failure.available, false); assert.doesNotMatch(failure.reason, /private diagnostic/);
 });
 
 test('hardened shell-free launch mounts only checkout/session and exact readonly files; credential names only', async (t) => {
   const options = await fixture(t); const deps = docker();
-  const execution = await prepareSandbox({ ...options, cwd: 'ignored-host-cwd', inboxFile: 'host-only-inbox', sandbox: { network: 'none', credentialEnvNames: ['OPENAI_API_KEY'] }, env: { OPENAI_API_KEY: 'secret-value-never-in-argv', UNRELATED_SECRET: 'must-not-copy', ANTHROPIC_API_KEY: 'not-selected' } }, deps);
+  const execution = await prepareSandbox({ ...options, cwd: 'ignored-host-cwd', inboxFile: 'host-only-inbox', sandbox: { mode: 'docker', network: 'none', credentialEnvNames: ['OPENAI_API_KEY'] }, env: { OPENAI_API_KEY: 'secret-value-never-in-argv', UNRELATED_SECRET: 'must-not-copy', ANTHROPIC_API_KEY: 'not-selected' } }, deps);
   assert.deepEqual(execution.spec.argv, [deps.executable]); assert.equal(execution.spec.shell, false);
   const args = execution.argsPrefix;
   assert.ok(args.includes('--interactive'), 'RPC stdin must remain attached');
@@ -172,7 +172,7 @@ test('review 4: pi default does not inspect or mint unrelated subscriptions', as
 test('review 5: excluded subscription token environment fails closed before minting', async (t) => {
   const options = await fixture(t); const deps = docker(); let minted = false;
   deps.auth = { listAccounts: async () => [{ id: 'openai', kind: 'oauth', status: 'signed_in' }], mintAccessToken: async () => { minted = true; return 'FAKE_MINTED'; } };
-  await assert.rejects(prepareSandbox({ ...options, provider: 'openai', sandbox: { credentialEnvNames: [] } }, deps), /credentialEnvNames.*OPENAI_API_KEY/);
+  await assert.rejects(prepareSandbox({ ...options, provider: 'openai', sandbox: { mode: 'docker', credentialEnvNames: [] } }, deps), /credentialEnvNames.*OPENAI_API_KEY/);
   assert.equal(minted, false);
 });
 
@@ -212,9 +212,9 @@ test('API key Docker launch forwards only selected name; custom models mount is 
 
 test('Docker diagnostics distinguish engine timeout and missing image with installation-local build command', async () => {
   const deps = docker();
-  const engine = await checkSandbox({}, { ...deps, run: async () => { throw Object.assign(Error('private'), { code: 'ETIMEDOUT' }); } });
+  const engine = await checkSandbox({ mode: 'docker' }, { ...deps, run: async () => { throw Object.assign(Error('private'), { code: 'ETIMEDOUT' }); } });
   assert.match(engine.reason, /installed.*engine is not responding.*start Docker Desktop/);
-  const image = await checkSandbox({ image: 'custom-sandbox:1' }, { ...deps, run: async (_exe, args) => {
+  const image = await checkSandbox({ mode: 'docker', image: 'custom-sandbox:1' }, { ...deps, run: async (_exe, args) => {
     if (args[0] === 'info') return 'linux';
     throw Error('private image inspect error');
   } });
@@ -230,7 +230,7 @@ test('Docker default models are refused before run events; host defaults remain 
   const root = fs.mkdtempSync(path.join(scratch, 'default-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let text = ''; const stream = { write(s) { text += s; } };
-  assert.equal(await runCli(['run', '--hive', path.join(root, 'hive'), 'goal'], { cwd: root, env: {}, stdout: stream, stderr: stream }), 2);
+  assert.equal(await runCli(['run', '--sandbox', 'docker', '--hive', path.join(root, 'hive'), 'goal'], { cwd: root, env: {}, stdout: stream, stderr: stream }), 2);
   assert.match(text, /Docker requires an explicit provider and model.*pi default cannot/);
   assert.equal(fs.existsSync(path.join(root, 'hive', 'events.jsonl')), false);
   const config = { execution: { sandbox: { mode: 'docker' } }, agents: { dwight: { provider: 'openai', model: 'chosen-model' } } };
@@ -251,4 +251,13 @@ test('error and blocked activities retain a full actionable first line in events
     const state = reduce(initialState(), { ...event, runId: 'r', seq: 1, ts: new Date().toISOString() });
     assert.equal(state.agents.michael.activity, line);
   }
+});
+
+test('unspecified sandbox uses host without invoking Docker', async () => {
+  const deps = { executable: null, run: async () => assert.fail('host must not probe Docker') };
+  assert.equal((await checkSandbox({}, deps)).mode, 'host');
+  const env = { CUSTOM: 'value' };
+  const launch = await prepareSandbox({ workspace: '/work', sessionDir: '/session', env }, deps);
+  assert.equal(launch.cwd, '/work'); assert.equal(launch.env, env);
+  assert.equal(launch.spec, undefined); assert.equal(launch.argsPrefix, undefined);
 });

@@ -1,0 +1,253 @@
+[
+  {
+    "name": "serial",
+    "positive": [
+      {
+        "schema": 1,
+        "scope": "[0,\"step:s1\",null]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 0,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[0,\"step:s1\",null]",
+        "ordinal": 2,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 0,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[0,\"step:s1\",null]",
+        "ordinal": 3,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 0,
+        "retry_ceiling": 3
+      }
+    ],
+    "negative": [
+      {
+        "schema": 1,
+        "scope": "[0,\"step:s1\",null]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 1,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[0,\"step:s1\",null]",
+        "ordinal": 2,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 1,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[0,\"step:s1\",null]",
+        "ordinal": 3,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 1,
+        "retry_ceiling": 3
+      }
+    ]
+  },
+  {
+    "name": "lane",
+    "positive": [
+      {
+        "schema": 1,
+        "scope": "[2,\"step:s1\",[3,0,\"s1\"]]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 2,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"step:s1\",[3,0,\"s1\"]]",
+        "ordinal": 2,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 2,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"step:s1\",[3,0,\"s1\"]]",
+        "ordinal": 3,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 2,
+        "retry_ceiling": 3
+      }
+    ],
+    "negative": [
+      {
+        "schema": 1,
+        "scope": "[2,\"step:s1\",[3,0,\"s1\"]]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 3,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"step:s1\",[3,0,\"s1\"]]",
+        "ordinal": 2,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 3,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"step:s1\",[3,0,\"s1\"]]",
+        "ordinal": 3,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 3,
+        "retry_ceiling": 3
+      }
+    ]
+  },
+  {
+    "name": "revision",
+    "positive": [
+      {
+        "schema": 1,
+        "scope": "[2,\"rev:1\",null]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 2,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"rev:1\",null]",
+        "ordinal": 2,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 2,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"rev:1\",null]",
+        "ordinal": 3,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 2,
+        "retry_ceiling": 3
+      }
+    ],
+    "negative": [
+      {
+        "schema": 1,
+        "scope": "[2,\"rev:1\",null]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 3,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"rev:1\",null]",
+        "ordinal": 2,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 3,
+        "retry_ceiling": 3
+      },
+      {
+        "schema": 1,
+        "scope": "[2,\"rev:1\",null]",
+        "ordinal": 3,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 3,
+        "retry_ceiling": 3
+      }
+    ]
+  },
+  {
+    "name": "remaining-budget",
+    "positive": [
+      {
+        "schema": 1,
+        "scope": "[1,\"step:s1\",null]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 1,
+        "retry_ceiling": 2
+      },
+      {
+        "schema": 1,
+        "scope": "[1,\"step:s1\",null]",
+        "ordinal": 2,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 1,
+        "retry_ceiling": 2
+      }
+    ],
+    "negative": [
+      {
+        "schema": 1,
+        "scope": "[1,\"step:s1\",null]",
+        "ordinal": 1,
+        "result": "failed",
+        "quality": 0,
+        "plan_revision": 2,
+        "retry_ceiling": 2
+      },
+      {
+        "schema": 1,
+        "scope": "[1,\"step:s1\",null]",
+        "ordinal": 2,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 2,
+        "retry_ceiling": 2
+      }
+    ]
+  },
+  {
+    "name": "long-escaped-lane",
+    "positive": [
+      {
+        "schema": 1,
+        "scope": "[0,\"step:\\u03bb\\\"\\\\:[]xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",[2,3,\"\\u03bb\\\"\\\\:[]xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]]",
+        "ordinal": 1,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 0,
+        "retry_ceiling": 3
+      }
+    ],
+    "negative": [
+      {
+        "schema": 1,
+        "scope": "[0,\"step:\\u03bb\\\"\\\\:[]xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",[2,3,\"\\u03bb\\\"\\\\:[]xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]]",
+        "ordinal": 1,
+        "result": "passed",
+        "quality": 1,
+        "plan_revision": 1,
+        "retry_ceiling": 3
+      }
+    ]
+  }
+]

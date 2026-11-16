@@ -70,13 +70,13 @@ function outcomeProjection(status, report, reply, hasPlan) {
     note: 'Historical observations only. Other verified work is repair/integration, not plan steps. Unverified attempts are not counted; failed attempted edits are not delivered changes.' };
 }
 
-export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (text) => text }) {
+export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (text) => text, projectMemory = [] }) {
   if (!idPattern.test(projectId) || !idPattern.test(chatId)) return null;
   const scope = `projects/${projectId}/chats/${chatId}/pipeline`;
   const read = (rel) => readPipelineHistoryJson(dataDir, `${scope}/${rel}`);
   let ids;
   try { ids = fs.readdirSync(regularPath(dataDir, `${scope}/runs`, true)).filter((id) => idPattern.test(id)); }
-  catch { return null; }
+  catch { ids = []; }
   let truncated = false;
   const text = (value, cap) => {
     const clean = redact(typeof value === 'string' ? value : '').replace(/\b[A-Za-z]:[\\/][^\s"<>]+|\\\\[^\s"<>]+|\/(?:Users|home|tmp|private|var|mnt)\/[^\s"<>]+/g, '[private path]')
@@ -148,7 +148,13 @@ export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (tex
   }
   const selected = candidates.slice(-3);
   if (anchor && !selected.includes(anchor)) selected.unshift(anchor);
-  if (!selected.length) return null;
+  const project_memory = [];
+  for (const item of Array.isArray(projectMemory) ? projectMemory.slice(0, 16) : []) {
+    if (!object(item) || typeof item.id !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(item.id) || typeof item.text !== 'string' || !Array.isArray(item.sources) || !item.sources.length || item.sources.some((s) => typeof s !== 'string' || s.length > 240 || !/^projects\//.test(s))) continue;
+    const entry = { id: item.id, text: text(item.text, 400), sources: item.sources.slice(0, 3) };
+    if (JSON.stringify([...project_memory, entry]).length <= 2000) project_memory.push(entry);
+  }
+  if (!selected.length && !project_memory.length) return null;
   const runs = selected.map((c) => {
     const meta = read(`runs/${c.id}/run.json`), report = read(`runs/${c.id}/delivery/report.json`);
     const launch = !meta && read(`requests/${c.id}.json.launch.json`);
@@ -157,8 +163,10 @@ export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (tex
       task: text(meta?.task ?? launch?.task ?? report?.task ?? c.status.task ?? 'Task unavailable', 4000), plan,
       outcome: fitProjection(outcomeProjection(c.status, report, read(`runs/${c.id}/delivery/reply.json`), Boolean(plan)), 4000) };
   });
-  const result = { schema: 1, runs, truncated };
+  const result = { schema: 1, runs, truncated, ...(project_memory.length ? { project_memory } : {}) };
   const size = () => Buffer.byteLength(JSON.stringify(result));
+  while (size() > 32768 && project_memory.length) { project_memory.pop(); result.truncated = true; }
+  if (!project_memory.length) delete result.project_memory;
   // Keep the latest plan/task and latest outcome before older conversational entries.
   while (size() > 32768 && runs.length > 1) {
     const index = runs.findIndex((r, i) => r.run_id !== anchor?.id && i !== runs.length - 1);

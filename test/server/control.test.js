@@ -307,3 +307,21 @@ test('guardian refreshes heartbeat deadlines and aborts only once when stale', a
   stdin.emit('close');
   assert.equal(aborted, 1);
 });
+
+test('Team control defaults to host without silently overriding an explicit Docker request', async (t) => {
+  let args;
+  const child = Object.assign(new EventEmitter(), { pid: 123 });
+  t.after(() => child.emit('close', 0));
+  const { srv } = await setup(t, { runner: (_exe, argv) => { args = argv; return child; } });
+  assert.equal((await request(srv, '/api/control')).value.defaults.execution.sandbox.mode, 'host');
+  assert.equal((await request(srv, '/api/runs', { request: 'default host' })).status, 202);
+  assert.ok(!args.includes('--sandbox') && !args.includes('--trusted-host'));
+  child.emit('close', 0);
+  // The fixture runner never publishes a heartbeat, so release its test lease explicitly.
+  const { releaseRunLease, readRunLease } = await import('../../src/core/run-lease.js');
+  const hive = args[args.indexOf('--hive') + 1];
+  releaseRunLease(hive, readRunLease(hive).token);
+  assert.equal((await request(srv, '/api/runs', { request: 'explicit docker', sandbox: 'docker' })).status, 202);
+  assert.equal(args[args.indexOf('--sandbox') + 1], 'docker');
+  assert.ok(!args.includes('--trusted-host'));
+});

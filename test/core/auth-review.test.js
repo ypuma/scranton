@@ -131,7 +131,7 @@ test('review 1 Docker preparation: corrupted custom config does not block explic
   const workspace = path.join(f.dir, 'work'), sessionDir = path.join(f.dir, 'session'), systemPromptFile = path.join(f.dir, 'prompt.md');
   fs.mkdirSync(workspace); fs.mkdirSync(sessionDir); fs.writeFileSync(systemPromptFile, 'test'); fs.writeFileSync(path.join(workspace, '.git'), 'gitdir: unused');
   for (const provider of ['anthropic', 'google']) {
-    const launch = await prepareSandbox({ workspace, sessionDir, systemPromptFile, provider, env: {} }, { auth: f.auth, executable: 'fake-docker', run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : '' });
+    const launch = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace, sessionDir, systemPromptFile, provider, env: {} }, { auth: f.auth, executable: 'fake-docker', run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : '' });
     assert.equal(launch.env[provider === 'anthropic' ? 'ANTHROPIC_OAUTH_TOKEN' : 'GEMINI_API_KEY'], provider === 'anthropic' ? 'FAKE_DOCKER_TOKEN' : KEY);
     assert.ok(!launch.argsPrefix.join(' ').includes(KEY));
     await launch.cleanup();

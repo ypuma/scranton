@@ -12,7 +12,7 @@ Open-Source-Multi-Agenten-Harness rund um **[pi](https://www.npmjs.com/package/@
 
 ## Schnellstart
 
-Voraussetzungen für den Quellcode: Node.js >= 22.19, npm und Git. Für echte Standardläufe außerdem eine **Linux-Docker-Engine und ein lokal gebautes Sandbox-Image**. Scranton installiert oder startet keine Engine und baut/lädt Images nicht automatisch. Die Desktop-App liefert Node und Pi mit, aber **nicht Docker oder Git**.
+Voraussetzungen für den Quellcode: Node.js >= 22.19, npm und Git. Standard ist **Trusted-Host ohne OS-Isolation**. Nur für ausdrücklich gewählte Docker-Läufe werden eine **Linux-Docker-Engine und ein lokal gebautes Sandbox-Image** benötigt. Scranton installiert oder startet keine Engine und baut/lädt Images nicht automatisch. Die Desktop-App liefert Node und Pi mit, aber **nicht Docker oder Git**.
 
 ```powershell
 npm.cmd ci
@@ -27,16 +27,16 @@ Die Demo benutzt Fake-RPC statt eines Modells, private Worktrees und ausdrückli
 node bin/scranton.js demo --scenario breaker --delay 50 --on-breaker skip
 ```
 
-Vor dem ersten echten Standardlauf Docker separat einrichten und das Image bewusst bauen:
+Für optionale Docker-Läufe Docker separat einrichten und das Image bewusst bauen:
 
 ```powershell
 docker build -t scranton-sandbox:1.5.0-r2 sandbox
-node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --parallel 3
+node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --parallel 3 --sandbox docker
 ```
 
 Dieser Docker-Befehl lädt Basisimage sowie apt/npm-Pakete. Das r2-Rezept enthält `fd-find` (mit `fd`-Symlink) und ripgrep für Pis `find`-/`grep`-Werkzeuge. Buildrezept, Rechte, Netz und Grenzen: [ISOLATION.md](docs/ISOLATION.md).
 
-Ohne Docker nur nach bewusster Vertrauensentscheidung:
+Standardläufe verwenden Trusted-Host; nur vertrauenswürdige Aufgaben ausführen. Explizite Hostauswahl mit Bestätigung:
 
 ```powershell
 node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --trusted-host
@@ -106,6 +106,44 @@ IDs aus den Listen übernehmen. Ohne `--chat` legt `run` einen neuen Thread an; 
 
 `--data DIR` (alternativ `SCRANTON_DATA`, Konfiguration `dataDir`) aktiviert die Registry. `run --project` verlangt aus Sicherheitsgründen `--data` oder `SCRANTON_DATA`; `.env` und `scranton.config.json` im Projektordner werden für Registry-Runs nicht ausgewertet. `visualize --data` aktiviert auch die Steuerung und ist nur lokal zu verwenden. `projects`/`chats` verwenden ohne Datenpfad standardmäßig das Desktop-Datenverzeichnis. Der bisherige **Single-Modus mit `--hive`/`--workspace` ohne Registry bleibt erhalten**; die Oberfläche zeigt ein implizites Projekt und einen Chat `default`, ohne Projekt-/Chat-Verwaltung. Das Terminal-Dashboard bleibt an einen Hive gebunden. API und Speicherlayout: [CONTROL.md](docs/CONTROL.md).
 
+## Dreaming: lokales Projektgedächtnis
+
+Dreaming gilt für registrierte Projekte mit **Team- und Pipeline-Chats** und ist **standardmäßig aus**. Die strukturelle Konsolidierung benötigt weder Modellaufrufe noch zusätzliche Dienste; die unten beschriebene optionale Modellreflexion ist davon getrennt. Zwei Konzepte werden bewusst unterschieden: [OpenClaw dreaming](https://docs.openclaw.ai/concepts/dreaming) inspiriert die Light/REM/Deep-Konsolidierung belegter Beobachtungen; [Dream-RSI](https://arxiv.org/html/2609.14858v1) inspiriert den Vergleich alternativer Explorationsstrategien auf eingefrorenen Ergebnissen. Scranton adaptiert Letzteres konservativ auf tatsächlich aufgezeichnete autonome Wiederholungsketten, nicht auf erfundene unabhängige Welten. Diese strukturelle Implementierung ist deterministisch, kein generatives Traummodell und kein Nachweis wissenschaftlicher Qualitäts- oder Geschwindigkeitsverbesserungen.
+
+```powershell
+node bin/scranton.js dreaming status --data .scranton-data --project PROJEKT-ID --json
+node bin/scranton.js dreaming preview --data .scranton-data --project PROJEKT-ID --json
+node bin/scranton.js dreaming run --data .scranton-data --project PROJEKT-ID
+node bin/scranton.js dreaming on --data .scranton-data --project PROJEKT-ID
+node bin/scranton.js dreaming off --data .scranton-data --project PROJEKT-ID
+node bin/scranton.js dreaming rollback --data .scranton-data --project PROJEKT-ID
+```
+
+`on` aktiviert ausschließlich automatische Sweeps im laufenden Registry-Server (Standard alle 360 Minuten), nur bei projektweitem Leerlauf ohne Recovery-Blockade. Das Abschalten bewahrt das Gedächtnis. Vorschau schreibt nichts; Rollback stellt das letzte Vorbild wieder her. **Policy-Anwendung ist separat aus**: Erst `applyPolicy:true` über Settings erlaubt beim nächsten echten Run ausschließlich eine Verringerung bis `min(Nutzergrenze, gelernte Grenze)`, passend zu Engine, Wiederholungsgrenze und exakter Prüfrezept-Kohorte. Keine Schritte, Checks, Rechte oder menschlichen Freigaben werden dadurch übersprungen; laufende Runs bleiben unverändert.
+
+Team nutzt strukturierte Zyklus-/Gate-Ergebnisse. Neue Pipeline-Läufe liefern explizite `dream_attempt`-Ereignisse; alte `check_finished`-Historien haben keine zuverlässige Versuchsbindung und liefern nur finale strukturelle Beobachtungen, **keine erfundenen Replay-Versuche**. Pipeline-Replay und -Anwendung enthalten sich außerdem bei erforderlichen Final-Checks oder fehlenden erforderlichen Schritt-Checks. Das begrenzte Projektgedächtnis kommt nur als neu belegter, ausdrücklich beratender Kontext in die nächste Planung; fehlgeschlagene Änderungen gelten nicht als geliefert. Python-Guidance/Procedural Graphs bleiben davon getrennt.
+
+Für die strukturelle Konsolidierung gespeichert werden feste beschreibende Ergebnistexte, Aufgaben-Hashes und Quellen-Digests unter `<data>/projects/<id>/dreaming`, **keine Rohaufgaben, Prompts, Logs oder Agentenprosa** und keine Workspace-`MEMORY.md`. Verlinkte/externe und unsichere Historien werden abgewiesen; menschlich beeinflusste oder gekürzte Ketten sind ausgeschlossen. Die ursprünglichen Laufhistorien können weiterhin sensible Daten enthalten und werden nicht bereinigt. Grenzen, HTTP-API, Datenschutz und Replay-Verfahren: [DREAMING.md](docs/DREAMING.md).
+
+### Optionale, Claude-inspirierte Modellreflexion
+
+Zusätzlich kann **„Propose“** redigierte Ausschnitte aus höchstens vier abgeschlossenen echten Team-/Pipeline-Läufen an ein **explizit gewähltes, angemeldetes Provider/Modell** senden. Das kostet gegebenenfalls Tokens/Geld oder Abo-Kontingent. Maximal 1000 Textzeichen pro Lauf, 12000 Zeichen gesamte Anfrage, 4096 Ausgabezeichen, konfigurierbar 256–4096 Ausgabetokens und höchstens 60 Sekunden. Redigierung ist Best Effort, keine Anonymisierung; unbekannte Geheimnisformate können verbleiben. Assistentenbehauptungen sind von aufgezeichneten Check-/Exit-Ergebnissen getrennt. Nutzungs-/Kostenangaben erscheinen nur, wenn bekannt.
+
+Die Vorschläge enthalten typisierte Notizen (`user`, `feedback`, `project`, `reference`), tatsächliches Vorher/Nachher und Quellzitate. **Erst explizites Apply mit Vorschlags-ID übernimmt sie**; Reject verwirft, Cancel bricht die Generierung ab, Rollback stellt den letzten Zustands-/Settings-Stand wieder her (nicht verbrauchte Tokens). Quellen werden vor Übernahme und späterer Kontext-Injektion erneut geprüft. Beratendes Gedächtnis bleibt zusammen auf 2000 Zeichen begrenzt, aktuelle Aufgabe und derselbe Chat haben Vorrang. Keine Übernahme von Freigaben oder Check-Erfolg; kein On-Demand-Abruf von Themendateien und kein belegter Qualitätsgewinn.
+
+Automatische Generierung braucht **beide** Opt-ins `enabled` und `reflectionEnabled`, ein konfiguriertes Modell, neue Eingabe und Projektleerlauf ohne offenen Vorschlag. Automatisches Apply gibt es nicht. Defaults: `reflectionEnabled:false`, `reflectionModel:null`, `reflectionMaxOutputTokens:2048`, `reflectionTimeoutSeconds:60`. Normale Runs und strukturelle Preview/Sweep rufen niemals ein Reflexionsmodell auf; Run-Starts brechen laufende Reflexion ab, ohne deren Cleanup abzuwarten.
+
+```powershell
+node bin/scranton.js dreaming propose --data .scranton-data --project PROJEKT-ID --provider PROVIDER --model MODELL --json
+node bin/scranton.js dreaming apply --data .scranton-data --project PROJEKT-ID --proposal VORSCHLAGS-ID --json
+node bin/scranton.js dreaming reject --data .scranton-data --project PROJEKT-ID --proposal VORSCHLAGS-ID --json
+node bin/scranton.js dreaming cancel --data .scranton-data --project PROJEKT-ID --json
+```
+
+Authentifizierung/Modellkatalog allein garantiert **keine Transportkompatibilität**: Pi lässt bei ChatGPT-Abos `max_output_tokens` weg, daher verweigert der neue begrenzte Reflexionstransport diese Aufrufe vor Inferenz. Ungeprüfte APIs (`openai-codex-responses`, `pi-messages`, `mistral-conversations` und unbekannte APIs) werden ebenfalls verweigert. Das ändert nicht den bestehenden Pipeline-Completion-Transport. Tests sind offline/scripted, keine neuen echten Provideraufrufe.
+
+**Quellenabgrenzung:** Die recherchierten offiziellen Claude-Code-Dokumente beschreiben Auto Memory und `/memory`, keinen dokumentierten öffentlichen `/dream`-Befehl. Ein von Dritten extrahierter Konsolidierungsprompt belegt keine öffentliche Verfügbarkeit oder Trigger. **Managed Agents Dreams ist ein anderes Produkt.** Quellen, Übertragungs-/Budgetgrenzen und API: [Recherche](docs/CLAUDE_CODE_DREAMING_RESEARCH.md), [DREAMING.md](docs/DREAMING.md).
+
 ## Scranton Pipeline
 
 Neben Team-Chats gibt es **Pipeline-Chats** mit einer eigenständigen Python-/LangGraph-Engine: feste, begrenzte Plan-/Edit-/Prüfschritte in einem privaten Snapshot sowie menschliche Plan- und Lieferfreigaben. Die Übernahme in den Projektordner ist eine separate Entscheidung; Trusted-Host-Checks bieten keine OS-Isolation. Die Desktopform bietet Checks und explizite Setuprezepte; Fehlerausgaben lassen sich aufklappen, nicht gestartete Läufe zeigen ihre Aufrufdiagnose und fehlgeschlagene Läufe einen partiellen Diff. Private Gitmetadaten liegen außerhalb des Check-Workspace; getrackte Checkänderungen werden nach Baseline/Verify restauriert und gemeldet. Von pi als verfügbar gemeldete Modelle, einschließlich Abos, sind **via pi** als tool-/sessionlose Completions nutzbar; angemeldete API-Key-Konten auf verifizierten kompatiblen Endpunkten gehen direkt. Ein echter Lauf wurde am **2026-11-09 um 22:37** über die Desktop-HTTP-API auf dem Drei-Dateien-Projekt `.scratch/pipeline/real-smoke/project` ausgeführt: alle drei Rollen `openai/gpt-6.1-sol` **via pi**, ChatGPT-Subscription des Benutzers, Trusted-Host-Sandbox. Planner: 2 Aufrufe (ein Kontextzug), Implementer: 1, Reviewer: 1; pi meldete **7647 Input-/601 Outputtokens**. Baselinecheck rot, finaler Check grün, Ein-Zeilen-Diff; die Quelldatei änderte sich erst nach Lieferfreigabe; Abschluss **`succeeded`**. Dieser eine Lauf belegt **nicht** andere Provider, größere Repositories, Reparatur-/Revisionsschleifen mit echten Modellen oder Dockerbetrieb mit echten Modellen. Einstieg: [Desktop und HTTP-API](docs/PIPELINE.md), [Engine-Installation und CLI-Demo](engine/README.md), [Architektur und Grenzen](engine/docs/ARCHITECTURE.md).
@@ -135,7 +173,7 @@ Bei Integrationskonflikten ist **Retry kein Rebase**: Der Entwickler-Worktree be
 |---|---|
 | `--workspace DIR`, `--hive DIR`, `--config FILE` | Ziel, Laufzeitdaten, Konfiguration |
 | `--parallel N` | Maximale aktive Pipelines (Standard 3); Parallelität erfordert Worktrees |
-| `--sandbox docker` | Container-Modus (Standard), kein stiller Host-Fallback |
+| `--sandbox docker` | Optionaler Container-Modus, kein stiller Host-Fallback |
 | `--sandbox-image IMAGE` | Lokal vorhandenes Linux-Image, Standard `scranton-sandbox:1.5.0-r2` |
 | `--sandbox-network bridge\|none` | `bridge` erlaubt Netzwerkzugang; `none` sperrt Container-Netz |
 | `--trusted-host` | Explizit auf dem Host ausführen, Worktrees bleiben getrennt |
@@ -184,7 +222,7 @@ Rangfolge: Flags > Umgebung > `scranton.config.json` > Defaults. `.env` wird gel
   "execution": {
     "maxParallel": 3,
     "isolation": "worktree",
-    "sandbox": { "mode": "docker", "image": "scranton-sandbox:1.5.0-r2", "network": "bridge" },
+    "sandbox": { "mode": "host", "image": "scranton-sandbox:1.5.0-r2", "network": "bridge" },
     "persistentSessions": true,
     "maxReplans": 0
   }

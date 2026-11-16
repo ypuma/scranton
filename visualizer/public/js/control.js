@@ -27,9 +27,10 @@ export const PARALLEL_MAX = 32;
 export const SANDBOX_NETWORKS = ['bridge', 'none'];
 // Same pattern the server applies to sandboxImage.
 export const IMAGE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/;
-// The engine defaults (contract) for a server that does not report defaults.execution yet.
+// The engine defaults (contract) for a server that does not report defaults.execution yet. trustedHost stays false:
+// the host is preselected, but its acknowledgement is only ever given by the human.
 export const EXECUTION_DEFAULTS = Object.freeze({
-  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge' }),
+  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'host', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge' }),
   persistentSessions: true, simulated: false, trustedHost: false,
 });
 
@@ -349,12 +350,12 @@ export function recoveryTimes(orphan, now = Date.now()) {
   };
 }
 
-// What a new run starts with when the form is left alone.
+// What a new run starts with when the form is left alone. Docker only when the configuration names it.
 export function executionDefaults(control) {
   const x = control?.execution;
   return {
     maxParallel: x?.maxParallel ?? EXECUTION_DEFAULTS.maxParallel,
-    sandbox: x?.sandbox?.mode === 'host' ? 'host' : 'docker',
+    sandbox: x?.sandbox?.mode === 'docker' ? 'docker' : EXECUTION_DEFAULTS.sandbox.mode,
     image: x?.sandbox?.image || EXECUTION_DEFAULTS.sandbox.image,
     network: SANDBOX_NETWORKS.includes(x?.sandbox?.network) ? x.sandbox.network : EXECUTION_DEFAULTS.sandbox.network,
   };
@@ -656,6 +657,20 @@ export function errorField(message, roles = MODEL_ROLES) {
 }
 
 // What the controls may do now; the busy flags guard against double submits while a POST is out.
+// Why Start cannot be pressed, as the line beside it says; '' when it can, and while a submit is on its way.
+// target: the drawer starts in a chat made for it, so a run in the chat on screen is not in its way.
+export function startBlock({ control, mode, target = false, replaying = false, submitting = false }) {
+  if (submitting) return '';
+  const g = controlGates({ control, mode });
+  if (mode === 'demo') return 'The page shows a demo: no run can be started here';
+  if (!g.on) return mode === 'connecting' ? 'Connecting to the server' : 'This server is read only: it does not start runs';
+  if (target) return '';
+  if (g.alive) return 'A run is in progress';
+  if (g.recovery) return 'Recovery required';
+  if (replaying) return 'Showing an earlier run: go back to live first';
+  return '';
+}
+
 export function controlGates({ control, mode, submitting = false, sending = false, stopping = false, releasing = false }) {
   const on = Boolean(control?.enabled) && mode !== 'demo';
   const alive = on && Boolean(control.run);

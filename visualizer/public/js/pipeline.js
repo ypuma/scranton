@@ -1,7 +1,7 @@
 // Pipeline panel: Human -> Michael -> Dwight -> the run's gate stages, and the message animation for hive_write.
 // A parallel stage is one column of stacked cards; roles the run does not use have no card. A custom gate gets its
 // card from run_started.roles the first time a run uses it.
-import { AGENT_IDS, isFailKeyword, displayName, roleTitle, humanNeeded, roleView, workflowOf, gateView, workflowText, stepNames } from './state.js';
+import { AGENT_IDS, isFailKeyword, displayName, roleTitle, humanNeeded, roleView, workflowOf, gateView, workflowText, stepNames, settledStatus } from './state.js';
 import { formatTokens, formatCost, plural, stripBidi } from './format.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -11,10 +11,11 @@ const WIDE_COLUMNS = 4;
 const MANY_COLUMNS = 6;
 export const STATUS_GLYPH = {
   idle: '○', thinking: '◐', working: '●', waiting: '○', blocked: '■', error: '✕', done: '✓',
-  starting: '◌', finished: '✓', failed: '✕', aborted: '✕', stopped: '–', cancelled: '–', interrupted: '✕',
+  starting: '◌', finished: '✓', failed: '✕', aborted: '✕', stopped: '–', cancelled: '–', interrupted: '✕', unused: '○',
 };
 export const GATE_GLYPH = { passed: '✓', failed: '✕', blocked: '■', error: '✕' };
-const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// the system's setting, or Animations: Off in Settings
+const reducedMotion = () => document.documentElement?.dataset?.motion === 'off' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -136,7 +137,8 @@ export function createPipeline(root) {
       if (id === 'human') continue;
       const a = hasRun ? roleView(s, id) : null;
       const c = cards[id];
-      const status = hasRun ? (a?.status ?? 'idle') : 'idle';
+      // once the run is over a card says how its role ended: done, failed, stopped, or never used
+      const status = hasRun ? settledStatus(s, a, { role: true }) : 'idle';
       const name = displayName(id, s);
       if (c.name.textContent !== name) c.name.textContent = name;
       // the lane count is said again by the lanes list, so a crowded row drops it (styles.css)
@@ -150,8 +152,10 @@ export function createPipeline(root) {
       const fresh = status === 'idle' && !a?.lanes && !a?.totals.runs;
       let activity = hasRun ? (a?.tool ? `${a.activity} · ${a.tool.tool} ${a.tool.detail}` : a?.activity) : 'Idle';
       if (fresh) activity = waitsFor(cols, id, names) ?? activity;
+      if (status === 'unused') activity = 'Not used in this run';
+      else if (status === 'stopped') activity = 'Stopped with the run';
       // the status word already says it ("Idle", "dwight-m1: Idle")
-      if (activity?.replace(/^[a-z]+(-[\w-]+)?: /, '').toLowerCase() === status) activity = '';
+      if ([status, a?.status].includes(activity?.replace(/^[a-z]+(-[\w-]+)?: /, '').toLowerCase())) activity = '';
       if (gate) {
         c.card.dataset.gate = gate.result;
         const where = [gate.milestoneId, gate.cycle && `cycle ${gate.cycle}`].filter(Boolean).join(' · ');

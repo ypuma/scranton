@@ -848,6 +848,21 @@ export function isBusy(inst) {
   return Boolean(inst) && BUSY.has(inst.status);
 }
 
+// The reducer keeps a lane that is over 'done' and a role between turns 'idle', whatever came of it (as state.json
+// does). What a card says instead once it is over: 'failed' when its last turn or its milestone failed, 'stopped'
+// when the run was aborted under it, 'unused' for a role the run never called. Anything still going keeps its word.
+// x: an instance, or (role: true) a role aggregate or roleView.
+export function settledStatus(state, x, { role = false } = {}) {
+  const status = x?.status ?? 'idle';
+  if (status !== 'done' && !(role && state?.result && status === 'idle')) return status;
+  const runs = x.totals?.runs ?? 0;
+  if (role && !runs && !x.lanes) return 'unused';
+  const ended = role ? null : (state?.milestones ?? []).find((m) => m.id === x.milestoneId)?.status;
+  const bad = (Number.isInteger(x.lastExitCode) && x.lastExitCode !== 0) || /^Failed/.test(x.activity ?? '') || ended === 'failed' || ended === 'aborted';
+  if (bad || (!runs && state?.result === 'aborted')) return state?.result === 'aborted' || ended === 'aborted' ? 'stopped' : 'failed';
+  return 'done';
+}
+
 // Instances in reading order: planner, then by milestone plan order, developer before QA.
 export function lanesOf(state) {
   const order = new Map((state?.milestones ?? []).map((m, i) => [m.id, i]));

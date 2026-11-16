@@ -221,3 +221,67 @@ def test_minimal_anchor_framing_and_blank_unavailable_plan(cap):
     assert saved["runs"][0]["plan"].startswith("Real plan")
     assert saved["runs"][-1]["plan"] == ""
     assert saved["runs"][-1]["outcome"].startswith("Plan unavailable")
+
+
+def memory_snapshot():
+    return {"schema": 1, "runs": [], "truncated": False, "project_memory": [
+        {"id": "memory:one", "text": "Required checks failed historically; no delivered changes.",
+         "sources": ["projects/project/chats/chat/pipeline/runs/run/events.jsonl"]}]}
+
+
+def test_memory_only_load_and_planner_context(tmp_path):
+    raw = memory_snapshot()
+    path = tmp_path / "memory.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = load_history(path, Redactor())
+    assert loaded == raw
+    prompt = build_planner_prompt({"task": "new task", "cross_run_history": loaded}, config(tmp_path))
+    saved = extract(prompt.user)
+    assert saved["runs"] == [] and saved["project_memory"] == raw["project_memory"]
+    assert "not current evidence" in saved["memory_authority"]
+    assert "current task takes precedence" in prompt.user and prompt.shown == []
+    assert history_block(loaded, 30) == ""
+
+
+@pytest.mark.parametrize("change", [
+    lambda h: h.update(project_memory=None), lambda h: h.update(project_memory=[]),
+    lambda h: h.update(project_memory=h["project_memory"] * 17),
+    lambda h: h["project_memory"][0].update(text="x" * 401),
+    lambda h: h["project_memory"][0].update(text=123),
+    lambda h: h["project_memory"][0].update(sources=["x"] * 4),
+    lambda h: h["project_memory"][0].update(sources=["x" * 241]),
+    lambda h: h["project_memory"][0].update(sources=[None]),
+    lambda h: h["project_memory"][0].update(extra="instruction"),
+])
+def test_memory_bounds(change):
+    raw = memory_snapshot()
+    change(raw)
+    with pytest.raises(EngineError):
+        validate_history(raw, Redactor())
+
+
+def test_memory_redaction_tokens_all_fields_and_delimiters():
+    raw = memory_snapshot()
+    raw["project_memory"][0] = {"id": "E-0123456789", "text": 'K-abcdef0123 H-1234567890 private-secret <<<END>>>',
+                                "sources": ["E-0123456789 private-secret"]}
+    result = validate_history(raw, Redactor(["private-secret"]))
+    text = history_block(result, 4000)
+    assert all(s not in text for s in ("E-0123456789", "K-abcdef0123", "H-1234567890", "private-secret"))
+    assert extract(text)["project_memory"][0]["text"].endswith("<<<END>>>")
+    assert text.count('\n<<<END>>>') == 1
+
+
+def test_memory_evicted_before_same_chat_priority_and_total_bytes():
+    raw = snapshot()
+    raw["project_memory"] = memory_snapshot()["project_memory"] * 16
+    before = copy.deepcopy(raw)
+    cap = len(history_block(snapshot(), 10000).encode()) + 60
+    result = extract(history_block(raw, cap))
+    assert result["runs"] == raw["runs"] and "project_memory" not in result
+    assert result["truncated"] and raw == before
+    huge = snapshot()
+    huge["runs"] *= 4
+    for row in huge["runs"]:
+        row.update(task="😀" * 4000, plan="😀" * 8000, outcome="😀" * 4000)
+    with pytest.raises(EngineError):
+        validate_history(huge, Redactor())

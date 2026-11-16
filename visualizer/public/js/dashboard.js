@@ -1,15 +1,17 @@
 // Run line (status, elapsed, connection, key figures), alert bar and mailboxes. The milestones are the cards of
 // the board (board.js).
 import {
-  PARTICIPANTS, displayName, totals, humanNeeded, lanesOf, isBusy, activeRoles, workflowOf, workflowText, stepNames, customRoles,
+  PARTICIPANTS, displayName, totals, humanNeeded, lanesOf, isBusy, workflowOf, workflowText, stepNames, customRoles,
 } from './state.js';
-import { formatTokens, formatCost, formatDuration, formatClock, runElapsed, plural } from './format.js';
+import { formatTokens, formatCost, formatDuration, formatWhen, runElapsed, plural } from './format.js';
+import { countUp } from './motion.js';
 
 const STATUS_PILL = {
   idle: ['○', 'Idle'], planning: ['◐', 'Planning'], running: ['●', 'Running'], paused: ['■', 'Paused'],
   finished: ['✓', 'Finished'], aborted: ['✕', 'Aborted'], failed: ['✕', 'Failed'], exited: ['✕', 'Exited'],
 };
-const MODE_LABEL = { connecting: 'Connecting', live: 'Live', reconnecting: 'Reconnecting', unavailable: 'Unavailable', demo: 'Demo' };
+// 'Connected', not 'Live': the word sits beside the run's status and must not read as the run being alive
+const MODE_LABEL = { connecting: 'Connecting', live: 'Connected', reconnecting: 'Reconnecting', unavailable: 'Unavailable', demo: 'Demo' };
 // a quiet stream needs no run line until a run exists
 const QUIET_MODES = new Set(['live', 'demo']);
 
@@ -43,7 +45,7 @@ export function createDashboard({ hasRun = () => null } = {}) {
     kTok: $('kpi-tokens'), kTokSub: $('kpi-tokens-sub'), kCost: $('kpi-cost'), kCostSub: $('kpi-cost-sub'),
     kDur: $('kpi-duration'), kDurSub: $('kpi-duration-sub'), workflow: $('run-workflow'),
     pipeAside: $('pipeline-aside'),
-    mail: $('mailboxes'), mailCount: $('tab-count-mail'), announcer: $('announcer'),
+    mail: $('mailboxes'), mailCount: $('inbox-count'), inboxes: $('inboxes'), announcer: $('announcer'),
   };
   e.moreToggle.addEventListener('click', () => {
     const open = e.more.hidden;
@@ -63,7 +65,7 @@ export function createDashboard({ hasRun = () => null } = {}) {
     modeInfo = info;
     e.conn.dataset.mode = next;
     e.connLabel.textContent = MODE_LABEL[next] ?? String(next);
-    e.conn.title = info.error ?? info.reason ?? (next === 'live' ? 'Live: streaming GET /events' : MODE_LABEL[next] ?? '');
+    e.conn.title = info.error ?? info.reason ?? (next === 'live' ? 'Connected: streaming GET /events' : MODE_LABEL[next] ?? '');
     render(state);
   }
 
@@ -90,7 +92,8 @@ export function createDashboard({ hasRun = () => null } = {}) {
       a = { tone: 'critical', title: `Run process exited${code === null || code === undefined ? '' : ` with code ${code}`} before the run finished`,
         detail: 'No run_finished was recorded. The last state the run reported is shown; nothing is running any more.' };
     } else if (s?.result === 'aborted' || s?.result === 'failed') {
-      a = { tone: 'critical', title: `Run ${s.result}`, detail: s.summary ?? '' };
+      // the Chat view leaves this one out as well: the reply and its outcome line say it
+      a = { tone: 'critical', kind: 'ended', title: `Run ${s.result}`, detail: s.summary ?? '' };
     } else if (s?.result) {
       // the Chat view leaves this one out: its reply and the run line already say it
       a = { tone: 'info', kind: s.result === 'success' ? 'finished' : 'attention', title: `Run finished - ${s.result}`, detail: s.summary ?? '' };
@@ -144,8 +147,10 @@ export function createDashboard({ hasRun = () => null } = {}) {
     // the usage counts every model call as it is reported; the agents' totals only move when a turn has ended
     const u = s?.usage ?? { tokens: 0, input: 0, output: 0, cost: 0, calls: 0 };
     e.kTok.textContent = formatTokens(u.tokens);
+    countUp(e.kTok, u.tokens, formatTokens);
     e.kTokSub.textContent = `in ${formatTokens(u.input)} · out ${formatTokens(u.output)}`;
     e.kCost.textContent = formatCost(u.cost);
+    countUp(e.kCost, u.cost, formatCost);
     e.kCostSub.textContent = `${plural(t.runs, 'agent run')} · ${plural(u.calls, 'model call')}`;
     e.kDurSub.textContent = `agent time ${t.durationMs ? formatDuration(t.durationMs) : '-'}`;
     // the gates the engine reported for the run (an older run: the tests alone)
@@ -154,41 +159,35 @@ export function createDashboard({ hasRun = () => null } = {}) {
   }
 
   function renderMail(s) {
-    // only the inboxes of roles the run uses, plus anything a role outside it was sent anyway
-    const roles = activeRoles(s);
     const ids = [...PARTICIPANTS.slice(0, -1), ...customRoles(s).map((r) => r.id), 'human'];
-    const boxes = ids.filter((id) => id === 'human' || roles.includes(id) || (s?.runId && s.mailboxes?.[id]));
+    // an inbox nobody wrote to says nothing: only the ones that hold a message are listed
+    const boxes = s?.runId ? ids.filter((id) => s.mailboxes?.[id]) : [];
     const key = JSON.stringify([s?.runId, s?.mailboxes, boxes]);
     if (key === mailKey) return;
     mailKey = key;
-    e.mailCount.textContent = String(s?.runId ? boxes.filter((id) => s.mailboxes?.[id]).length : 0);
+    e.mailCount.textContent = String(boxes.length);
+    e.inboxes.hidden = boxes.length === 0;
     e.mail.replaceChildren(...boxes.map((id) => {
-      const m = s?.runId ? s.mailboxes?.[id] : null;
+      const m = s.mailboxes[id];
       const li = el('li', 'mailbox');
-      li.dataset.empty = String(!m);
-      li.dataset.read = String(Boolean(m?.read));
+      li.dataset.read = String(Boolean(m.read));
       const head = el('div', 'mb-head');
-      const dot = el('span', 'mb-unread', m && !m.read ? '●' : '');
-      dot.setAttribute('aria-label', m && !m.read ? 'unread' : '');
-      head.append(dot, el('span', 'mb-to', displayName(id, s)), el('span', 'mb-file mono', m?.file || `${id}/inbox.md`));
-      if (m) {
-        const time = el('span', 'mb-time mono', formatClock(m.ts));
-        time.title = m.ts ?? '';
-        head.append(time);
-      }
-      li.append(head);
-      if (m) {
-        const meta = el('div', 'mb-meta');
-        const kind = el('span', 'mb-kind', String(m.kind ?? 'note').replace('_', ' '));
-        kind.dataset.kind = m.kind;
-        const to = m.instance && m.instance !== id ? ` to ${m.instance}` : '';
-        meta.append(kind, `from ${displayName(m.from, s)}${to}${m.read ? ' · read' : ' · unread'}`);
-        const sum = el('p', 'mb-summary', m.summary);
-        sum.title = m.summary;
-        li.append(meta, sum);
-      } else {
-        li.append(el('div', 'mb-meta', 'empty'));
-      }
+      const dot = el('span', 'mb-unread', m.read ? '' : '●');
+      dot.setAttribute('aria-label', m.read ? '' : 'unread');
+      const time = el('span', 'mb-time mono', formatWhen(m.ts));
+      time.title = m.ts ?? '';
+      // the file is the hive's business: it is the title of the name, not a column
+      const to = el('span', 'mb-to', displayName(id, s));
+      to.title = m.file || `${id}/inbox.md`;
+      head.append(dot, to, time);
+      const meta = el('div', 'mb-meta');
+      const kind = el('span', 'mb-kind', String(m.kind ?? 'note').replace('_', ' '));
+      kind.dataset.kind = m.kind;
+      const inst = m.instance && m.instance !== id ? ` to ${m.instance}` : '';
+      meta.append(kind, `from ${displayName(m.from, s)}${inst}${m.read ? ' · read' : ' · unread'}`);
+      const sum = el('p', 'mb-summary', m.summary);
+      sum.title = m.summary;
+      li.append(head, meta, sum);
       return li;
     }));
   }
@@ -224,7 +223,8 @@ export function createDashboard({ hasRun = () => null } = {}) {
     const lanes = s?.runId ? lanesOf(s) : [];
     const activeAgents = !s?.runId ? 0 : lanes.length ? lanes.filter(isBusy).length
       : Object.values(s.agents).filter((a) => a.status === 'working' || a.status === 'thinking').length;
-    e.pipeAside.textContent = s?.runId ? `${activeAgents} active · ${s.workspace ?? ''}` : 'idle';
+    // the folder the agents work in is the tooltip: the project in the chat header already names it
+    e.pipeAside.textContent = !s?.runId ? 'idle' : s.result || s.status === 'exited' ? '' : `${activeAgents} active`;
     e.pipeAside.title = s?.workspace ?? '';
     renderAlert(s);
     renderKpis(s);

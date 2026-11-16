@@ -136,7 +136,7 @@ test('unknown standalone agent is a usage error before Docker model selection', 
 
 test('doctor warns for any partial Docker model configuration and names missing roles neutrally', async (t) => {
   const dir = fixture(t); let output = '';
-  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { pi: { command: [process.execPath, path.join(PACKAGE_ROOT, 'tools/fake-pi.js')] },
+  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { execution: { sandbox: { mode: 'docker' } }, pi: { command: [process.execPath, path.join(PACKAGE_ROOT, 'tools/fake-pi.js')] },
     agents: { dwight: { provider: 'anthropic', model: 'fake-catalog' }, angela: { provider: 'google', model: 'fake-catalog' } } } });
   await runDoctor({ config, env: { PATH: '' }, auth: { listAccounts: () => [] }, stdout: { write: (s) => output += s } });
   assert.match(output, /\[warn\] Docker requires an explicit provider and model for michael;/);

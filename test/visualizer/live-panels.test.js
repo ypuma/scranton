@@ -620,10 +620,18 @@ test('page: the rail is a column beside the main column, the dashboard shows the
   assert.match(html, /<button type="button" class="rail-board" id="rail-board" aria-haspopup="dialog">/);
   assert.match(html, /<dialog class="sheet" id="board-dialog" aria-labelledby="board-dialog-title">/);
   assert.match(html, /<dialog class="drawer" id="rail-dialog" aria-labelledby="rail-dialog-title">/);
-  // the dashboard: one board, no second list of the same milestones
-  assert.match(html, /<main class="dash" id="dash">\s*<section class="section board-panel" aria-labelledby="h-board">/, 'the board leads the dashboard, across both columns');
+  // the dashboard: the work in one column (agents, lanes, board, usage: sections that fold), the activity beside it;
+  // one board, no second list of the same milestones
+  const work = html.match(/<main class="dash" id="dash">\s*<div class="dash-main" id="dash-main">([\s\S]*?)<section class="activity-panel"/)?.[1] ?? '';
+  const folds = [['agents', 'h-pipeline', 'true'], ['lanes', 'h-lanes', 'false'], ['board', 'h-board', 'true'], ['usage', 'h-usage', 'false']];
+  assert.deepEqual([...work.matchAll(/<section class="[^"]*" (?:id="[a-z-]+" )?aria-labelledby="([a-z-]+)" data-fold="([a-z]+)" data-open="(true|false)"/g)].map((m) => [m[2], m[1], m[3]]),
+    folds, 'open at first sight: who works, and the board');
+  for (const [id, heading, open] of folds) {
+    assert.ok(work.includes(`<button type="button" class="fold-toggle" id="fold-${id}-toggle" aria-expanded="${open}" aria-controls="fold-${id}" aria-labelledby="${heading}">`), `${id}: the chevron is a named button that says its state`);
+    assert.ok(work.includes(`<div class="fold-body" id="fold-${id}"><div class="fold-inner">`), `${id}: the body it controls`);
+  }
   assert.doesNotMatch(html, /id="milestones"|milestones-panel/);
-  assert.match(html, /<section class="section usage-panel" aria-labelledby="h-usage">/);
+  assert.match(html, /<section class="section usage-panel" aria-labelledby="h-usage" data-fold="usage" data-open="false">/);
   assert.match(html, /<dt>Cost<\/dt>\s*<dd><span class="fig-value" id="kpi-cost">/, 'the cost is a first-class figure of the run line');
   assert.ok(html.indexOf('id="kpi-cost"') < html.indexOf('id="run-more-toggle"'), 'not behind More figures');
   // a pipeline chat's Details get the same two panels
@@ -633,7 +641,6 @@ test('page: the rail is a column beside the main column, the dashboard shows the
   assert.match(css, /--rail-w: 22rem;/);
   assert.match(css, /\.rail \{[^}]*flex: 0 0 var\(--rail-w\);[^}]*overflow: hidden;/);
   assert.match(css, /\.rail-body \{[^}]*overflow: hidden auto;/, 'the rail scrolls on its own');
-  assert.match(css, /\.dash > \.board-panel \{ grid-column: 1 \/ -1; \}/);
   // the dashboard reads the usage of the run, which counts every call as it is reported
   const dashboard = read('js/dashboard.js');
   assert.match(dashboard, /e\.kCost\.textContent = formatCost\(u\.cost\);/);
@@ -654,18 +661,28 @@ test('usage: token shares are named when a priced Pipeline run has no per-agent 
   assert.equal(root.querySelector('.usage-value').textContent, '~$0.031');
 });
 
-test('Dashboard allocates a page scroller, compact composer, bounded Board and independent Activity viewport', () => {
+test('Dashboard is a split with one scroller a side: the work column and the Activity; nothing inside the work column scrolls', () => {
   // Structural guards only. Real viewport measurements belong to the Browser-panel integration check.
   const css = read('styles.css');
-  assert.match(css, /body\[data-view="dashboard"\] \.main \{[^}]*height: calc\(100dvh - var\(--topbar-h\)\);[^}]*overflow-y: auto;/);
+  assert.match(css, /body\[data-view="dashboard"\] \.main \{[^}]*height: calc\(100dvh - var\(--topbar-h\)\);[^}]*overflow-y: auto;/, 'narrow, or in a window too short for the split, the page scrolls');
   assert.match(css, /body\[data-view="dashboard"\] \.main > \* \{ flex-shrink: 0; \}/);
   assert.match(css, /body\[data-view="dashboard"\]\[data-run="yes"\] \.followup:not\(\[data-off="true"\]\) textarea \{ height: 3\.25rem; min-height: 3\.25rem; \}/);
+  const wide = css.match(/@media \(min-width: 1100px\) \{\s*\.dash \{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(wide, /\.dash \{ grid-template-columns: minmax\(0, 1fr\) minmax\(23rem, 36%\); grid-template-rows: minmax\(0, 1fr\); align-items: stretch; \}/);
+  assert.match(wide, /body\[data-view="dashboard"\] \.main > \.dash \{ flex: 1 1 0; min-height: 24rem; \}/, 'the split takes the rest of the window');
+  assert.match(wide, /\.dash-main \{ overflow: hidden auto;/, 'the work column scrolls as one');
+  assert.match(wide, /\.dash > \.activity-panel \{ height: auto; max-height: none; \}/, 'the Activity is as tall as the split');
+  assert.match(css, /\.activity-panel \{ height: clamp\(20rem, 55vh, 36rem\); min-height: 0; \}/, 'narrow, it keeps a viewport of its own');
+  // the board and the lanes of the Dashboard grow with their section; the board of a pipeline chat stays bounded
+  assert.match(css, /\.dash \.board-panel \.board-cols \{ display: flex; align-items: flex-start; max-height: none; \}/);
+  assert.match(css, /\.dash \.board-panel \.board-cards \{ overflow: visible;/);
+  assert.match(css, /\.dash \.board-col\[data-empty="true"\] \{ display: none; \}/, 'an empty column is counted in the aside, not drawn');
   assert.match(css, /\.board-panel \.board-cols \{[^}]*max-height: min\(17rem, 28vh\);/);
-  assert.match(css, /\.board-panel \.board-cards \{ overflow: hidden auto;/);
-  assert.match(css, /\.board-panel \.board-cols \{ grid-template-rows: none; max-height: min\(26rem, 55vh\); overflow-y: auto;/, 'stacked columns scroll as a board');
-  assert.match(css, /\.activity-panel \{ height: clamp\(20rem, 55vh, 36rem\); min-height: 0; \}/);
-  assert.match(css, /\.dash \.lanes \{ max-height: 20rem; overflow-y: auto;/);
-  assert.doesNotMatch(css, /\.dash-main \{[^}]*overflow:/, 'Usage remains in the page flow below agent history, not a clipped inner dashboard');
+  assert.doesNotMatch(css, /\.lanes \{[^}]*(max-height|overflow)/, 'the lanes are no scroller of their own');
+  // a closed section takes no room and no focus
+  assert.match(css, /\.fold-body \{ display: grid; grid-template-rows: 0fr;/);
+  assert.match(css, /\.section\[data-open="true"\] > \.fold-body \{ grid-template-rows: 1fr; \}/);
+  assert.match(css, /\.fold-inner \{[^}]*overflow: hidden; visibility: hidden; \}/);
 });
 
 test('serial JSON rail and Dashboard show role tails, current tools and recent files without instance lanes', () => {

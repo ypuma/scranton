@@ -1,12 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createProjectRegistry, validateId, derivedChatTitle } from '../core/projects.js';
+import { readThoughts } from '../core/live-activity.js';
 import { acquireRunLease, readRunLease } from '../core/run-lease.js';
 import { orphanSnapshot } from '../core/run-recovery.js';
 import { listRuns } from '../core/thread.js';
+import { readRunDiff } from '../core/worktree.js';
 import { isLoopbackAddress } from '../core/network.js';
 import { createControl, readBody, json } from './control.js';
 import { createPipelineSupervisor } from '../core/pipeline-supervisor.js';
+import { resolveReflectionModel } from '../core/dreaming-reflection-sources.js';
+import { getAuthService } from '../core/auth.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 function authorize(req) {
@@ -35,18 +39,24 @@ function replay(hive, runId) {
   } catch (err) { if (err.code === 'ENOENT') throw fail(404, 'Run archive not found'); throw err; }
 }
 
-export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace, contextFactory, single }) {
+export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace, contextFactory, single, completeReflection = control?.completeReflection }) {
   if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1) throw fail(400, 'Invalid maxConcurrentRuns');
   const registry = dataDir ? createProjectRegistry({ dataDir, projectsRoot }) : null;
   if (legacyWorkspace) registry?.importLegacy(legacyWorkspace);
   registry?.listProjects();
   const contexts = new Map();
-  const completed = new Map();
+  const completed = new Map(), dreams = new Map(), nextDream = new Map();
+  function dreaming(projectId) {
+    registry.getProject(projectId);
+    if (!dreams.has(projectId)) dreams.set(projectId, registry.dreaming(projectId, { completeReflection, isBusy: () => closing || registry.listChats(projectId).some((c) => c.error || live(c)) }));
+    return dreams.get(projectId);
+  }
   let recent = null;
   let closing = false;
   const authController = registry ? createControl({ hive: dataDir, ...control, promptsDir: path.join(dataDir, 'prompts') }) : null;
   const allChats = () => registry.listProjects().flatMap((p) => registry.listChats(p.id));
   const pipeline = createPipelineSupervisor({ dataDir: dataDir ?? path.dirname(hiveDir), auth: control?.auth,
+    dreaming: registry ? (projectId) => dreaming(projectId) : undefined,
     checkCapacity() { if (running() >= maxConcurrentRuns) throw fail(429, 'too_many_runs'); },
     onStarting(chat, task) { const current = registry.getChat(chat.projectId, chat.id); registry.updateChat(chat.projectId, chat.id, current.title === 'New chat' ? { title: derivedChatTitle(task) } : {}); }
   });
@@ -59,6 +69,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     let ctx = contexts.get(chat.hiveDir);
     if (!ctx) {
       ctx = contextFactory({ hive: chat.hiveDir, control: { ...control, promptsDir: path.join(dataDir, 'prompts'), workspace: project.workspace, closeAuth: false, prepareThread: true, fixedWorkspace: true,
+        dreaming: () => dreaming(project.id),
         onStarting(info) {
           const current = registry.getChat(project.id, chat.id);
           registry.updateChat(project.id, chat.id, current.title === 'New chat' ? { title: derivedChatTitle(info.request) } : {});
@@ -103,7 +114,9 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     if (chat.error) return { id: chat.id, title: chat.title, status: 'error', error: chat.error, updatedAt: chat.updatedAt, runs: 0 };
     const s = snapshot(chat), runs = runsFor(chat.hiveDir), last = runs.at(-1);
     const statuses = { success: 'done', partial: 'done', finished: 'done', aborted: 'stopped', failed: 'failed' };
-    return { id: chat.id, title: chat.title, status: s.pendingHuman ? 'needs_human' : s.run || s.recoveryRequired ? 'running' : statuses[last?.status] ?? 'idle', updatedAt: last?.endedAt ?? last?.startedAt ?? chat.updatedAt, runs: runs.length };
+    // without a registry the one chat has no title of its own: it is called what it was first asked
+    const title = !registry && runs[0]?.goal ? derivedChatTitle(String(runs[0].goal)) : chat.title;
+    return { id: chat.id, title, status: s.pendingHuman ? 'needs_human' : s.run || s.recoveryRequired ? 'running' : statuses[last?.status] ?? 'idle', updatedAt: last?.endedAt ?? last?.startedAt ?? chat.updatedAt, runs: runs.length };
   }
   const reaper = registry ? setInterval(() => {
     for (const [hive, ctx] of contexts) {
@@ -116,6 +129,26 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     }
   }, 1000) : null;
   reaper?.unref();
+  const dreamTimer = registry ? setInterval(() => {
+    if (closing) return;
+    let projects;
+    try { projects = registry.listProjects(); } catch { return; }
+    for (const project of projects) {
+      try {
+        const dream = dreaming(project.id), status = dream.status(), now = Date.now();
+        if (!status.enabled) { nextDream.delete(project.id); continue; }
+        const due = nextDream.get(project.id) ?? (status.lastSweepAt ? Date.parse(status.lastSweepAt) + status.intervalMinutes * 60000 : now);
+        if (now < due || status.state === 'busy') continue;
+        dream.sweep(); nextDream.set(project.id, now + status.intervalMinutes * 60000);
+        if (status.reflectionEnabled && status.reflectionModel && !status.reflection?.proposal && status.reflection?.state !== 'running') {
+          void resolveReflectionModel(control?.auth ?? getAuthService(), status.reflectionModel).then((model) => {
+            if (!closing) return dream.propose({ model });
+          }).catch(() => {});
+        }
+      } catch { nextDream.set(project.id, Date.now() + 60000); }
+    }
+  }, 60000) : null;
+  dreamTimer?.unref();
   async function scoped(req, res, project, chat, suffix) {
     if (suffix === '/pipeline' || suffix.startsWith('/pipeline/')) {
       if (chat.engine !== 'pipeline') throw fail(409, 'This chat does not use the pipeline engine');
@@ -138,6 +171,24 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     if (suffix === '/runs' && req.method === 'GET') { json(res, 200, { runs: runsFor(chat.hiveDir) }); return; }
     const archive = /^\/runs\/([^/]+)\/events$/.exec(suffix);
     if (archive && req.method === 'GET') { json(res, 200, { events: replay(chat.hiveDir, archive[1]) }); return; }
+    // what the run integrated into the workspace, read from its private repository; 404: it kept none
+    const changes = /^\/runs\/([^/]+)\/diff$/.exec(suffix);
+    if (changes && req.method === 'GET') {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(changes[1])) throw fail(400, 'Invalid run ID');
+      const diff = await readRunDiff({ hiveDir: chat.hiveDir, runId: changes[1] });
+      if (!diff) throw fail(404, 'This run kept no diff');
+      json(res, 200, { runId: changes[1], content: diff.content, truncated: diff.truncated }); return;
+    }
+    // what the run's models reasoned and wrote, block by block (thoughts.jsonl); 404: the run kept none
+    const thoughts = /^\/runs\/([^/]+)\/thoughts$/.exec(suffix);
+    if (thoughts && req.method === 'GET') {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(thoughts[1])) throw fail(400, 'Invalid run ID');
+      const raw = new URL(req.url, 'http://localhost').searchParams.get('after') ?? '0';
+      if (!/^\d{1,12}$/.test(raw)) throw fail(400, 'Invalid sequence');
+      const doc = readThoughts(chat.hiveDir, thoughts[1], Number(raw));
+      if (!doc) throw fail(404, 'This run kept no thoughts');
+      json(res, 200, doc); return;
+    }
     const ctx = context(project, chat);
     if (suffix === '/events' && req.method === 'GET') return ctx.handleEvents(req, res);
     if (suffix === '/live' && req.method === 'GET') return ctx.handleLive(req, res);
@@ -167,13 +218,38 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       const chatRoute = /^\/api\/projects\/([^/]+)\/chats(?:\/(rename|remove))?$/.exec(pathname);
       const projectsRoute = ['/api/projects', '/api/projects/rename', '/api/projects/remove'].includes(pathname);
       const alias = registry && ['/events', '/api/live', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname);
+      const dreamPath = /^\/api\/projects\/([^/]+)\/dreaming(?:\/(preview|sweep|settings|rollback|proposal|propose|proposal\/apply|proposal\/reject|cancel))?$/.exec(pathname);
       const detectPath = /^\/api\/projects\/([^/]+)\/pipeline\/detect$/.exec(pathname);
-      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath) return false;
+      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath && !dreamPath) return false;
       if (!registry && !scopedPath && !chatRoute && !projectsRoute && pathname === '/api/runs' && req.method !== 'GET') return false;
       authorize(req);
       if (!registry && pathname === '/api/runs' && req.method === 'GET') { json(res, 200, { runs: runsFor(defaultChat().hiveDir) }); return true; }
       if (closing) throw fail(409, 'Server is closing');
       recoverGone();
+      if (dreamPath) {
+        if (!registry) throw fail(409, 'single_mode');
+        const dream = dreaming(dreamPath[1]), action = dreamPath[2];
+        if ((!action || action === 'proposal') && req.method === 'GET') { const status = dream.status(); json(res, 200, action ? status.reflection : status); return true; }
+        if (!action || req.method !== 'POST') throw fail(404, 'Not found');
+        const body = await readBody(req);
+        const allowed = action === 'settings' ? ['enabled', 'intervalMinutes', 'applyPolicy', 'reflectionEnabled', 'reflectionModel', 'reflectionMaxOutputTokens', 'reflectionTimeoutSeconds'] : action === 'propose' ? ['provider', 'model'] : ['proposal/apply', 'proposal/reject'].includes(action) ? ['proposalId'] : [];
+        if (Object.keys(body).some((key) => !allowed.includes(key))) throw fail(400, 'Unexpected request field');
+        if (['proposal/apply', 'proposal/reject'].includes(action) && (typeof body.proposalId !== 'string' || !body.proposalId || body.proposalId.length > 128)) throw fail(400, 'Proposal ID required');
+        if (action === 'propose') {
+          if (body.provider !== undefined && (typeof body.provider !== 'string' || typeof body.model !== 'string')) throw fail(400, 'Provider requires a model');
+          const selected = body.provider === undefined ? body.model ?? dream.status().reflectionModel : `${body.provider}/${body.model}`;
+          const model = await resolveReflectionModel(control?.auth ?? getAuthService(), selected);
+          const job = dream.propose({ model });
+          void job.catch(() => {});
+          json(res, 202, dream.status()); return true;
+        }
+        const result = action === 'settings' ? dream.configure(body)
+          : action === 'proposal/apply' ? dream.applyProposal(body.proposalId)
+          : action === 'proposal/reject' ? dream.rejectProposal(body.proposalId)
+          : action === 'cancel' ? dream.cancelReflection() : dream[action]();
+        nextDream.delete(dreamPath[1]);
+        json(res, 200, result); return true;
+      }
       if (pathname === '/api/pipeline' && req.method === 'GET') { json(res, 200, await pipeline.capability()); return true; }
       if (pathname === '/api/pipeline/sandbox/build' && req.method === 'POST') { json(res, 202, await pipeline.buildSandbox(await readBody(req))); return true; }
       if (detectPath && req.method === 'POST') {
@@ -214,8 +290,10 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
           const chats = registry.listChats(body.id);
           if (chats.some((c) => c.error || live(c))) throw fail(409, 'Project has running chats or requires recovery');
           if (body.deleteHistory !== undefined && typeof body.deleteHistory !== 'boolean') throw fail(400, 'Invalid deleteHistory');
+          await dreams.get(body.id)?.close(); dreams.delete(body.id); nextDream.delete(body.id);
           if (body.deleteHistory) for (const chat of chats) if (chat.engine === 'pipeline') pipeline.remove(chat);
-          registry.removeProject(body.id, { deleteHistory: body.deleteHistory, isRunning: live }); json(res, 200, { ok: true });
+          registry.removeProject(body.id, { deleteHistory: body.deleteHistory, isRunning: live });
+          json(res, 200, { ok: true });
         }
         return true;
       }
@@ -235,10 +313,17 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       throw fail(404, 'Not found');
     },
     async close() {
-      closing = true; clearInterval(reaper);
-      await Promise.all([...contexts.values()].map((ctx) => ctx.close()));
-      await pipeline.close();
-      await authController?.close();
+      closing = true; clearInterval(reaper); clearInterval(dreamTimer);
+      const errors = [];
+      const drain = async (closers) => {
+        const results = await Promise.allSettled(closers.map((close) => Promise.resolve().then(close)));
+        errors.push(...results.filter((r) => r.status === 'rejected').map((r) => r.reason));
+      };
+      await drain([...dreams.values()].map((dream) => () => dream.close()));
+      dreams.clear(); nextDream.clear();
+      await drain([...contexts.values()].map((ctx) => () => ctx.close()));
+      await drain([() => pipeline.close(), () => authController?.close()]);
+      if (errors.length) throw new AggregateError(errors, 'Registry resource cleanup failed');
     }
   };
 }

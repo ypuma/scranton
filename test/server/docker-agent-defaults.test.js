@@ -22,7 +22,7 @@ async function fixture(t, registry, fileConfig = {}) {
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const read = fs.readFileSync;
   t.mock.method(fs, 'readFileSync', function(file, ...args) {
-    if (typeof file === 'string' && path.resolve(file) === path.join(PACKAGE_ROOT, 'scranton.config.json')) return JSON.stringify(fileConfig);
+    if (typeof file === 'string' && path.resolve(file) === path.join(PACKAGE_ROOT, 'scranton.config.json')) return JSON.stringify({ execution: { sandbox: { mode: 'docker' } }, ...fileConfig });
     return read.call(this, file, ...args);
   });
   const calls = [], children = []; let catalogCalls = 0;

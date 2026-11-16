@@ -444,7 +444,7 @@ Nur Betreiberkonfiguration bzw. feste Python-Argumente erzeugen argv. `shell=Fal
 
 ### Docker-Sandbox
 
-Default ist `scranton-pipeline-sandbox:<engine version>` (aktuell `0.1.0`), optional durch `sandbox.docker.image` ersetzt. Das Paket enthält `sandbox_image/Dockerfile`: Debian slim, CPython mit pip/venv/pytest, Node.js LTS/npm und Git, UID/GID 10001, kein ENTRYPOINT. Die Basisimages sind per Digest gepinnt; das ist keine Garantie bitidentischer künftiger apt-Repositories. `sandbox build` baut bewusst nur Tags `scranton-pipeline-sandbox:<tag>` aus diesem Kontext; Ausführung pullt/baut nie still (`--pull never`).
+Der Sandboxmodus ist standardmäßig `host` (keine OS-Isolation); direkte Engineaufrufe verlangen weiterhin `--trust-host`. Explizit konfiguriertes Docker bleibt ohne Hostfallback. Das Docker-Standardimage ist `scranton-pipeline-sandbox:<engine version>` (aktuell `0.1.0`), optional durch `sandbox.docker.image` ersetzt. Das Paket enthält `sandbox_image/Dockerfile`: Debian slim, CPython mit pip/venv/pytest, Node.js LTS/npm und Git, UID/GID 10001, kein ENTRYPOINT. Die Basisimages sind per Digest gepinnt; das ist keine Garantie bitidentischer künftiger apt-Repositories. `sandbox build` baut bewusst nur Tags `scranton-pipeline-sandbox:<tag>` aus diesem Kontext; Ausführung pullt/baut nie still (`--pull never`).
 
 Jeder Befehl erhält einen ephemeren `--rm`-Container: `--read-only` Root, größenbegrenztes ausführbares tmpfs `/tmp` (`sandbox.docker.tmpfs_mb`, Default 512), `--user 10001:10001`, `--cap-drop ALL`, `--security-opt no-new-privileges`, CPU-/RAM-/PID-Limits, Swap gleich RAM und `--log-driver none`. Checks haben `--network none`; nur explizit netzfreigegebene Setuprezepte verwenden `bridge`. Der Workspace wird nach `/workspace` gemountet, zusätzlich nur der unten beschriebene externe Installationszustand; keine externen Gitmetadaten, kein Docker-Socket und keine Hostumgebung. `--entrypoint argv[0]` setzt das Betreiberexecutable; eine feste Umgebung legt HOME/Caches nach `/tmp`.
 
@@ -640,3 +640,65 @@ Ein einziger Schalter `EngineConfig.conversation` (striktes Boolean, Default fal
 `report.finalize_out_of_band` ist weiter der gemeinsame Abschluss für Erfolg/Fehler/Ablehnung/Abbruch. Der aktive Zweig erzeugt deterministisch `terminal_reply` aus dem endgültigen Zustand (bei Fehler auch dem letzten grünen Partialdiff). `make_status` verwendet dieselbe Projektion; die separate Datei `delivery/reply.json` und `run_reply.data` haben exakt denselben Inhalt wie `status.reply`: `{from,kind,text,citations,truncated}`. `run_reply` steht unmittelbar vor `run_finished`; danach kann der vorhandene Nodewrapper noch `node_finished` schreiben. Ohne terminalen Status gibt es keine Reply. Vor terminalem Status wird der vollständige Abschlussstatus als interner Receipt `delivery/final-status.json` atomar geschrieben, danach Replydatei, `run_reply` und `run_finished`, zuletzt `status.json`. Resume erkennt den Receipt vor dem Graphstart und vervollständigt fehlende Kopien ohne neue Modellaufrufe oder ein zweites `run_reply`; ein vorhandenes Replyevent ist kanonisch. Auch Legacy-Terminalstatus mit Reply wird repariert. Andere Events/Modellaufrufe haben weiterhin keine globale Exactly-once-Zusage.
 
 Tests: `tests/flow/test_conversation.py` prüft Defaultprompt-/Schemasignaturen und gegen archivierte COMMITTED-HEAD-Quellen verifizierte Legacyprojektionen (`.scratch/pipeline/chat-fix/BASELINE.md`), alle Demos mit/ohne Schalter, Kontextantwort/Quellbytes/übersprungene Nodes, Citation-Enforce/Observe, Terminalgründe, Suspend/Resume, Redaktion und Caps. Die Legacyprojektion entfernt volatile Gitdaten/Zeitfelder; unabhängige Fan-out-/Lane-Events haben keine feste Totalordnung. Vorhandene Tests und das Corepack werden nicht umgeschrieben. Desktopstaging kopiert das neue Pythonmodul unter `src/scranton_pipeline` unverändert; es benötigt keine neue Paketdatenregel und trifft kein `pipelineForbidden`-Muster.
+
+## Project dreaming bridge (typed observations, no Python replay)
+
+`dreaming.py` emits `dream_attempt` through the existing event log at two authoritative
+workflow boundaries: rejected edit sets in `apply_edits`, and completed ordinary
+step/review-revision verification in `verify`. The data is:
+
+```json
+{"schema":1,"scope":"[0,\"step:fix\",null]","ordinal":1,"result":"passed","quality":1,"plan_revision":0,"retry_ceiling":3}
+```
+
+`scope` is a compact JSON tuple `[plan_revision, scope_id, lane_identity]`;
+`lane_identity` is `null` or `[wave, slot, step_id]`. Pair it with the enclosing
+run identity. Sequential steps, review rounds, revised plans and parallel lanes
+cannot share that identity. `scope_id` is `step:<exact step ID>` or
+`rev:<review round>`. IDs retain their full model `Short` bound (1024 characters),
+including Unicode and JSON escaping; consumers must parse the tuple, not truncate
+or split it on punctuation. Revision/wave/slot are nonnegative integers; review
+rounds start at one. `ordinal` uses a separate additive counter keyed by the full
+tuple (plus one while rejecting the current edit set). `retry_ceiling` is the
+configured `limits.max_step_attempts` minus attempts spent outside this tuple on
+the same execution-budget key. Both values are within 1..10, ordinal <= ceiling;
+the ceiling stays fixed within a scope. A reused step ID after replan starts at
+ordinal one with only its remaining allowance. Existing execution counters and
+routing are unchanged: replan never restores spent retries.
+
+Passed/quality 1 means all currently applicable required checks passed. Failed/
+quality 0 means an identifiable edit set was rejected, or at least one applicable
+required check failed or timed out (including cheap-first fail-fast). Missing,
+duplicate, unknown or infrastructure-error required results are omitted, not
+successes. No applicable required checks means no observation, including rejected
+edit sets. `run_resumed.data` contains `{gate,decision,has_feedback}` from the
+validated choice: gate/decision are null for ungated resume or cancellation;
+`has_feedback` is true iff the actual gate comment is nonempty (whitespace counts).
+No feedback text is emitted. Consumers exclude unknown/legacy metadata and any
+intervention; only explicit clean approvals establish non-intervention. Baseline checks,
+integration verification/repairs, output-format repairs, context requests, human
+approvals and cancellation are not coding attempts. Lane event logs additionally
+retain their existing `lane` field. No check output, edit text, prompt or delivered
+change claim is included. In particular a failed attempt is not delivered work;
+a passed lane is not a promise that integration or delivery succeeded.
+
+Node owns the Dream-RSI replay, evaluator cohort/recipe identity, human-intervention
+exclusion and opt-in retry reduction. Python does not implement replay scores or
+procedural graph evolution. Legacy `check_finished` events lack attempt scope and
+cannot reconstruct complete per-attempt histories. A crash can replay an event
+before its node checkpoint: consumers must reject ambiguous/duplicate chains rather
+than invent continuations. Unknown or omitted attempts can leave coverage incomplete.
+
+Schema-1 `--history-file` additionally accepts optional `project_memory`, at most
+16 `{id,text,sources}` entries (text at most 400 characters, at most three source
+references of at most 240 characters; complete snapshot at most 32768 UTF-8 bytes).
+Old three-key snapshots retain their shape. Empty `runs` is accepted only with
+nonempty memory, never by fabricating a prior run. IDs/text/source references are
+redacted, E/K/H citation-shaped tokens are removed, and JSON framing prevents forged
+prompt delimiters. Node validates live source provenance before passing memory;
+Python treats those references as advisory strings, never opens them as evidence.
+The planner's existing historical-data section labels memory advisory, historical,
+non-evidence and subordinate to the current task. Prompt budgeting drops memory
+entries before shortening same-chat priority task/plan/outcome context. Memory-only
+snapshots work through the unchanged CLI/run.json/checkpoint path; no approvals,
+finished steps or evidence IDs are inherited.

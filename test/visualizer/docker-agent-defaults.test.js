@@ -27,7 +27,8 @@ const AGENTS = [
   entry('seclint', 'Seclint', 'Lint'),
   entry('docs2', 'Doris', 'Docs'),
 ];
-const defaults = (models, agents) => ({ ...CONTROL, defaults: { models, ...(agents ? { agents } : {}) } });
+// a workspace whose configuration names Docker, so the drawer opens on it
+const defaults = (models, agents) => ({ ...CONTROL, defaults: { execution: { sandbox: { mode: 'docker' } }, models, ...(agents ? { agents } : {}) } });
 const EVERY = defaults({ michael: SOL, dwight: SOL, oscar: SOL, hank: SOL, angela: SOL });
 const ROLES = ['michael', 'dwight', 'angela'];
 const saved = (h) => JSON.parse(h.storage.map.get(MODELS_KEY));

@@ -191,6 +191,61 @@ export function cleanupIsolationStorage(hiveDir) {
   return removed;
 }
 
+// What a run integrated into its workspace, as a unified diff: from the snapshot the run started from (the root of
+// refs/heads/integrated in its private repository) to what it integrated last. Read-only, and safe while the run
+// is still going: it reads two commits and never the worktrees. null: the run kept no private repository (it ran
+// without worktree isolation, or its storage was removed with its chat).
+export async function readRunDiff({ hiveDir, runId, maxBytes = 1024 * 1024, timeoutMs = 15000 }) {
+  const hive = path.resolve(hiveDir);
+  id(runId);
+  const pointers = safePath(hive, 'isolation');
+  if (!fs.existsSync(pointers)) return null;
+  const root = canonicalRoot(path.resolve(resolveIsolationRoot({ hiveDir: hive })));
+  let storage = null;
+  let createdAt = '';
+  for (const name of fs.readdirSync(pointers)) {
+    if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
+    let pointer;
+    try { pointer = JSON.parse(fs.readFileSync(safePath(pointers, name), 'utf8')); } catch { continue; }
+    if (pointer?.v !== 1 || pointer.runId !== runId || typeof pointer.storage !== 'string' || !path.isAbsolute(pointer.storage)) continue;
+    const candidate = path.resolve(pointer.storage);
+    // the same bounds the cleanup holds a pointer to: a directory of the isolation root, named like its pointer
+    if (path.dirname(candidate) !== root || path.basename(candidate) !== name.slice(0, -5)) throw new Error(`Isolation pointer is outside the configured root: ${candidate}`);
+    if (inside(candidate, hive) || typeof pointer.workspace === 'string' && inside(candidate, pointer.workspace)) throw new Error('Isolation pointer overlaps workspace or Hive');
+    const at = typeof pointer.createdAt === 'string' ? pointer.createdAt : '';
+    if (!storage || at >= createdAt) { storage = candidate; createdAt = at; }
+  }
+  if (!storage) return null;
+  safePath(root, path.basename(storage));
+  let owner;
+  try { owner = JSON.parse(fs.readFileSync(safePath(storage, '.scranton-isolation.json'), 'utf8')); }
+  catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+  if (owner?.runId !== runId || owner.hiveDir && owner.hiveDir !== hive) throw new Error('Isolation pointer run does not match storage');
+  const gitDir = safePath(storage, 'shadow/.git');
+  if (!fs.existsSync(gitDir)) return null;
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^GIT_/i.test(key)) delete env[key];
+  const git = (args, maxBuffer) => new Promise((resolve, reject) => {
+    const child = execFile('git', ['-c', 'core.longpaths=true', '-c', 'core.hooksPath=', '-c', 'core.fsmonitor=false', '-c', 'core.quotepath=false', '-c', 'core.attributesFile=', `--git-dir=${gitDir}`, ...args], {
+      env: { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'buffer', maxBuffer, timeout: timeoutMs, windowsHide: true,
+    }, (error, stdout) => {
+      if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') resolve({ stdout: stdout.subarray(0, maxBuffer), truncated: true });
+      else if (error) reject(error);
+      else resolve({ stdout, truncated: false });
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end();
+  });
+  let base;
+  try { base = (await git(['rev-list', '--max-parents=0', 'refs/heads/integrated'], 64 * 1024)).stdout.toString('utf8').trim().split('\n')[0]; }
+  catch { return null; }
+  if (!/^[a-f0-9]{40,64}$/.test(base)) return null;
+  // no external diff, text conversion or rename guessing: the bytes of the two snapshots, as plain hunks
+  const { stdout, truncated } = await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', base, 'refs/heads/integrated', '--'], maxBytes);
+  return { content: stdout.toString('utf8'), truncated };
+}
+
 export class WorktreeManager {
   constructor({ workspace, hiveDir, runId }) {
     this.workspace = path.resolve(workspace);

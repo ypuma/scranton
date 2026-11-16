@@ -219,7 +219,7 @@ await import(${JSON.stringify(new URL('../../tools/fake-pi-rpc.js', import.meta.
     agentId: 'dwight', agentConfig: f.config.agents.dwight, pi: f.config.pi,
     hive: { sessionDir: () => sessionDir, inboxPath: () => path.join(f.dir, 'unused.md') }, message: 'done [TASK_COMPLETE]', timeoutMs: 10000,
     extraEnv: { SCRANTON_CONVERSATION: '1' }, execution: async (staged) => {
-      const launch = await prepareSandbox({ workspace, sessionDir, systemPromptFile, env: staged.env }, {
+      const launch = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace, sessionDir, systemPromptFile, env: staged.env }, {
         executable: 'fake-docker', run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : ''
       });
       return { ...launch, spec: { argv: [process.execPath, shim], shell: false } };

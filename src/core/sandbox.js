@@ -23,7 +23,7 @@ const contains = (root, file) => { const rel = path.relative(root, file); return
 
 function config(value = {}) {
   for (const key of Object.keys(value)) if (!['mode', 'image', 'network', 'credentialEnvNames'].includes(key)) throw new Error(`Unsupported sandbox setting: ${key}`);
-  const result = { mode: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge', ...value };
+  const result = { mode: 'host', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge', ...value };
   if (!['host', 'docker'].includes(result.mode)) throw new Error('Sandbox mode must be docker or host');
   if (!['bridge', 'none'].includes(result.network)) throw new Error('Sandbox network must be bridge or none');
   if (typeof result.image !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$/.test(result.image)) throw new Error('Invalid sandbox image');
@@ -74,7 +74,7 @@ async function runDocker(executable, args, env) {
 
 export async function checkSandbox(sandbox = {}, { run = runDocker, executable = findOnPath('docker') } = {}) {
   const settings = config(sandbox);
-  if (settings.mode === 'host') return { available: true, mode: 'host', reason: 'Explicit trusted-host execution; no container boundary' };
+  if (settings.mode === 'host') return { available: true, mode: 'host', reason: 'Trusted-host execution; no container boundary' };
   if (!executable) return { available: false, mode: 'docker', reason: 'Docker CLI not found; install/configure a Linux Docker engine explicitly, or select trusted-host mode' };
   try {
     const engine = await run(executable, ['info', '--format', '{{.OSType}}'], dockerEnv());

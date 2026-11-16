@@ -39,7 +39,7 @@
   <nav class="sidebar" id="sidebar" aria-labelledby="nav-title" hidden>
     <div class="nav-head">
       <h2 id="nav-title">Projects</h2>
-      <span class="badge" id="nav-mode" hidden>single</span>
+      <span class="badge" id="nav-mode" title="This server shows one project folder. Start it with --data to keep several." hidden>One project</span>
       <button type="button" class="icon-btn" id="project-new" aria-haspopup="dialog" aria-label="New project" title="New project">
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
       </button>
@@ -52,6 +52,15 @@
     </footer>
   </nav>
   <div class="nav-scrim" id="nav-scrim" hidden></div>
+  <section class="think" id="think-view" aria-labelledby="think-title" hidden>
+    <header class="think-top">
+      <h2 id="think-title" tabindex="-1">Thinking</h2>
+      <span class="section-aside" id="think-aside"></span>
+      <button type="button" class="icon-btn think-close" id="think-close" aria-label="Close the Thinking view" title="Close the Thinking view"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    </header>
+    <p class="think-note" id="think-note" hidden></p>
+    <div class="think-cols" id="think-cols" hidden></div>
+  </section>
   <div class="main" id="main-col">
 
   <section class="thread" id="thread" hidden aria-labelledby="thread-title">
@@ -181,6 +190,7 @@
     <h2 class="sr-only" id="chat-view-title">Conversation</h2>
     <div class="chatview-scroll" id="chat-view-scroll" tabindex="0" role="group" aria-label="Conversation, newest at the bottom">
       <div class="chatview-list" id="chat-view-list"></div>
+      <div class="chat-live" id="chat-live" role="group" aria-label="Agents working now" hidden></div>
     </div>
     <button type="button" class="jump" id="chat-view-jump" hidden>Jump to latest</button>
   </section>
@@ -276,34 +286,49 @@
   </section>
 
   <main class="dash" id="dash">
-    <section class="section board-panel" aria-labelledby="h-board">
-      <header class="section-head">
-        <h2 id="h-board">Board</h2>
-        <span class="section-aside" id="board-aside"></span>
-      </header>
-      <div class="board" id="board"></div>
-    </section>
-    <div class="dash-main">
-      <section class="section agents" aria-labelledby="h-pipeline">
+    <div class="dash-main" id="dash-main">
+      <section class="section agents" aria-labelledby="h-pipeline" data-fold="agents" data-open="true">
         <header class="section-head">
+          <button type="button" class="fold-toggle" id="fold-agents-toggle" aria-expanded="true" aria-controls="fold-agents" aria-labelledby="h-pipeline"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
           <h2 id="h-pipeline">Agents</h2>
           <span class="section-aside" id="pipeline-aside"></span>
         </header>
-        <div class="pipeline" id="pipeline"></div>
-        <div class="lanes-block" id="lanes-block" hidden>
-          <div class="lanes-head">
-            <h3 id="h-lanes">Instance lanes</h3>
-            <span class="lanes-exec" id="lanes-exec"></span>
-          </div>
-          <ul class="lanes" id="lanes" aria-labelledby="h-lanes"></ul>
-        </div>
+        <div class="fold-body" id="fold-agents"><div class="fold-inner">
+          <div class="pipeline" id="pipeline"></div>
+        </div></div>
       </section>
 
-      <section class="section usage-panel" aria-labelledby="h-usage">
+      <section class="section lanes-block" id="lanes-block" aria-labelledby="h-lanes" data-fold="lanes" data-open="false" hidden>
+        <header class="section-head lanes-head">
+          <button type="button" class="fold-toggle" id="fold-lanes-toggle" aria-expanded="false" aria-controls="fold-lanes" aria-labelledby="h-lanes"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+          <h3 id="h-lanes">Instance lanes</h3>
+          <span class="lanes-exec" id="lanes-exec"></span>
+        </header>
+        <div class="fold-body" id="fold-lanes"><div class="fold-inner">
+          <ul class="lanes" id="lanes" aria-labelledby="h-lanes"></ul>
+        </div></div>
+      </section>
+
+      <section class="section board-panel" aria-labelledby="h-board" data-fold="board" data-open="true">
         <header class="section-head">
+          <button type="button" class="fold-toggle" id="fold-board-toggle" aria-expanded="true" aria-controls="fold-board" aria-labelledby="h-board"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+          <h2 id="h-board">Board</h2>
+          <span class="section-aside" id="board-aside"></span>
+          <button type="button" class="btn btn-small btn-quiet section-action" id="board-plan" aria-controls="side-panel" hidden>Read the plan</button>
+        </header>
+        <div class="fold-body" id="fold-board"><div class="fold-inner">
+          <div class="board" id="board"></div>
+        </div></div>
+      </section>
+
+      <section class="section usage-panel" aria-labelledby="h-usage" data-fold="usage" data-open="false">
+        <header class="section-head">
+          <button type="button" class="fold-toggle" id="fold-usage-toggle" aria-expanded="false" aria-controls="fold-usage" aria-labelledby="h-usage"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
           <h2 id="h-usage">Cost and usage</h2>
         </header>
-        <div id="usage-panel"></div>
+        <div class="fold-body" id="fold-usage"><div class="fold-inner">
+          <div id="usage-panel"></div>
+        </div></div>
       </section>
     </div>
 
@@ -312,20 +337,20 @@
       <div class="tabs" role="tablist" aria-labelledby="h-activity" id="activity-tabs">
         <button type="button" class="tab" role="tab" id="tab-events" data-tab="events" aria-controls="log-panel" aria-selected="true">Events <span class="tab-count" id="tab-count-events">0</span></button>
         <button type="button" class="tab" role="tab" id="tab-chat" data-tab="chat" aria-controls="chat-panel" aria-selected="false" tabindex="-1">Messages <span class="tab-count" id="tab-count-chat">0</span></button>
-        <button type="button" class="tab" role="tab" id="tab-mail" data-tab="mail" aria-controls="mail-panel" aria-selected="false" tabindex="-1">Mailboxes <span class="tab-count" id="tab-count-mail">0</span></button>
       </div>
 
       <div class="tabpanel log-panel" role="tabpanel" id="log-panel" aria-labelledby="tab-events">
         <div class="panel-tools">
           <div class="segmented" role="group" aria-label="Filter events" id="log-filters">
-            <button type="button" class="seg" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="seg" data-filter="main" aria-pressed="true" title="Everything but the status ticks of the agents">Key events</button>
+            <button type="button" class="seg" data-filter="all" aria-pressed="false">All <span class="seg-count" data-count="all">0</span></button>
             <button type="button" class="seg" data-filter="handoffs" aria-pressed="false">Handoffs <span class="seg-count" data-count="handoffs">0</span></button>
             <button type="button" class="seg" data-filter="tools" aria-pressed="false">Tools <span class="seg-count" data-count="tools">0</span></button>
             <button type="button" class="seg" data-filter="results" aria-pressed="false">Results <span class="seg-count" data-count="results">0</span></button>
           </div>
         </div>
         <div class="log-scroll" id="log-scroll">
-          <table class="log" id="log" data-filter="all" role="grid" aria-readonly="true" aria-label="Event log, newest at the bottom">
+          <table class="log" id="log" data-filter="main" role="grid" aria-readonly="true" aria-label="Event log, newest at the bottom">
             <colgroup><col class="c-time"><col class="c-source"><col class="c-type"><col></colgroup>
             <thead><tr><th scope="col">Time</th><th scope="col">Source</th><th scope="col">Type</th><th scope="col">Detail</th></tr></thead>
             <tbody id="log-body"></tbody>
@@ -341,6 +366,10 @@
           <ol class="chat-list" id="chat-list"></ol>
           <p class="log-empty" id="chat-empty">No messages yet</p>
         </div>
+        <details class="inboxes" id="inboxes" hidden>
+          <summary>Inboxes <span class="tab-count" id="inbox-count">0</span> <span class="hint">latest message per agent</span></summary>
+          <ul class="mailboxes" id="mailboxes"></ul>
+        </details>
         <form class="chat-form" id="chat-form" novalidate aria-labelledby="chat-form-label">
           <span class="sr-only" id="chat-form-label">Send a message to an agent instance</span>
           <div class="chat-to-row">
@@ -357,10 +386,6 @@
         </form>
       </div>
 
-      <div class="tabpanel mail-panel" role="tabpanel" id="mail-panel" aria-labelledby="tab-mail" hidden>
-        <p class="panel-note">Latest message per inbox</p>
-        <ul class="mailboxes" id="mailboxes"></ul>
-      </div>
       <div class="hitl-status activity-status" id="chat-status" role="status" aria-live="polite" tabindex="-1"></div>
     </section>
   </main>
@@ -372,6 +397,17 @@
       <button type="button" class="icon-btn" id="rail-close" aria-label="Hide the run panel" title="Hide the run panel"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
     </header>
     <div class="rail-body" id="rail-body">
+      <section class="rail-sec rail-outcome" id="rail-outcome" aria-labelledby="rail-outcome-title" hidden>
+        <header class="rail-sec-head">
+          <h3 id="rail-outcome-title">Outcome</h3>
+        </header>
+        <dl class="outcome-figs">
+          <div class="outcome-fig"><dt>Result</dt><dd class="outcome-result" id="rail-outcome-result"></dd></div>
+          <div class="outcome-fig" id="rail-outcome-done-fig"><dt id="rail-outcome-unit">Milestones</dt><dd id="rail-outcome-done"></dd></div>
+          <div class="outcome-fig" id="rail-outcome-duration-fig"><dt>Duration</dt><dd id="rail-outcome-duration"></dd></div>
+          <div class="outcome-fig"><dt>Cost</dt><dd id="rail-outcome-cost"></dd></div>
+        </dl>
+      </section>
       <section class="rail-sec" aria-labelledby="rail-agents-title">
         <header class="rail-sec-head">
           <h3 id="rail-agents-title">Agents now</h3>
@@ -387,6 +423,7 @@
           <h3 id="rail-usage-title">Cost and usage</h3>
         </header>
         <div id="rail-usage"></div>
+        <button type="button" class="msg-more" id="rail-usage-more" aria-controls="rail-usage" aria-expanded="true" hidden>Hide chart</button>
       </section>
       <section class="rail-sec" aria-labelledby="rail-board-title">
         <header class="rail-sec-head">
@@ -400,7 +437,125 @@
       </section>
     </div>
   </aside>
+  <aside class="side" id="side-panel" aria-labelledby="side-title" hidden>
+    <header class="side-head">
+      <h2 id="side-title" tabindex="-1">Browser</h2>
+      <span class="section-aside" id="side-aside"></span>
+      <button type="button" class="icon-btn" id="side-close" aria-label="Close the side panel" title="Close the side panel"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></button>
+    </header>
+    <section class="side-view plan-view" id="side-plan" aria-label="Plan of this run" hidden>
+      <div id="plan-body"></div>
+      <p class="placeholder" id="plan-empty">No plan yet. It appears here once the planner has written it.</p>
+    </section>
+    <section class="side-view browser" id="side-browser" aria-label="Web preview" hidden>
+      <form class="browser-bar" id="browser-form" novalidate>
+        <label class="sr-only" for="browser-url">Address of a dev server on this computer</label>
+        <input id="browser-url" class="mono" type="text" inputmode="url" maxlength="2048" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="http://localhost:3000" aria-describedby="browser-status">
+        <button type="submit" class="btn btn-small btn-primary" id="browser-go">Open</button>
+        <button type="button" class="icon-btn" id="browser-reload" aria-label="Reload the preview" title="Reload the preview" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v2.6h-2.6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </form>
+      <p class="hint form-status" id="browser-status" role="status" aria-live="polite"></p>
+      <div class="browser-stage">
+        <p class="chart-empty browser-empty" id="browser-empty">Enter the address of a dev server on this computer, such as http://localhost:3000, to see what the agents built.</p>
+        <iframe class="browser-frame" id="browser-frame" title="Web preview" sandbox="allow-scripts allow-same-origin allow-forms" referrerpolicy="no-referrer" hidden></iframe>
+      </div>
+    </section>
+    <section class="side-view changes" id="side-changes" aria-label="Changes of this run" hidden>
+      <p class="hint changes-note" id="changes-note"></p>
+      <ul class="changes-files" id="changes-files" aria-label="Changed files"></ul>
+      <p class="placeholder" id="changes-empty" hidden>No file has been changed in this run yet</p>
+      <pre class="pv-diff changes-diff" id="changes-diff" tabindex="0" aria-label="Diff of the run" hidden></pre>
+    </section>
+  </aside>
+  <nav class="viewbar" id="viewbar" aria-label="Views and panels">
+    <div class="viewbar-group" role="group" aria-label="View">
+      <button type="button" class="icon-btn bar-btn" id="bar-chat" aria-pressed="false" title="Chat" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="bar-label" id="bar-chat-label">Chat</span></button>
+      <button type="button" class="icon-btn bar-btn" id="bar-dash" aria-pressed="false" title="Dashboard" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 2.5H7v5H2.5zM9 2.5h4.5v3H9zM9 7.5h4.5v6H9zM2.5 9.5H7v4H2.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="bar-label" id="bar-dash-label">Dashboard</span></button>
+      <button type="button" class="icon-btn bar-btn" id="bar-think" aria-pressed="false" aria-controls="think-view" title="Thinking: what every agent reasons, writes and does"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M5.2 10.5A4 4 0 1 1 11 8.6c0 1.9-1.6 2.6-3.3 2.4-.9-.1-1.6 0-2.5-.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="4.3" cy="12.6" r="0.9" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="2.6" cy="14.2" r="0.5" fill="currentColor"/></svg><span class="bar-label">Thinking</span></button>
+    </div>
+    <div class="viewbar-group" role="group" aria-label="Side panel">
+      <button type="button" class="icon-btn bar-btn" id="bar-plan" aria-pressed="false" aria-controls="side-panel" title="Plan of this run"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6.5 4h7M6.5 8h7M6.5 12h7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M2.3 4l.9.9L4.7 3.2M2.3 8l.9.9 1.5-1.7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="3.5" cy="12" r="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span class="bar-label">Plan</span></button>
+      <button type="button" class="icon-btn bar-btn" id="bar-browser" aria-pressed="false" aria-controls="side-panel" title="Browser: preview what the agents built"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2.5 8h11M8 2.5c2.2 1.7 2.2 9.3 0 11M8 2.5c-2.2 1.7-2.2 9.3 0 11" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span class="bar-label">Browser</span></button>
+      <button type="button" class="icon-btn bar-btn" id="bar-changes" aria-pressed="false" aria-controls="side-panel" title="Changes of this run"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2.5v5M5.5 5h5M5.5 11.5h5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="bar-label">Changes</span></button>
+    </div>
+    <div class="viewbar-group" role="group" aria-label="Setup">
+      <button type="button" class="icon-btn bar-btn" id="bar-agents" aria-haspopup="dialog" title="Agents and their prompts" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2 13c.4-2.3 2-3.5 4-3.5s3.6 1.2 4 3.5M10.6 3.9a1.9 1.9 0 0 1 0 3.6M11.6 9.8c1.3.4 2.1 1.5 2.4 3.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="bar-label">Agents</span></button>
+      <button type="button" class="icon-btn bar-btn" id="bar-accounts" aria-haspopup="dialog" aria-describedby="accounts-open-state" title="Accounts" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="5.5" r="2.7" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2.8 14c.6-2.8 2.7-4.3 5.2-4.3s4.6 1.5 5.2 4.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span class="btn-mark" id="bar-accounts-mark" aria-hidden="true"></span><span class="bar-label">Accounts</span></button>
+    </div>
+    <button type="button" class="icon-btn bar-btn bar-end" id="bar-settings" aria-haspopup="dialog" title="Settings"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 5H9M12 5h1.5M2.5 11H4M7 11h6.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="10.5" cy="5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5.5" cy="11" r="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span class="bar-label">Settings</span></button>
+  </nav>
   </div>
+
+  <dialog class="drawer" id="prefs-dialog" aria-labelledby="prefs-title">
+    <div class="drawer-frame">
+      <header class="drawer-head">
+        <h2 id="prefs-title">Settings</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body">
+        <fieldset class="exec prefs-first">
+          <legend>Appearance</legend>
+          <div class="field">
+            <span class="field-label" id="prefs-density-label">Density</span>
+            <div class="segmented prefs-seg" role="group" aria-labelledby="prefs-density-label" id="prefs-density">
+              <button type="button" class="seg" data-value="compact" aria-pressed="false">Compact</button>
+              <button type="button" class="seg" data-value="comfortable" aria-pressed="true">Comfortable</button>
+              <button type="button" class="seg" data-value="airy" aria-pressed="false">Airy</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label" id="prefs-motion-label">Animations</span>
+            <div class="segmented prefs-seg" role="group" aria-labelledby="prefs-motion-label" aria-describedby="prefs-motion-hint" id="prefs-motion">
+              <button type="button" class="seg" data-value="off" aria-pressed="false">Off</button>
+              <button type="button" class="seg" data-value="subtle" aria-pressed="false">Subtle</button>
+              <button type="button" class="seg" data-value="lively" aria-pressed="true">Lively</button>
+            </div>
+            <span class="hint" id="prefs-motion-hint">Subtle keeps cross-fades and drops entrances, count-ups and moving cards. Your system's reduced-motion setting always wins.</span>
+          </div>
+          <label class="check"><input type="checkbox" id="prefs-color" checked><span>Status colors <span class="hint">a tone each for passed, failed, waiting on you and running; off is black and white</span></span></label>
+        </fieldset>
+        <fieldset class="exec">
+          <legend>Notifications</legend>
+          <label class="check" id="prefs-notify-row"><input type="checkbox" id="prefs-notify" aria-describedby="prefs-notify-hint"><span>Desktop notifications <span class="hint" id="prefs-notify-hint">when a run needs you or ends</span></span></label>
+        </fieldset>
+        <fieldset class="exec">
+          <legend>Defaults for new runs</legend>
+          <p class="hint prefs-note">What the New run form starts with. Every run can still change it.</p>
+          <div class="field">
+            <label for="prefs-parallel">Parallel milestones</label>
+            <input id="prefs-parallel" class="mono narrow" type="text" inputmode="numeric" maxlength="2" autocomplete="off" aria-describedby="prefs-parallel-hint">
+            <span class="hint form-status" id="prefs-parallel-hint">1-32. Empty uses the project's configuration.</span>
+          </div>
+          <div class="field">
+            <label for="prefs-sandbox">Sandbox</label>
+            <select id="prefs-sandbox" aria-describedby="prefs-sandbox-hint">
+              <option value="">The project's configuration</option>
+              <option value="docker">Docker container</option>
+              <option value="host">Trusted host</option>
+            </select>
+            <span class="hint" id="prefs-sandbox-hint">A trusted host still asks for your acknowledgement on every run.</span>
+          </div>
+          <div class="field">
+            <span class="field-label">Workflow</span>
+            <span class="hint" id="prefs-workflow-note"></span>
+            <button type="button" class="btn btn-small prefs-inline" id="prefs-workflow-reset">Forget the remembered stages</button>
+          </div>
+        </fieldset>
+        <fieldset class="exec">
+          <legend>Accounts and agents</legend>
+          <div class="prefs-links">
+            <button type="button" class="btn" id="prefs-accounts" aria-haspopup="dialog">Accounts and API keys</button>
+            <button type="button" class="btn" id="prefs-agents" aria-haspopup="dialog">Agents and prompts</button>
+          </div>
+          <p class="hint prefs-note" id="prefs-links-note" hidden>Accounts and agents can be changed where this page controls runs: the desktop app or the app server.</p>
+        </fieldset>
+      </div>
+      <footer class="drawer-foot">
+        <span class="hint">Saved on this computer as you change them</span>
+        <button type="button" class="btn" data-close>Close</button>
+      </footer>
+    </div>
+  </dialog>
 
   <dialog class="drawer" id="rail-dialog" aria-labelledby="rail-dialog-title">
     <div class="drawer-frame">
@@ -441,6 +596,8 @@
           <textarea id="f-request" name="request" rows="5" maxlength="4000" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
           <span class="hint mono field-count" id="f-request-count">0 / 4000</span>
         </div>
+        <details class="run-options team-only" id="run-options">
+          <summary><span class="run-options-title">Options</span> <span class="hint" id="run-options-summary"></span></summary>
         <div class="field team-only">
           <label for="f-workspace">Workspace</label>
           <input id="f-workspace" name="workspace" class="mono" type="text" spellcheck="false" autocomplete="off" aria-describedby="f-workspace-hint">
@@ -465,10 +622,9 @@
           </div>
           <div class="field" role="radiogroup" aria-labelledby="f-sandbox-label" id="f-sandbox">
             <span class="field-label" id="f-sandbox-label">Sandbox</span>
-            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker" checked><span>Docker container <span class="hint">requires Docker and a local sandbox image</span></span></label>
-            <label class="check"><input type="radio" name="sandbox" value="host" id="f-sandbox-host"><span>Trusted host <span class="hint">no sandbox: agent commands run on this computer with your user rights</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker"><span>Docker container <span class="hint">requires Docker and a local sandbox image</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="host" id="f-sandbox-host" checked><span>Trusted host <span class="hint">no sandbox: agent commands run on this computer with your user rights</span></span></label>
           </div>
-          <label class="check trust" id="f-trust-row" hidden><input type="checkbox" id="f-trusted" name="trustedHost"><span>I trust this request and workspace, and accept that the agents run without a sandbox</span></label>
           <div class="field-row" id="docker-fields">
             <div class="field">
               <label for="f-image">Image <span class="hint">optional</span></label>
@@ -486,7 +642,7 @@
             <summary>Execution details</summary>
             <p class="hint">Independent milestones may run at once, each in its own worktree.</p>
           </details>
-          <p class="hint" id="exec-note">Docker availability is checked when the run starts; run <code>scranton doctor</code> to check it first.</p>
+          <p class="hint" id="exec-note">With Docker, its availability is checked when the run starts; run <code>scranton doctor</code> to check it first.</p>
         </fieldset>
         <fieldset class="exec models team-only" id="model-fields" hidden>
           <legend>Models</legend>
@@ -548,6 +704,8 @@
             </div>
           </div>
         </details>
+        </details>
+        <label class="check trust team-only" id="f-trust-row"><input type="checkbox" id="f-trusted" name="trustedHost"><span>I trust this request and workspace, and accept that the agents run without a sandbox <span class="hint" id="f-trust-kept" hidden>accepted for this chat</span></span></label>
         <div class="pf" id="pipeline-fields" hidden>
           <p class="form-error" id="pf-unavailable" role="alert" hidden></p>
           <div class="field">
@@ -588,8 +746,8 @@
           <fieldset class="exec" id="pf-sandbox-set">
             <legend>Sandbox</legend>
             <div class="field" role="radiogroup" aria-label="Where the checks run">
-              <label class="check"><input type="radio" name="pf-sandbox" value="docker" id="pf-docker" checked><span>Docker container <span class="hint">no network, limited CPU, memory and processes; the image must exist locally</span></span></label>
-              <label class="check"><input type="radio" name="pf-sandbox" value="host" id="pf-host"><span>Trusted host <span class="hint">checks run on this computer with your user rights</span></span></label>
+              <label class="check"><input type="radio" name="pf-sandbox" value="docker" id="pf-docker"><span>Docker container <span class="hint">no network, limited CPU, memory and processes; the image must exist locally</span></span></label>
+              <label class="check"><input type="radio" name="pf-sandbox" value="host" id="pf-host" checked><span>Trusted host <span class="hint">checks run on this computer with your user rights</span></span></label>
             </div>
             <div class="pf-sandbox-state">
               <p class="form-status" id="pf-sandbox-status" role="status" aria-live="polite" tabindex="-1"></p>
@@ -604,7 +762,7 @@
               <input id="pf-image" class="mono" type="text" spellcheck="false" autocomplete="off" maxlength="256">
             </div>
             <p class="hint pf-note" id="pf-trust-demo" hidden>No acknowledgement is needed for the demo: only the bundled sample project runs on this computer.</p>
-            <label class="check trust" id="pf-trust-row" hidden><input type="checkbox" id="pf-trust"><span>I accept that the checks run model-written code on this computer without OS isolation</span></label>
+            <label class="check trust" id="pf-trust-row"><input type="checkbox" id="pf-trust"><span>I accept that the checks run model-written code on this computer without OS isolation <span class="hint" id="pf-trust-kept" hidden>accepted for this chat</span></span></label>
           </fieldset>
           <fieldset class="exec" id="pf-models-set">
             <legend>Models</legend>
@@ -682,7 +840,7 @@
         <p class="form-error" id="run-error" role="alert" hidden></p>
       </div>
       <footer class="drawer-foot">
-        <span class="hint" id="run-busy" hidden>A run is in progress</span>
+        <span class="hint run-reason" id="run-busy" role="status" hidden>A run is in progress</span>
         <button type="button" class="btn" data-close>Cancel</button>
         <button type="submit" class="btn btn-primary" id="run-submit">Start run</button>
       </footer>
@@ -970,6 +1128,157 @@
       </div>
       <footer class="drawer-foot">
         <span class="hint" id="agents-foot"></span>
+        <button type="button" class="btn" data-close>Close</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog class="drawer drawer-wide" id="dreams-dialog" aria-labelledby="dreams-title">
+    <div class="drawer-frame">
+      <header class="drawer-head">
+        <h2 id="dreams-title">Dreams <span class="hint dreams-project" id="dreams-project"></span></h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body" id="dreams-body">
+        <p class="hint accounts-intro" id="dreams-intro">Local consolidation is a deterministic offline pass over this project's recorded, verified run outcomes, and a replay of retry limits on the attempts those runs already made. No agent, tool or model runs for it and it costs no tokens. Model reflection is separate and optional: it sends redacted excerpts to a provider you choose and only proposes notes for you to review. Memory and notes are advisory history for later runs, not instructions, and nothing here promises better results.</p>
+        <p class="form-error" id="dreams-error" role="alert" hidden></p>
+        <div class="dreams-retry" id="dreams-retry-row" hidden><button type="button" class="btn btn-small" id="dreams-retry">Try again</button></div>
+        <p class="accounts-status" id="dreams-status" role="status" aria-live="polite" tabindex="-1"></p>
+        <p class="hint" id="dreams-empty">Loading dreams...</p>
+        <div class="dreams-content" id="dreams-content" hidden>
+          <section class="dreams-summary" aria-labelledby="dreams-summary-title">
+            <h3 class="sr-only" id="dreams-summary-title">Status</h3>
+            <div class="dreams-state-row">
+              <span class="badge" id="dreams-state"></span>
+              <span class="hint" id="dreams-last"></span>
+            </div>
+            <p class="dreams-state-note" id="dreams-state-note" hidden></p>
+            <p class="mono dreams-counts" id="dreams-counts"></p>
+            <p class="hint dreams-schedule" id="dreams-schedule"></p>
+          </section>
+          <div class="dreams-preview" id="dreams-preview" hidden>
+            <p><strong>Preview, not saved.</strong> This is what a sweep would compute from the sources as they are now. Memory, recommendations and the diary below are read only until you run a sweep.</p>
+            <button type="button" class="btn btn-small" id="dreams-preview-exit">Show saved</button>
+          </div>
+          <div class="dreams-local">
+          <h3 class="keyform-title" id="dreams-local-title">Local consolidation <span class="hint">deterministic, no model calls</span></h3>
+          <div class="dreams-actions" role="group" aria-labelledby="dreams-local-title">
+            <button type="button" class="btn btn-small" id="dreams-run-preview" aria-describedby="dreams-run-preview-hint">Preview</button>
+            <button type="button" class="btn btn-primary btn-small" id="dreams-sweep">Run sweep</button>
+            <button type="button" class="btn btn-small" id="dreams-rollback" aria-haspopup="dialog">Roll back</button>
+            <span class="hint form-status" id="dreams-action-status" role="status" aria-live="polite"></span>
+            <span class="hint dreams-actions-note" id="dreams-run-preview-hint">Preview computes without saving. Run sweep saves and can be rolled back. Neither sends anything to a model.</span>
+          </div>
+          </div>
+          <section class="dreams-section dreams-reflect" id="dreams-reflect" aria-labelledby="dreams-reflect-title" hidden>
+            <h3 class="keyform-title" id="dreams-reflect-title">Model reflection <span class="hint">optional, sends excerpts to a provider</span></h3>
+            <p class="dreams-disclosure" id="dreams-disclosure"></p>
+            <div class="dreams-state-row">
+              <span class="badge" id="dreams-reflect-state"></span>
+              <span class="hint" id="dreams-reflect-when"></span>
+            </div>
+            <p class="dreams-state-note" id="dreams-reflect-note" hidden></p>
+            <p class="hint mono" id="dreams-reflect-usage" hidden></p>
+            <p class="form-error" id="dreams-reflect-error" role="alert" hidden></p>
+            <div class="dreams-actions" role="group" aria-label="Model reflection actions">
+              <button type="button" class="btn btn-small" id="dreams-propose" aria-haspopup="dialog" aria-describedby="dreams-propose-hint">Generate proposal...</button>
+              <button type="button" class="btn btn-small" id="dreams-cancel" hidden>Cancel generation</button>
+              <span class="hint form-status" id="dreams-reflect-status" role="status" aria-live="polite"></span>
+              <span class="hint dreams-actions-note" id="dreams-propose-hint"></span>
+            </div>
+            <div class="dreams-proposal" id="dreams-proposal" role="region" aria-labelledby="dreams-proposal-title" hidden>
+              <h4 class="dreams-subtitle" id="dreams-proposal-title">Pending proposal <span class="hint">review before applying</span></h4>
+              <p class="dreams-text" id="dreams-proposal-summary"></p>
+              <p class="hint mono" id="dreams-proposal-meta"></p>
+              <p class="dreams-state-note" id="dreams-proposal-note" hidden></p>
+              <ol class="dreams-ops" id="dreams-ops" aria-label="Proposed changes"></ol>
+              <div class="keyform-actions">
+                <button type="button" class="btn btn-small" id="dreams-reject" aria-haspopup="dialog">Reject</button>
+                <button type="button" class="btn btn-primary btn-small" id="dreams-apply-proposal" aria-haspopup="dialog">Apply proposal</button>
+              </div>
+            </div>
+            <h4 class="dreams-subtitle" id="dreams-notes-title">Accepted notes <span class="hint">typed, applied by you</span></h4>
+            <p class="hint" id="dreams-notes-empty" hidden></p>
+            <ul class="accounts dreams-list" id="dreams-notes" aria-labelledby="dreams-notes-title"></ul>
+            <p class="hint keyform-note">New Team and Pipeline runs get accepted notes in their starting context through a compact index, within the same size limit as project memory. Runs do not look notes up on demand.</p>
+            <ul class="hint dreams-notes" id="dreams-reflect-limits" aria-label="Reflection limitations" hidden></ul>
+          </section>
+          <form class="keyform dreams-settings" id="dreams-settings" novalidate aria-labelledby="dreams-settings-title">
+            <h3 class="keyform-title" id="dreams-settings-title">Settings</h3>
+            <label class="check"><input type="checkbox" id="dreams-enabled"><span>Sweep automatically<span class="hint">Only while no run of this project is going. Off keeps memory and history and stops automatic sweeps.</span></span></label>
+            <div class="field">
+              <label for="dreams-interval">Interval <span class="hint">minutes, 15-10080</span></label>
+              <input id="dreams-interval" class="mono narrow" type="text" inputmode="numeric" maxlength="5" autocomplete="off" aria-describedby="dreams-interval-hint">
+              <span class="hint" id="dreams-interval-hint"></span>
+            </div>
+            <label class="check"><input type="checkbox" id="dreams-apply"><span>Apply retry recommendations to new runs<span class="hint">Separate from automatic sweeps. Can only lower a configured retry limit; it never raises one, skips a check, changes a model or tool, or approves a gate. Takes effect when the next run starts.</span></span></label>
+            <fieldset class="exec" id="dreams-reflect-settings" hidden>
+              <legend>Model reflection</legend>
+              <div class="field">
+                <label for="dreams-model">Model <span class="hint">signed-in providers only</span></label>
+                <select id="dreams-model" aria-describedby="dreams-model-hint"></select>
+                <span class="hint" id="dreams-model-hint"></span>
+              </div>
+              <label class="check"><input type="checkbox" id="dreams-reflect-auto"><span>Generate proposals automatically<span class="hint">Separate from Generate proposal. Only with automatic sweeps on, a model chosen, the project idle, new run excerpts and no proposal waiting. Every generation is a provider request that may be charged. A proposal is never applied automatically.</span></span></label>
+              <div class="field-row">
+                <div class="field">
+                  <label for="dreams-tokens">Output tokens <span class="hint">256-4096</span></label>
+                  <input id="dreams-tokens" class="mono narrow" type="text" inputmode="numeric" maxlength="4" autocomplete="off">
+                </div>
+                <div class="field">
+                  <label for="dreams-timeout">Time limit <span class="hint">seconds, 10-60</span></label>
+                  <input id="dreams-timeout" class="mono narrow" type="text" inputmode="numeric" maxlength="2" autocomplete="off">
+                </div>
+              </div>
+            </fieldset>
+            <p class="form-error" id="dreams-settings-error" role="alert" hidden></p>
+            <div class="keyform-actions">
+              <span class="hint form-status" id="dreams-settings-status" role="status" aria-live="polite"></span>
+              <button type="button" class="btn btn-small" id="dreams-settings-reset">Undo changes</button>
+              <button type="submit" class="btn btn-primary btn-small" id="dreams-settings-save">Save settings</button>
+            </div>
+          </form>
+          <section class="dreams-section" aria-labelledby="dreams-phases-title">
+            <h3 class="keyform-title" id="dreams-phases-title">Phases</h3>
+            <ol class="dreams-phases" id="dreams-phases" aria-label="Light, REM and Deep phases"></ol>
+          </section>
+          <section class="dreams-section" aria-labelledby="dreams-memory-title">
+            <h3 class="keyform-title" id="dreams-memory-title">Project memory <span class="hint">promoted, with sources</span></h3>
+            <p class="hint" id="dreams-memory-empty" hidden></p>
+            <ul class="accounts dreams-list" id="dreams-memory" aria-labelledby="dreams-memory-title"></ul>
+          </section>
+          <section class="dreams-section" aria-labelledby="dreams-candidates-title">
+            <h3 class="keyform-title" id="dreams-candidates-title">Candidates <span class="hint">score breakdown and gates</span></h3>
+            <p class="hint" id="dreams-candidates-empty" hidden></p>
+            <ul class="accounts dreams-list" id="dreams-candidates" aria-labelledby="dreams-candidates-title"></ul>
+          </section>
+          <section class="dreams-section" aria-labelledby="dreams-replay-title">
+            <h3 class="keyform-title" id="dreams-replay-title">Retry replay</h3>
+            <p class="hint keyform-note" id="dreams-replay-summary"></p>
+            <p class="hint keyform-note mono" id="dreams-objective" hidden></p>
+            <div class="dreams-table-wrap" id="dreams-evals-wrap" tabindex="0" role="region" aria-label="Replay comparisons, scrolls sideways" hidden>
+              <table class="dreams-table">
+                <caption class="sr-only">Retry limits replayed on the same recorded attempts, per engine and evaluator cohort; the configured limit is the incumbent</caption>
+                <thead><tr><th scope="col">Engine</th><th scope="col" title="Evaluator recipe: the gates and checks the attempts were judged by">Cohort</th><th scope="col">Limit</th><th scope="col">Score</th><th scope="col">Quality</th><th scope="col">Attempts</th><th scope="col">Rounds</th><th scope="col">Result</th></tr></thead>
+                <tbody id="dreams-evals"></tbody>
+              </table>
+            </div>
+            <ul class="dreams-recs" id="dreams-recs" aria-label="Recommendations" hidden></ul>
+            <ul class="hint dreams-notes" id="dreams-replay-limits" aria-label="Replay coverage" hidden></ul>
+          </section>
+          <section class="dreams-section" aria-labelledby="dreams-diary-title">
+            <h3 class="keyform-title" id="dreams-diary-title">Diary <span class="hint">a narrative log, never read as evidence</span></h3>
+            <p class="hint" id="dreams-diary-empty" hidden></p>
+            <ol class="dreams-diary" id="dreams-diary" aria-labelledby="dreams-diary-title"></ol>
+          </section>
+          <section class="dreams-section" aria-labelledby="dreams-limits-title">
+            <h3 class="keyform-title" id="dreams-limits-title">Limitations</h3>
+            <ul class="hint dreams-notes" id="dreams-limits" aria-labelledby="dreams-limits-title"></ul>
+          </section>
+        </div>
+      </div>
+      <footer class="drawer-foot">
+        <span class="hint" id="dreams-foot"></span>
         <button type="button" class="btn" data-close>Close</button>
       </footer>
     </div>

@@ -1,0 +1,26 @@
+[
+  {
+    "authority": "observed actual CLI resume event from scripted flow test",
+    "data": {
+      "gate": "plan",
+      "decision": "approve",
+      "has_feedback": false
+    }
+  },
+  {
+    "authority": "observed actual CLI resume event from scripted flow test",
+    "data": {
+      "gate": "plan",
+      "decision": "approve",
+      "has_feedback": true
+    }
+  },
+  {
+    "authority": "observed actual CLI resume event from scripted flow test",
+    "data": {
+      "gate": "plan",
+      "decision": "approve",
+      "has_feedback": true
+    }
+  }
+]

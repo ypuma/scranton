@@ -113,7 +113,7 @@ test('fake Docker runner tolerates startup delay and verifies named cleanup on s
     fs.writeFileSync(path.join(workspace, '.git'), 'gitdir: /not-mounted\n');
     const systemPromptFile = path.join(f.dir, 'prompt.md'); fs.writeFileSync(systemPromptFile, 'test');
     const calls = [];
-    const execution = await prepareSandbox({ workspace, sessionDir, systemPromptFile, env: {} }, {
+    const execution = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace, sessionDir, systemPromptFile, env: {} }, {
       executable: 'fake-docker', run: async (_exe, args) => { calls.push(args); return ['info', 'image'].includes(args[0]) ? 'linux' : ''; }
     });
     const shim = path.join(f.dir, 'fake-docker.mjs');

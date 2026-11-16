@@ -35,7 +35,7 @@ export function createPipelineForm({ timers = globalThis } = {}) {
     demo: $('pf-demo'), scenarioRow: $('pf-scenario-row'), scenario: $('pf-scenario'), scenarioHint: $('pf-scenario-hint'), checksSet: $('pf-checks-set'), checks: $('pf-checks'), add: $('pf-check-add'), detect: $('pf-check-detect'),
     setupSet: $('pf-setup-set'), setup: $('pf-setup'), setupAdd: $('pf-setup-add'), setupNote: $('pf-setup-note'),
     checksStatus: $('pf-checks-status'), sandboxSet: $('pf-sandbox-set'), docker: $('pf-docker'), host: $('pf-host'),
-    image: $('pf-image'), imageHint: $('pf-image-hint'), trustRow: $('pf-trust-row'), trust: $('pf-trust'), trustDemo: $('pf-trust-demo'),
+    image: $('pf-image'), imageHint: $('pf-image-hint'), trustRow: $('pf-trust-row'), trust: $('pf-trust'), trustKept: $('pf-trust-kept'), trustDemo: $('pf-trust-demo'),
     sandboxStatus: $('pf-sandbox-status'), build: $('pf-build'), buildLog: $('pf-build-log'), buildTail: $('pf-build-tail'),
     execRow: $('pf-exec-row'), replans: $('pf-replans'), parallel: $('pf-parallel'), grounding: $('pf-grounding'), groundingHint: $('pf-grounding-hint'), guidance: $('pf-guidance'),
     modelsSet: $('pf-models-set'), all: $('pf-model-all'), modelsNote: $('pf-models-note'),
@@ -60,8 +60,10 @@ export function createPipelineForm({ timers = globalThis } = {}) {
   let detectedFor = null;
   let detectGen = 0;
   let modelsKey = '';
-  // the human picked Docker or Trusted host in this drawer session; neither the probe nor a finished build overrides it
-  let sandboxTouched = false;
+  // 'docker' | 'host' as the human last picked it; kept across drawer sessions, unlike the acknowledgement
+  let sandboxPick = null;
+  // the chat on screen already ran on the trusted host: its acknowledgement is given
+  let kept = false;
   let building = false;
   let buildError = '';
   // the server's 409 about the sandbox (image missing, Docker gone), shown in the sandbox line instead of the probe
@@ -126,13 +128,7 @@ export function createPipelineForm({ timers = globalThis } = {}) {
     if (wasFocused && e.build.disabled) e.sandboxStatus.focus();
     e.buildLog.hidden = !v.tail.trim();
     if (e.buildTail.textContent !== v.tail) e.buildTail.textContent = v.tail;
-    if (!sandboxTouched) {
-      // unknown (an older server) keeps the Docker default. Known but not ready: a run waits for an explicit choice,
-      // a demo takes the host, which needs no acknowledgement there.
-      const docker = v.ready !== false;
-      e.docker.checked = docker;
-      e.host.checked = !docker && e.demo.checked;
-    }
+    // a probe only reports on Docker; it never moves the sandbox choice (open() and the human set it)
     sync();
   }
 
@@ -428,6 +424,7 @@ export function createPipelineForm({ timers = globalThis } = {}) {
     e.trustRow.hidden = demo || !host;
     e.trustDemo.hidden = !demo || !host;
     if (!host) e.trust.checked = false;
+    e.trustKept.hidden = !(kept && host);
     for (const role of ROLES) e.models[role].disabled = demo;
     e.all.disabled = demo;
     e.approval.disabled = demo;
@@ -440,21 +437,21 @@ export function createPipelineForm({ timers = globalThis } = {}) {
   }
 
   e.demo.addEventListener('change', () => {
-    // the preselection depends on the demo
-    renderSandbox();
+    sync();
     if (!e.demo.checked) detect();
   });
   e.scenario.addEventListener('change', sync);
   e.docker.addEventListener('change', () => {
-    sandboxTouched = true;
+    if (e.docker.checked) sandboxPick = 'docker';
     clearRefused();
     sync();
   });
   e.host.addEventListener('change', () => {
-    sandboxTouched = true;
+    if (e.host.checked) sandboxPick = 'host';
     clearRefused();
     sync();
-    if (e.host.checked && !e.demo.checked) e.trust.focus();
+    if (e.host.checked && kept) e.trust.checked = true;
+    else if (e.host.checked && !e.demo.checked) e.trust.focus();
   });
   e.image.addEventListener('input', clearRefused);
   e.task.addEventListener('input', updateCount);
@@ -490,7 +487,8 @@ export function createPipelineForm({ timers = globalThis } = {}) {
     // task: what the Chat composer holds, for the task field.
     // -> a promise that settles once the engine info and the project's checks are in (the Chat composer starts a
     //    run with the form's choices without showing the drawer, and waits for it)
-    open({ choice: canChoose = false, fixed: isFixed = false, project: p = null, task = '' } = {}) {
+    // trusted: this chat already ran on the trusted host, so its acknowledgement is given (asked once per chat)
+    open({ choice: canChoose = false, fixed: isFixed = false, project: p = null, task = '', trusted = false } = {}) {
       choice = canChoose && !isFixed;
       fixed = isFixed;
       if (p !== project) {
@@ -501,7 +499,11 @@ export function createPipelineForm({ timers = globalThis } = {}) {
         renderRows();
       }
       project = p;
-      sandboxTouched = false;
+      // Trusted host unless the human picked Docker; a chat asks for the acknowledgement once (trust.js)
+      e.docker.checked = sandboxPick === 'docker';
+      e.host.checked = !e.docker.checked;
+      kept = trusted === true;
+      e.trust.checked = kept && e.host.checked;
       buildError = '';
       refused = '';
       groundingHeld = null;

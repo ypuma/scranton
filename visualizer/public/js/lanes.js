@@ -143,7 +143,9 @@ export function createLanes({ block, list, exec, onMessage }) {
     const busy = rows.filter((i) => i.status === 'working' || i.status === 'thinking').length;
     const slots = s.execution?.maxParallel ? `${s.activeMilestoneIds.length}/${s.execution.maxParallel} milestone slots` : `${s.activeMilestoneIds.length} active milestones`;
     exec.replaceChildren(
-      el('span', '', serial ? `${plural(rows.length, 'role')} · ${busy} busy` : `${plural(lanes.length, 'instance')} · ${busy} busy · ${slots}`),
+      // the gist first; the slots and the badges after it are detail the folded section leaves out
+      el('span', '', serial ? `${plural(rows.length, 'role')} · ${busy} busy` : `${plural(lanes.length, 'instance')} · ${busy} busy`),
+      ...(serial ? [] : [el('span', 'lanes-detail', ` · ${slots}`)]),
       ...executionBadges(s.execution, { simulated }).map(([t, title, tone]) => badge(t, title, tone)),
     );
     // a rebuilt row must not drop the focus of a Message button the human is on

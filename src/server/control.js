@@ -18,6 +18,7 @@ import { listRuns, formatThreadContext } from '../core/thread.js';
 import { getAuthService } from '../core/auth.js';
 import { validateDockerModels } from '../core/sandbox.js';
 import { isLoopbackAddress } from '../core/network.js';
+import { dreamingCap, teamDreamingCohort, teamDreamingContext } from '../core/dreaming-sources.js';
 
 const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
 // Error/blocked invocations can retry; only completed instances stop accepting queued chat.
@@ -53,12 +54,13 @@ export async function readBody(req) {
   } catch { throw error(400, 'Expected a JSON object'); }
 }
 
-export function createControl({ hive, workspace, runner = spawn, auth = getAuthService(), closeAuth = true, acquire = acquireRunLease, prepareThread = false, fixedWorkspace = false, promptsDir, gates, recoveryDocker, onStarting = () => {} }) {
+export function createControl({ hive, workspace, runner = spawn, auth = getAuthService(), closeAuth = true, acquire = acquireRunLease, prepareThread = false, fixedWorkspace = false, promptsDir, gates, recoveryDocker, onStarting = () => {}, dreaming }) {
   workspace = path.resolve(workspace ?? 'workspace');
   let active = null;
   let lastExit = null;
   let closing = false;
   let recoveryError = null;
+  let dreamingWarning = null;
   let recovery = null;
   let recoveryToken = null;
   let attemptedToken = null;
@@ -116,7 +118,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     catch (err) { configurationError = err.message; }
     void recoverGone();
     const orphan = active ? null : orphanSnapshot(hive, recoveryError);
-    return { v: 1, enabled: true, workspace, scenarios: SCENARIOS, run: active?.info ?? null, lastExit, pendingHuman, defaults: { execution, workflow, models, agents, thinkingLevels: THINKING_LEVELS, configurationError }, instances, sessions: state?.sessions ?? {}, chatAck: state?.chatAck ?? null, recoveryRequired: Boolean(orphan), orphan };
+    return { v: 1, enabled: true, dreamingWarning, workspace, scenarios: SCENARIOS, run: active?.info ?? null, lastExit, pendingHuman, defaults: { execution, workflow, models, agents, thinkingLevels: THINKING_LEVELS, configurationError }, instances, sessions: state?.sessions ?? {}, chatAck: state?.chatAck ?? null, recoveryRequired: Boolean(orphan), orphan };
   }
 
   function stop(delay = 15000) {
@@ -215,6 +217,21 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
       try { validateDockerModels(launchConfig, activeRoles(launchConfig, body.noPlan)); }
       catch (err) { throw error(400, err.message); }
     }
+    let memory = '', effective = body.maxCycles ?? baseConfig.maxFailedCycles;
+    dreamingWarning = null;
+    if (!demo && dreaming) {
+      const cohort = teamDreamingCohort({ ...baseConfig, workflow });
+      try {
+        const dream = dreaming();
+        try { Promise.resolve(dream?.cancelReflection?.()).catch(() => {}); } catch {}
+        const context = dream?.context() ?? '';
+        const cap = dreamingCap(dream, 'team', effective, cohort);
+        memory = context; effective = cap;
+      } catch { dreamingWarning = 'Optional Dreaming unavailable; using configured retry ceiling without project memory'; }
+      const index = options.indexOf('--max-cycles');
+      if (index >= 0) options[index + 1] = String(effective);
+      else if (effective !== baseConfig.maxFailedCycles) options.push('--max-cycles', String(effective));
+    }
     args.splice(2, 0, ...options);
     const info = { mode, request: body.request ?? (demo?.scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI'), workspace: ws, startedAt: new Date().toISOString(), runId: randomUUID(), exitCode: null };
     let lease;
@@ -222,10 +239,11 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     catch (err) { if (err.code === 'EEXIST') throw error(409, 'Hive is owned by another run; stop it or recover ownership first'); throw err; }
     let child;
     try {
+      try { Promise.resolve(dreaming?.()?.cancelReflection?.()).catch(() => {}); } catch {}
       onStarting(info);
       if (prepareThread) {
         const file = path.join(hive, 'control', 'thread-context.json');
-        writeFileAtomicSync(file, JSON.stringify({ v: 1, text: formatThreadContext(listRuns(hive), { maxChars: 8000 }) }));
+        writeFileAtomicSync(file, JSON.stringify({ v: 1, text: teamDreamingContext(formatThreadContext(listRuns(hive), { maxChars: 8000 }), memory) }));
         args.splice(2, 0, '--thread-context', file);
       }
       child = runner(process.execPath, args, { cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_PROMPTS_DIR: baseConfig.promptsDir, SCRANTON_SETTINGS_DIR: baseConfig.settingsDir, SCRANTON_DATA: '', SCRANTON_RUN_ID: info.runId, SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });

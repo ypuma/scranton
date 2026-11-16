@@ -97,7 +97,7 @@ test('registry custom run and follow-up resolve shared settings and request > en
     child.emit('message', { type: 'scranton-startup-refused', token: launch.options.env.SCRANTON_RUN_LEASE }); child.emit('close', 2);
   }
   await call('/api/agents/seclint', 'PATCH', { model: null });
-  assert.equal((await call(route, 'POST', { request: 'Missing Docker model', noPlan: true, workflow: { gates: [['seclint']] } })).status, 400);
+  assert.equal((await call(route, 'POST', { request: 'Missing Docker model', sandbox: 'docker', noPlan: true, workflow: { gates: [['seclint']] } })).status, 400);
 });
 
 import { Orchestrator } from '../../src/core/orchestrator.js';

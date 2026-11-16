@@ -282,11 +282,11 @@ test('Pipeline Docker runs re-probe cached capability and refuse missing daemon 
   const missing = await f.req(f.route() + '/pipeline/runs', { task: 'x', models, sandbox: { mode: 'docker', image: 'custom:image' } });
   assert.equal(missing.code, 409); assert.match(missing.value.error, /image is missing: custom:image/);
   process.env.FAKE_PIPELINE_DOCKER_ABSENT = '1';
-  const daemon = await f.req(f.route() + '/pipeline/runs', { task: 'x', models });
+  const daemon = await f.req(f.route() + '/pipeline/runs', { task: 'x', models, sandbox: { mode: 'docker' } });
   assert.equal(daemon.code, 409); assert.match(daemon.value.error, /Docker daemon/);
   assert.equal((await f.req(f.route() + '/pipeline')).value.runs.length, 0);
   process.env.FAKE_PIPELINE_DOCKER_ABSENT = '0'; process.env.FAKE_PIPELINE_IMAGE_MISSING = '0';
-  const id = await f.start({ task: 'Docker fake only', models }), gate = await f.wait(id, 'awaiting_approval');
+  const id = await f.start({ task: 'Docker fake only', models, sandbox: { mode: 'docker' } }), gate = await f.wait(id, 'awaiting_approval');
   const cfg = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/requests', id + '.json')));
   assert.equal(cfg.sandbox.docker.image, 'scranton-pipeline-sandbox:fake-1');
   await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
@@ -724,4 +724,20 @@ test('Pipeline conversation demos pass the switch only when enabled and accept a
     const r = await f.req(f.route() + '/pipeline/runs', { task: 'x', demo, demoScenario: 'answer', conversation: true });
     assert.equal(r.code, 400); assert.match(r.value.error, /^demoScenario:/);
   }
+});
+
+test('Pipeline omitted sandbox defaults to host even without Docker; explicit host still requires trust', async (t) => {
+  const f = await setup(t, { env: { FAKE_PIPELINE_DOCKER_ABSENT: '1' } });
+  for (const trustHost of [undefined, false]) {
+    const r = await f.req(f.route() + '/pipeline/runs', { task: 'x', models, sandbox: { mode: 'host', trustHost } });
+    assert.equal(r.code, 409); assert.match(r.value.error, /trustHost:true/);
+  }
+  const id = await f.start({ task: 'Default host', models }), gate = await f.wait(id, 'awaiting_approval');
+  const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
+  const cfg = JSON.parse(fs.readFileSync(path.join(base, 'requests', id + '.json')));
+  assert.deepEqual(cfg.sandbox, { mode: 'host' });
+  assert.equal(gate.status.sandbox.mode, 'host'); assert.equal(gate.status.sandbox.isolated, false);
+  const argv = JSON.parse(fs.readFileSync(path.join(base, 'runs', id, 'argv.json')));
+  assert.ok(argv.includes('--trust-host'));
+  await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
 });

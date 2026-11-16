@@ -3,7 +3,7 @@
 // Plans, diffs, reports and events quote the repository and the models: every text goes through textContent.
 import { CLIENT_HEADERS } from './control.js';
 import { postJson } from './control-panel.js';
-import { formatClock } from './format.js';
+import { formatWhen } from './format.js';
 import {
   parseRunList, parseRunDoc, mergeEvents, runChoices, pickRun, runLine, stepper, lastWorkNode, announcement,
   canCancel, canResume, createPoller, classifyDiff, diffFiles, actionLabel, eventText, buildDecision,
@@ -930,7 +930,7 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
       const said = [nodeLabel(ev.node), eventText(ev, { observe })].filter(Boolean).join(' · ');
       const text = el('span', 'pv-ev-text', ev.lane ? undefined : said);
       if (ev.lane) text.append(el('span', 'mono pv-ev-lane', ev.lane), el('span', '', said));
-      li.append(el('span', 'mono pv-ev-time', formatClock(ev.ts)), el('span', 'mono pv-ev-type', ev.type.replace(/_/g, ' ')), text);
+      li.append(el('span', 'mono pv-ev-time', formatWhen(ev.ts)), el('span', 'mono pv-ev-type', ev.type.replace(/_/g, ' ')), text);
       return li;
     }));
     if (events.length) root.append(ol);
@@ -944,6 +944,8 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
 
   // ------------------------------------------------------------ api
   return {
+    // the diff of the run on screen, as the Changes side panel shows it: { key, loading, content, truncated, error } or null
+    changes: () => artifacts.get('diff') ?? null,
     // s: { project, chat }; ws: the project folder
     show(s, ws = '') {
       if (scope && s && scope.project === s.project && scope.chat === s.chat) return;

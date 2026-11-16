@@ -231,6 +231,10 @@
         "verify"
       ],
       [
+        "dream_attempt",
+        "verify"
+      ],
+      [
         "node_finished",
         "verify"
       ],
@@ -657,6 +661,10 @@
       ],
       [
         "node_started",
+        "verify"
+      ],
+      [
+        "dream_attempt",
         "verify"
       ],
       [
@@ -1172,7 +1180,15 @@
         "verify"
       ],
       [
+        "dream_attempt",
+        "verify"
+      ],
+      [
         "node_finished",
+        "verify"
+      ],
+      [
+        "dream_attempt",
         "verify"
       ],
       [
@@ -1802,6 +1818,10 @@
       ],
       [
         "node_started",
+        "verify"
+      ],
+      [
+        "dream_attempt",
         "verify"
       ],
       [

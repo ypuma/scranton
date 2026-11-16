@@ -143,7 +143,7 @@ test('saved custom prompt reaches host child and readonly Docker mount, never di
   await manager.init(); t.after(() => manager.close());
   const checkout = await manager.createWorktree({ agent: 'oscar', milestoneId: 'm1' });
   const prompt = stagePrompt(config, { dir: config.hiveDir }, 'oscar');
-  const execution = await prepareSandbox({ workspace: checkout.dir, sessionDir: path.join(config.hiveDir, 'sessions', 'oscar'), systemPromptFile: prompt,
+  const execution = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace: checkout.dir, sessionDir: path.join(config.hiveDir, 'sessions', 'oscar'), systemPromptFile: prompt,
     extensionFile: path.resolve('tools/pi-agent-chat.js'), instanceId: 'oscar-m1', runId: 'prompt-mount', env: {} }, {
     executable: path.resolve('.scratch/roles-backend/fake-docker.exe'), run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : ''
   });

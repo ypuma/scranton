@@ -111,7 +111,7 @@ class DockerConfig(StrictModel):
 
 
 class SandboxConfig(StrictModel):
-    mode: Literal["docker", "host"] = "docker"
+    mode: Literal["docker", "host"] = "host"
     docker: DockerConfig = Field(default_factory=DockerConfig)
     env_passthrough: list[str] = Field(default_factory=list, max_length=100)
 

@@ -2,6 +2,7 @@
 // It draws what activity-model.js derived; a card is built again only when what it says changed.
 import { STATUS_GLYPH, GATE_GLYPH } from './pipeline.js';
 import { BOARD_COLUMNS } from './activity-model.js';
+import { measure, flip } from './motion.js';
 
 // a gate on a card: its result in the glyphs the lanes use, or that it runs or has not run yet
 export const GATE_MARK = { ...GATE_GLYPH, running: STATUS_GLYPH.thinking, pending: STATUS_GLYPH.idle };
@@ -55,6 +56,8 @@ export function createBoard(root, { name = 'board' } = {}) {
   const cards = new Map();
   const open = new Set();
   let kind = '';
+  // which card stands where, so a render that moves nothing measures nothing
+  let layout = '';
 
   function card(c, boardKind) {
     const li = el('li', 'card');
@@ -134,6 +137,10 @@ export function createBoard(root, { name = 'board' } = {}) {
     empty.hidden = !b.empty;
     cols.hidden = Boolean(b.empty);
     const held = document.activeElement?.closest?.('.card')?.dataset.card ?? null;
+    const nextLayout = JSON.stringify(b.columns.map((c) => [c.id, c.cards.map((x) => x.id)]));
+    const moved = nextLayout !== layout;
+    layout = nextLayout;
+    const before = moved ? measure([...cards].map(([id, item]) => [id, item.el])) : null;
     const seen = new Set();
     for (const col of columns) {
       const list = b.columns.find((c) => c.id === col.id)?.cards ?? [];
@@ -152,6 +159,7 @@ export function createBoard(root, { name = 'board' } = {}) {
       }));
     }
     for (const id of [...cards.keys()]) if (!seen.has(id)) cards.delete(id);
+    if (before) flip(before, [...cards].map(([id, item]) => [id, item.el]));
     // a card that was drawn again took its disclosure with it: the new one gets the focus back
     if (held && !root.contains(document.activeElement)) cards.get(held)?.el.querySelector('summary')?.focus();
   }

@@ -25,6 +25,8 @@ const AGENTS = [
   entry('docs2', 'Doris', 'Docs'),
 ];
 const withAgents = (agents = AGENTS, defaults = {}) => ({ ...CONTROL, defaults: { agents, ...defaults } });
+// a workspace configured for Docker
+const DOCKER = { sandbox: { mode: 'docker' } };
 const ALL = (ids) => Object.fromEntries(ids.map((r) => [r, GPT]));
 const RUN = ['michael', 'dwight', 'oscar', 'hank', 'angela'];
 
@@ -149,7 +151,7 @@ test('models: a custom gate\'s default option names its agent default, and it is
   assert.deepEqual(parseStoredModels(JSON.stringify({ seclint: PICK, 'Bad-Id': PICK }), null), { seclint: PICK }, 'the picker keeps a custom choice');
   assert.equal(resolveChoices({ seclint: PICK }, parseModels(CATALOG), ['seclint']).seclint.value, GPT);
 
-  const h = harness({ control: withAgents(AGENTS, { models: { michael: SOL, dwight: SOL, angela: SOL, seclint: SOL, docs2: null } }), stored: { stages: { angela: 1, seclint: 1, docs2: 2 } } });
+  const h = harness({ control: withAgents(AGENTS, { execution: DOCKER, models: { michael: SOL, dwight: SOL, angela: SOL, seclint: SOL, docs2: null } }), stored: { stages: { angela: 1, seclint: 1, docs2: 2 } } });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.equal(h.select('seclint').childNodes[0].textContent, 'Agent default (openai/gpt-6.1-sol)');
@@ -213,7 +215,7 @@ test('drawer: a demo sends no gates, custom ones included; a follow-up carries t
 
 test('a custom agent with the id constructor is an agent like any other, never the prototype', async (t) => {
   const odd = [...AGENTS, entry('constructor', 'Connie', 'Build check')];
-  const h = harness({ control: withAgents(odd, { models: { constructor: null } }), stored: { stages: { constructor: 1 } } });
+  const h = harness({ control: withAgents(odd, { execution: DOCKER, models: { constructor: null } }), stored: { stages: { constructor: 1 } } });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.equal(h.row('constructor').stage.value, '1');

@@ -161,7 +161,7 @@ test('the event log is one tab stop: a grid whose newest row holds the roving ta
 
   const html = readFileSync(new URL('../../visualizer/public/index.html', import.meta.url), 'utf8');
   assert.match(html, /<div class="log-scroll" id="log-scroll">/, 'the scroll box is no tab stop of its own');
-  assert.match(html, /<table class="log" id="log" data-filter="all" role="grid" aria-readonly="true" aria-label="[^"]+">/);
+  assert.match(html, /<table class="log" id="log" data-filter="main" role="grid" aria-readonly="true" aria-label="[^"]+">/);
 });
 
 test('Up, Down, Ctrl+Home and Ctrl+End move between the rows the filter shows', () => {
@@ -347,7 +347,7 @@ test('Enter and Space open and close the focused row without the default action'
 test('an open row shows the full timestamp, source and type as text; a closed row stays one line', () => {
   const h = harness();
   h.add(3);
-  assert.doesNotMatch(h.row(2).text, /2026-11-08/, 'the closed row only has the clock');
+  assert.match(h.row(2).text, /^ 2026-11-0[789] \d\d:\d\d dwight /, 'a closed row of another day has its date and time, nothing more');
   for (const td of h.row(2).childNodes) assert.equal(td.title, '', `${td.className} has no tooltip-only text`);
   h.cell(2).focus();
   h.key('Enter');
@@ -356,7 +356,7 @@ test('an open row shows the full timestamp, source and type as text; a closed ro
   assert.match(h.cell(2).text, /Type\s+handoff/);
   assert.match(h.cell(2).text, /row 2/);
   h.key('Enter');
-  assert.doesNotMatch(h.row(2).text, /2026-11-08/, 'closing removes it again');
+  assert.doesNotMatch(h.row(2).text, /Time\s|Source\s|T\d\d:\d\d/, 'closing removes it again');
 });
 
 test('an open row shows a long failure in full, reachable by keyboard', () => {

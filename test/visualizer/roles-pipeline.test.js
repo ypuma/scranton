@@ -116,5 +116,7 @@ test('the stack keeps cards the width of any other card and the row aligns on it
   assert.match(rule('.stage-column'), /flex:\s*1 1 calc\(2 \* var\(--s3\)\)/, 'a stage column takes one card slot');
   assert.match(rule('.stage-column'), /flex-direction:\s*column/);
   assert.match(rule('.pipeline[data-stacked="true"]'), /align-items:\s*center/);
-  assert.match(css, /@container \(max-width: 36rem\) \{\s*\.pipeline\[data-wide="true"\] \{ flex-direction: column;/, 'four columns stack a little earlier');
+  assert.match(css, /@container \(max-width: 36rem\) \{\s*\.pipeline\[data-wide="true"\] \{ flex-wrap: wrap;/, 'four columns wrap into a strip a little earlier');
+  assert.doesNotMatch(css.slice(css.indexOf('/* ------------------------------------------------------------ agents */'), css.indexOf('/* instance lanes')), /\.pipeline[^{]*\{ flex-direction: column/, 'never one tall stack of cards');
+  assert.match(css, /\.pipeline\[data-wide="true"\] > \.stage-column, \.pipeline\[data-wide="true"\] \.stack-slot \{ display: contents; \}/, 'the cards of a parallel stage join the strip');
 });

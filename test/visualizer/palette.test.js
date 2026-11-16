@@ -7,12 +7,18 @@ import path from 'node:path';
 const PUBLIC = fileURLToPath(new URL('../../visualizer/public/', import.meta.url));
 const CHROMATIC_NAMES = /\b(red|green|blue|yellow|orange|purple|violet|magenta|fuchsia|cyan|aqua|teal|lime|olive|navy|maroon|pink|brown|gold|indigo|crimson|coral|salmon|tomato|orchid|khaki|beige|tan|turquoise|chartreuse|plum|lavender|slategr[ae]y|steelblue|ivory|azure|aliceblue|ghostwhite|honeydew|mintcream|seashell|snow|linen|wheat)\b/gi;
 
+// The four status tones (passed, failed, waiting on a human, running) are the page's only colours. Each is declared
+// once in styles.css, as a custom property with a wash and a hairline; everything else names them with var().
+const STATUS_TONES = ['ok', 'bad', 'warn', 'run'];
+const STATUS_TOKEN = /^[ \t]*--(ok|bad|warn|run)(-bg|-line)?:[^;\n]+;[ \t]*$/gm;
+
 function sources() {
   const files = ['styles.css', 'index.html', ...readdirSync(path.join(PUBLIC, 'js')).map((f) => `js/${f}`)];
   return files.map((f) => {
     const text = readFileSync(path.join(PUBLIC, f), 'utf8');
     // comments may mention anything; only code counts
-    return { file: f, text: text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/<!--[\s\S]*?-->/g, '') };
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/<!--[\s\S]*?-->/g, '');
+    return { file: f, text: f === 'styles.css' ? code.replace(STATUS_TOKEN, '') : code };
   });
 }
 
@@ -44,11 +50,24 @@ function colours() {
   return out;
 }
 
-test('every colour in the web dashboard is a neutral gray (R = G = B)', () => {
+test('every colour in the web dashboard is a neutral gray (R = G = B), but for the status tones', () => {
   const found = colours();
   assert.ok(found.length >= 10, `only ${found.length} colours found - is the scan still reading styles.css?`);
   const tinted = found.filter(([, , ch]) => !ch || ch[0] !== ch[1] || ch[1] !== ch[2]).map(([f, lit]) => `${f}: ${lit}`);
   assert.deepEqual(tinted, []);
+});
+
+test('the status tones are declared once each in :root, with a wash and a hairline', () => {
+  const css = readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const declared = [...css.matchAll(STATUS_TOKEN)].map((m) => `${m[1]}${m[2] ?? ''}`).sort();
+  assert.deepEqual(declared, STATUS_TONES.flatMap((t) => [t, `${t}-bg`, `${t}-line`]).sort());
+  const from = css.indexOf(':root {');
+  const root = css.slice(from, css.indexOf('}', from));
+  for (const name of declared) assert.ok(root.includes(`--${name}:`), `--${name} is a token of :root`);
+  for (const t of STATUS_TONES) {
+    assert.match(css, new RegExp(`--${t}: #[0-9a-f]{6};`), `--${t} is a plain hex tone`);
+    assert.ok(css.split(`var(--${t})`).length > 3, `--${t} is used`);
+  }
 });
 
 test('the scan itself catches tinted colours', () => {
@@ -71,12 +90,14 @@ function luminance(hex) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-test('the smallest text tone keeps 4.5:1 on panels after the neutral shift', () => {
+test('the smallest text tone and every status tone keep 4.5:1 on the page and its panels', () => {
   const css = readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
   const v = (name) => new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, 'i').exec(css)[1];
-  for (const bg of ['bg', 'panel', 'panel-2']) {
-    const [a, b] = [luminance(v('text-3')), luminance(v(bg))].sort((x, y) => y - x);
-    const ratio = (a + 0.05) / (b + 0.05);
-    assert.ok(ratio >= 4.5, `--text-3 on --${bg}: ${ratio.toFixed(2)}:1`);
+  for (const tone of ['text-3', ...STATUS_TONES]) {
+    for (const bg of ['bg', 'panel', 'panel-2']) {
+      const [a, b] = [luminance(v(tone)), luminance(v(bg))].sort((x, y) => y - x);
+      const ratio = (a + 0.05) / (b + 0.05);
+      assert.ok(ratio >= 4.5, `--${tone} on --${bg}: ${ratio.toFixed(2)}:1`);
+    }
   }
 });

@@ -23,7 +23,7 @@ def test_preflight_and_cleanup_before_workspace_exists(tmp_path):
     host = HostSandbox(SandboxConfig(mode="host"), workspace)
     host.preflight()
     host.cleanup()
-    sandbox = DockerSandbox(SandboxConfig(), workspace, "12345678", runner)
+    sandbox = DockerSandbox(SandboxConfig(mode="docker"), workspace, "12345678", runner)
     sandbox.preflight()
     sandbox.cleanup()
     assert calls[-1] == ["docker", "ps", "-a", "-q", "--filter", "label=scranton.pipeline.run=12345678"]
@@ -38,7 +38,7 @@ def test_preflight_distinct_codes(tmp_path, failure):
         failed = failure in ("daemon", "timeout", "stopped") or argv[1] == "image"
         return ProcResult(1 if failed else 0, failure == "timeout", failure == "stopped", 0, "", 0, None)
 
-    sandbox = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    sandbox = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     with pytest.raises(EngineError) as raised:
         sandbox.preflight()
     assert raised.value.code == ("image_missing" if failure == "image" else "docker_unavailable")
@@ -55,7 +55,7 @@ def test_cleanup_label_only_and_bounded_never_raises(tmp_path):
             raise OSError("daemon stopped")
         return ProcResult(0, False, False, 0, "abcdef123456\nabcdef123457\n", 26, None)
 
-    sandbox = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    sandbox = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     sandbox.cleanup()
     assert calls == [["docker", "ps", "-a", "-q", "--filter", "label=scranton.pipeline.run=12345678"],
                      ["docker", "rm", "-f", "abcdef123456", "abcdef123457"]]
@@ -70,11 +70,11 @@ def test_names_unique_across_instances_and_suffixes(tmp_path):
         return ProcResult(0, False, False, 0, "", 0, None)
 
     for suffix in ("", "", "lane-1", "lane-2"):
-        sandbox = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner, name_suffix=suffix)
+        sandbox = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner, name_suffix=suffix)
         sandbox.run(["true"], timeout_s=1, log_path=tmp_path / "log")
     assert len(set(names)) == 4
     assert "lane-1" in names[2] and "lane-2" in names[3]
-    assert isinstance(build_sandbox(SandboxConfig(), workspace=tmp_path, run_id="12345678",
+    assert isinstance(build_sandbox(SandboxConfig(mode="docker"), workspace=tmp_path, run_id="12345678",
                                    trust_host=False, name_suffix="lane-1"), DockerSandbox)
 
 
@@ -158,7 +158,7 @@ def test_run_cleanup_normal_path_one_exact_name_query(tmp_path, code):
         calls.append((list(argv), kwargs))
         return original if argv[1] == "run" else ProcResult(0, False, False, 0, "", 0, None)
 
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     if code == 125:
         with pytest.raises(EngineError, match="original"):
             box.run(["check"], timeout_s=1, log_path=tmp_path / "log")
@@ -194,7 +194,7 @@ def test_run_cleanup_container_appears_after_first_removal(tmp_path, monkeypatch
         code, tail = next(replies)
         return ProcResult(code, False, False, 0, tail, len(tail), None)
 
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     if outcome == "exception":
         with pytest.raises(OSError) as raised:
             box.run(["check"], timeout_s=1, log_path=tmp_path / "log")
@@ -228,7 +228,7 @@ def test_run_cleanup_failure_is_bounded_and_preserves_result(tmp_path, monkeypat
         return ProcResult(1 if failure == "exit" else 0, failure == "timeout", failure == "stopped",
                           0, "", 0, None)
 
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     assert box.run(["check"], timeout_s=1, log_path=tmp_path / "log") is original
     name = calls[0][0][calls[0][0].index("--name") + 1]
     removal = ["docker", "rm", "-f", name]
@@ -255,7 +255,7 @@ def test_run_cleanup_enforces_total_deadline(tmp_path, monkeypatch):
         clock[0] += kwargs["timeout_s"]
         return ProcResult(None, True, False, 0, "", 0, None)
 
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     assert box.run(["check"], timeout_s=1, log_path=tmp_path / "log") is original
     assert [argv[1] for argv, _ in calls] == ["rm", "ps", "rm", "ps", "rm"]
     assert [timeout for _, timeout in calls] == pytest.approx([1, 1, 1, 1, .4])
@@ -278,7 +278,7 @@ def test_run_cleanup_waits_out_initial_absence(tmp_path, monkeypatch):
             return original
         return ProcResult(0, False, False, 0, "", 0, None)
 
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     assert box.run(["check"], timeout_s=1, log_path=tmp_path / "log") is original
     name = calls[0][calls[0].index("--name") + 1]
     assert calls[1:] == [["docker", "rm", "-f", name],
@@ -302,7 +302,7 @@ def test_run_cleanup_normal_survivor_removed_and_rechecked(tmp_path, monkeypatch
         tail = next(replies)
         return ProcResult(0, False, False, 0, tail, len(tail), None)
 
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", runner)
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", runner)
     assert box.run(["check"], timeout_s=1, log_path=tmp_path / "log") is original
     name = calls[0][calls[0].index("--name") + 1]
     query = ["docker", "ps", "-a", "-q", "--filter", f"name=^/{name}$"]
