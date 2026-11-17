@@ -1,4 +1,5 @@
 import '../core/isolation-test-root.js';
+import { modelWindows } from './model-windows-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +14,7 @@ async function setup(t, runner) {
   const root = path.resolve('.scratch/chat-backend/server'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'run-')), hive = path.join(dir, 'hive'), workspace = path.join(dir, 'ws');
   let lastChild;
-  const server = await startVisualizerServer({ hiveDir: hive, publicDir: dir, port: 0, control: { workspace, runner: runner ? (...args) => (lastChild = runner(...args)) : undefined, auth: { close() {} } } });
+  const server = await startVisualizerServer({ hiveDir: hive, publicDir: dir, port: 0, control: { modelWindows, workspace, runner: runner ? (...args) => (lastChild = runner(...args)) : undefined, auth: { close() {} } } });
   t.after(async () => { lastChild?.emit('close', 0); await server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const req = async (route, body) => {
     const res = await fetch(server.url + route, { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -71,7 +72,7 @@ test('real question demo followed by a new run archives reply and supplies it to
   const archive = fs.readFileSync(path.join(f.hive, 'runs', runs[0].runId, 'events.jsonl'), 'utf8'); assert.match(archive, /run_reply/);
 });
 
-test('registry follow-up passes the v2 context pack with the latest earlier reply', async (t) => {
+test('registry follow-up passes the v3 context pack with the latest earlier reply', async (t) => {
   const { createProjectRegistry } = await import('../../src/core/projects.js');
   const root = path.resolve('.scratch/chat-backend/server'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'registry-')), workspace = path.join(dir, 'ws'); fs.mkdirSync(workspace);
@@ -80,12 +81,12 @@ test('registry follow-up passes the v2 context pack with the latest earlier repl
   fs.mkdirSync(chat.hiveDir, { recursive: true });
   fs.writeFileSync(path.join(chat.hiveDir, 'state.json'), JSON.stringify({ runId: 'earlier', request: 'old goal', status: 'finished', reply: { from: 'michael', kind: 'answer', text: 'a'.repeat(5000) } }));
   let child, args, env;
-  const server = await startVisualizerServer({ dataDir, publicDir: dir, port: 0, control: { workspace, auth: { close() {} }, runner(_exe, argv, options) { args = argv; env = options.env; child = Object.assign(new EventEmitter(), { pid: 123 }); return child; } } });
+  const server = await startVisualizerServer({ dataDir, publicDir: dir, port: 0, control: { modelWindows, workspace, auth: { close() {} }, runner(_exe, argv, options) { args = argv; env = options.env; child = Object.assign(new EventEmitter(), { pid: 123 }); return child; } } });
   t.after(async () => { if (child) { releaseRunLease(chat.hiveDir, env.SCRANTON_RUN_LEASE); child.emit('close', 0); } await server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const res = await fetch(server.url + `/api/projects/${project.id}/chats/${chat.id}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Scranton-Client': '1' }, body: JSON.stringify({ request: 'follow-up', trustedHost: true, conversation: true }) });
   assert.equal(res.status, 202, await res.text());
   const context = JSON.parse(fs.readFileSync(args[args.indexOf('--thread-context') + 1], 'utf8'));
   const pack = createContext({ dataDir, registry }).forTeam(project.id, chat.id);
-  assert.deepEqual(context, { v: 2, text: pack.text, developer: pack.developer });
+  assert.deepEqual(context, { v: 3, text: pack.text, developer: pack.developer });
   assert.match(context.text, /Reply \(answer\):\na{5000}/); assert.ok(context.text.length <= 24000);
 });

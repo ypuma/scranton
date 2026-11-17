@@ -110,7 +110,7 @@ export class Orchestrator {
     this.threadContext = typeof threadContext === 'string' ? threadContext : '';
     this.developerContext = '';
     for (const line of (typeof developerContext === 'string' ? developerContext.trim() : '').split(/\r?\n/)) {
-      if (this.developerContext.length + line.length + 1 > 4000) break;
+      if (this.developerContext.length + line.length + 1 > 8100) break;
       this.developerContext += `${line}\n`;
     }
     this.developerContext = this.developerContext.trimEnd();
@@ -229,7 +229,7 @@ export class Orchestrator {
     const contextLines = this.threadContext.trim().split(/\r?\n/);
     let context = '';
     for (const line of contextLines) {
-      if (context.length + line.length + 1 > 24000) break;
+      if (context.length + line.length + 1 > 800100) break;
       context += `${line}\n`;
     }
     const planningInput = (context.trim() ? `## Earlier turns and project context - context only; the new goal below takes precedence\n\n<earlier-runs>\n${context.replace(/<\s*\/?\s*earlier-runs\s*>/gi, '[earlier-runs]')}</earlier-runs>\n\n` : '') + planRequestBody(this.request, this.conversation);

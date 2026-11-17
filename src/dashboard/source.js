@@ -69,7 +69,7 @@ async function readAt(handle, position, length) {
  * half-written one keeps the last good snapshot. The run_started line at the head of the
  * file is kept too, so a long run keeps its start time.
  */
-export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 16 * 1024, maxEvents = 500 } = {}) {
+export function createHiveSource(hiveDir, { tailBytes = 64 * 1024, headBytes = 262144, maxEvents = 500 } = {}) {
   const statePath = path.join(hiveDir, 'state.json');
   const eventsPath = path.join(hiveDir, 'events.jsonl');
   let state = null;

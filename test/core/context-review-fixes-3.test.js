@@ -79,9 +79,9 @@ for (const code of ['ELOOP', 'EACCES']) test(`C2.3 ${code} canonicalisation uses
     return realpath(name, ...args);
   });
   const store = createContextStore(f.dataDir, f.projectId, f.chatId);
-  assert.deepEqual(store.settings(), { crossChat: true }); assert.equal(store.notes().text, ''); assert.deepEqual(store.state(), { resetAt: null }); assert.equal(store.degraded, true);
+  assert.deepEqual(store.settings(), { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} }); assert.equal(store.notes().text, ''); assert.deepEqual(store.state(), { resetAt: null }); assert.equal(store.degraded, true);
   const c = createContext({ ...f.scope, registry: f.registry });
-  const status = c.status(f.projectId); assert.deepEqual(status.settings, { crossChat: true }); assert.equal(status.notes.text, ''); assert.equal(status.degraded, true);
+  const status = c.status(f.projectId); assert.deepEqual(status.settings, { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} }); assert.equal(status.notes.text, ''); assert.equal(status.degraded, true);
   assert.equal(c.inspect(f.projectId, f.chatId).degraded, true);
   assert.equal(c.forTeam(f.projectId, f.chatId, { memory: 'MEMORY' }).text, expectedTeam); assert.equal(c.forTeam(f.projectId, f.chatId).meta.degraded, true);
   const expectedPipeline = buildPipelineHistory({ ...f.scope, projectMemory });

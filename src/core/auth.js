@@ -64,6 +64,13 @@ async function defaultRuntime(options) {
   return runtime;
 }
 
+export function createModelRuntime({ env = process.env, authPath } = {}) {
+  const override = env.PI_CODING_AGENT_DIR;
+  const agentDir = override ? path.resolve(override.replace(/^~(?=$|[\\/])/, homedir())) : path.join(homedir(), '.pi', 'agent');
+  authPath ??= path.join(agentDir, 'auth.json');
+  return defaultRuntime({ authPath, modelsPath: path.join(path.dirname(authPath), 'models.json'), allowModelNetwork: false, refreshOnCreate: false });
+}
+
 export function createAuthService({ env = process.env, authPath, runtimeFactory = defaultRuntime,
   opener = openAuthBrowser, timeoutMs = 10 * 60 * 1000, renewalTimeoutMs = 20000, now = Date.now, onChange = () => {} } = {}) {
   const override = env.PI_CODING_AGENT_DIR;

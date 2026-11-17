@@ -75,7 +75,7 @@ test('a send that gets an id clears the draft, says it is queued and tracks the 
   h.answer({ id: 'msg-1', delivery: 'queued' });
   await sent;
   assert.equal(h.$('chat-text').value, '', 'draft cleared');
-  assert.equal(h.$('chat-count').textContent, '0 / 4000');
+  assert.equal(h.$('chat-count').textContent, '0 / 16000');
   assert.match(h.$('chat-status').textContent, /^Queued for dwight-m1\./);
   assert.equal(h.$('chat-send').disabled, false, 'the composer is free again');
   assert.deepEqual(ids(h), ['queued']);

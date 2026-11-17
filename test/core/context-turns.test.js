@@ -76,3 +76,13 @@ test('per-pack 64 MiB budget is enforced across large Team journals, including w
   const a = readTurns(f.scope), b = readTurns(f.scope);
   assert.equal(a.turns.length, 3); assert.equal(a.unread, 1); assert.equal(a.total, 4); assert.equal(a.truncated, true); assert.deepEqual(b, a);
 });
+
+// Revert LIMITS.request = 32768 to fail; the legacy projection keeps its own caps.
+test('derived requests retain 32768 characters with whole-pair clipping in both engines', (t) => {
+  for (const engine of ['team', 'pipeline']) {
+    const f = fixture(t, engine), request = 'q'.repeat(32767) + '\ud83d\ude80' + 'tail';
+    if (engine === 'team') f.write('events.jsonl', journal('longrequest', request));
+    else { f.write('runs/longrequest/status.json', { status: 'succeeded', created_at: '2026-01-01' }); f.write('runs/longrequest/run.json', { task: request }); }
+    const turn = readTurns(f.scope).turns[0]; assert.equal(turn.request, 'q'.repeat(32767)); assert.ok(turn.request.isWellFormed());
+  }
+});

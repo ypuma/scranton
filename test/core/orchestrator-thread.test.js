@@ -45,9 +45,9 @@ test('omitted, empty and non-string context preserve the original planning promp
 });
 
 test('run options override constructor context and oversized context is bounded at line boundaries', async (t) => {
-  const inputs = await planning(t, { threadContext: 'Wrong context', runContext: 'Recent history\n' + 'x'.repeat(25000) });
+  const inputs = await planning(t, { threadContext: 'Wrong context', runContext: 'Recent history\n' + 'x'.repeat(800101) });
   assert.ok(!inputs[0].includes('Wrong context'));
   assert.match(inputs[0], /Recent history/);
-  assert.ok(inputs[0].length < 24000);
+  assert.ok(inputs[0].length < 800100);
   assert.ok(!inputs[0].includes('xxx'));
 });

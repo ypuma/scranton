@@ -3,6 +3,7 @@ import { readLive } from '../core/live-activity.js';
 import http from 'node:http';
 import { isLoopbackAddress } from '../core/network.js';
 import { createControl, json } from './control.js';
+import { createModelWindows } from '../core/model-windows.js';
 import { createRegistryRouter } from './registry-router.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -335,10 +336,15 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
   if (!hiveDir && !dataDir) throw new TypeError('startVisualizerServer: hiveDir is required');
   if (!publicDir) throw new TypeError('startVisualizerServer: publicDir is required');
 
+  const modelWindows = dataDir ? control?.modelWindows ?? createModelWindows() : undefined;
+  if (modelWindows) {
+    modelWindows.warm();
+    if (control) control = { ...control, modelWindows };
+  }
   const root = path.resolve(publicDir);
   const single = dataDir ? null : createHiveContext({ hive: path.resolve(hiveDir), control });
   const registryRouter = createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace,
-    contextFactory: createHiveContext, single });
+    contextFactory: createHiveContext, single, modelWindows });
   const controller = single?.controller ?? registryRouter.authController;
   let realRootPromise = null;
   const realRoot = () => (realRootPromise ??= fsp.realpath(root));

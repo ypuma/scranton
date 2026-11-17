@@ -215,7 +215,8 @@ test('buildFollowUp: the goal with the drawer\'s execution and models, never a w
     { request: 'Go', sandbox: 'docker', sandboxNetwork: 'none', conversation: true });
   assert.deepEqual(buildFollowUp({ goal: 'Go', execution: { sandbox: 'host', trustedHost: false } }, control).field, 'trustedHost');
   assert.equal(buildFollowUp({ goal: '   ' }, control).field, 'request');
-  assert.equal(buildFollowUp({ goal: 'x'.repeat(4001) }, control).field, 'request');
+  assert.equal(buildFollowUp({ goal: 'x'.repeat(32769) }, control).field, 'request');
+  assert.equal(buildFollowUp({ goal: 'x'.repeat(32768) }, control).body.request.length, 32768);
 });
 
 test('project and chat request bodies', () => {
@@ -333,7 +334,7 @@ test('the sidebar, chat header and dialogs keep their labels and bounds', () => 
   const html = readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
   assert.match(html, /<nav class="sidebar" id="sidebar" aria-labelledby="nav-title" hidden>/, 'the sidebar waits for /api/projects');
   assert.match(html, /<button type="button" class="icon-btn nav-toggle" id="nav-toggle" aria-controls="sidebar" aria-expanded="false" hidden>/);
-  assert.match(html, /<textarea id="followup-text"[^>]*maxlength="4000"/);
+  assert.match(html, /<textarea id="followup-text"[^>]*maxlength="32768"/);
   assert.match(html, /<label class="field-label" for="run-picker">Run<\/label>/);
   assert.match(html, /id="replay-banner" role="status" hidden/);
   assert.match(html, /<input id="p-folder"[^>]*maxlength="1024"/);

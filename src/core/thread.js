@@ -11,7 +11,7 @@ const MAX_HISTORY_BYTES = 20 * 1024 * 1024;
 const cache = new Map(), contextCache = new Map();
 const checkPath = (target, root) => checkScopedPath(root, target, false);
 const contextRoot = (hive) => path.join(canonicalDirectory(path.dirname(path.resolve(hive))), path.basename(path.resolve(hive)));
-function boundedRead(file, max = MAX_HISTORY_BYTES, hardened = false) {
+export function boundedRead(file, max = MAX_HISTORY_BYTES, hardened = false) {
   if (hardened) checkPath(file, hardened);
   const options = hardened ? { bigint: true } : undefined;
   const before = hardened ? fs.lstatSync(file, options) : null;

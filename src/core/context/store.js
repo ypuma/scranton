@@ -3,10 +3,18 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateId } from '../projects.js';
 import { canonicalDirectory, checkScopedPath } from './paths.js';
-import { LIMITS } from './limits.js';
+import { DEFAULT_BUDGET, LIMITS } from './limits.js';
+import { tokens } from './tokens.js';
 import { sameFileIdentity } from './file-identity.js';
 
 const fail = (message) => { throw Object.assign(Error(message), { status: 400 }); };
+const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+const closed = (value, keys) => object(value) && Reflect.ownKeys(value).every((key) => keys.includes(key));
+const rule = (value) => closed(value, ['mode', 'value']) && Object.keys(value).length === 2 && Number.isInteger(value.value) &&
+  (value.mode === 'percent' ? value.value >= LIMITS.percentMin && value.value <= LIMITS.percentMax : value.mode === 'tokens' && value.value >= LIMITS.tokensMin && value.value <= LIMITS.tokensMax);
+const modelKey = (key) => key.isWellFormed() && key.length >= 1 && key.length <= 513 && !/[\s\x00-\x1f\x7f-\x9f]/u.test(key) && !['__proto__', 'constructor', 'prototype'].includes(key);
+const models = (value, patch = false) => object(value) && Reflect.ownKeys(value).every((key) => typeof key === 'string' && modelKey(key) && (patch && value[key] === null || rule(value[key]))) && (patch || Object.keys(value).length <= LIMITS.overrides);
+const defaults = () => ({ crossChat: true, budget: { ...DEFAULT_BUDGET }, models: {} });
 export function normalizeNotes(value) {
   if (typeof value !== 'string') fail('Expected notes text');
   const text = value.toWellFormed().replace(/\r\n/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
@@ -59,18 +67,37 @@ export function createContextStore(dataDir, projectId, chatId) {
       verify(); fs.renameSync(temporary, target);
     } finally { if (fd !== undefined) fs.closeSync(fd); if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   }
-  const json = (name) => { const r = read(name, 1024); if (!r) return null; try { return JSON.parse(r.text); } catch { return invalid(); } };
-  function settings() { const s = json('settings.json'); return { crossChat: s?.v === 1 && Object.keys(s).length === 2 && typeof s.crossChat === 'boolean' ? s.crossChat : true }; }
+  const json = (name, max = 1024) => { const r = read(name, max); if (!r) return null; try { return JSON.parse(r.text); } catch { return invalid(); } };
+  function settings() {
+    const s = json('settings.json', LIMITS.settingsBytes);
+    if (!s) return defaults();
+    if (closed(s, ['v', 'crossChat']) && s.v === 1 && typeof s.crossChat === 'boolean') return { ...defaults(), crossChat: s.crossChat };
+    if (closed(s, ['v', 'crossChat', 'budget', 'models']) && s.v === 2 && typeof s.crossChat === 'boolean' &&
+      (!Object.hasOwn(s, 'budget') || rule(s.budget)) && (!Object.hasOwn(s, 'models') || models(s.models))) {
+      return { crossChat: s.crossChat, budget: { ...(s.budget ?? DEFAULT_BUDGET) }, models: { ...(s.models ?? {}) } };
+    }
+    invalid(); return defaults();
+  }
   function notes() {
     const r = read('notes.md', LIMITS.notesBytes);
-    try { const text = r ? normalizeNotes(r.text) : ''; return { text, chars: text.length, limit: LIMITS.notes, updatedAt: r?.updatedAt ?? null }; }
-    catch { invalid(); return { text: '', chars: 0, limit: LIMITS.notes, updatedAt: null }; }
+    try { const text = r ? normalizeNotes(r.text) : ''; return { text, chars: text.length, tokens: tokens(text), limit: LIMITS.notes, updatedAt: r?.updatedAt ?? null }; }
+    catch { invalid(); return { text: '', chars: 0, tokens: 0, limit: LIMITS.notes, updatedAt: null }; }
   }
   function state() { const s = json('state.json'); return { resetAt: s?.v === 1 && Object.keys(s).length === 2 && typeof s.resetAt === 'string' && Number.isFinite(Date.parse(s.resetAt)) ? new Date(s.resetAt).toISOString() : null }; }
   return { settings, notes, state, get degraded() { return degraded; },
     configure(value) {
-      if (!value || typeof value.crossChat !== 'boolean' || Object.keys(value).some((k) => k !== 'crossChat')) fail('Expected crossChat boolean');
-      atomic('settings.json', JSON.stringify({ v: 1, crossChat: value.crossChat }) + '\n', 1024);
+      if (!closed(value, ['crossChat', 'budget', 'models']) || !Object.keys(value).length ||
+        (Object.hasOwn(value, 'crossChat') && typeof value.crossChat !== 'boolean') ||
+        (Object.hasOwn(value, 'budget') && value.budget !== null && !rule(value.budget)) ||
+        (Object.hasOwn(value, 'models') && !models(value.models, true))) fail('Invalid context settings patch');
+      const next = settings();
+      if (Object.hasOwn(value, 'crossChat')) next.crossChat = value.crossChat;
+      if (Object.hasOwn(value, 'budget')) next.budget = { ...(value.budget ?? DEFAULT_BUDGET) };
+      for (const [key, entry] of Object.entries(value.models ?? {})) {
+        if (entry === null) delete next.models[key]; else next.models[key] = { ...entry };
+      }
+      if (Object.keys(next.models).length > LIMITS.overrides) fail('Context model override limit exceeded');
+      atomic('settings.json', JSON.stringify({ v: 2, ...next }) + '\n', LIMITS.settingsBytes);
     },
     setNotes(value) { atomic('notes.md', normalizeNotes(value), LIMITS.notesBytes); },
     setReset(resetAt) {

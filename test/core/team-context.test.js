@@ -69,25 +69,25 @@ test('no-plan runs deliver the developer brief without introducing planner or ga
   }
 });
 
-// Revert run's developerContext override/type normalization or 4000 line clamp to fail these cases.
+// Revert run's developerContext override/type normalization or 8100 line clamp to fail these cases.
 test('run override normalizes non-strings and clamps developer context at whole-line boundaries', async (t) => {
   for (const runContext of ['', ' \n ', null, 42]) {
     const inputs = await run(t, { developerContext: 'Wrong history', runContext, retries: false });
     assert.ok(inputs.every((i) => !i.body.includes(heading) && !i.body.includes('Wrong history')));
   }
-  const text = 'a'.repeat(1999) + '\r\n' + 'b'.repeat(1999);
-  const inputs = await run(t, { developerContext: 'Wrong history', runContext: text + '\nDROP', retries: false });
+  const text = 'a'.repeat(3999) + '\r\n' + 'b'.repeat(4000);
+  const inputs = await run(t, { developerContext: 'Wrong history', runContext: text + '\n' + 'DROP'.repeat(26), retries: false });
   const body = inputs.find((i) => i.agent === 'dwight').body;
   assert.ok(body.endsWith(section(text.replace(/\r\n/g, '\n'))));
   assert.doesNotMatch(body, /Wrong history|DROP/);
-  const oversized = await run(t, { developerContext: 'Keep\n' + 'x'.repeat(4001), retries: false });
+  const oversized = await run(t, { developerContext: 'Keep\n' + 'x'.repeat(8101), retries: false });
   assert.ok(oversized.find((i) => i.agent === 'dwight').body.endsWith(section('Keep')));
 });
 
-// Revert #plan's 24000 limit to 8000 to fail the intact-pack assertion.
-test('planner keeps a 23900-character pack intact line for line and clamps beyond 24000', async (t) => {
-  const pack = 'a'.repeat(11949) + '\n' + 'b'.repeat(11950);
-  assert.equal(pack.length, 23900);
+// Revert #plan's 800100 limit to 24000 to fail the intact-pack assertion.
+test('planner keeps an 800000-character pack intact including its last line and clamps beyond 800100', async (t) => {
+  const pack = 'a'.repeat(399999) + '\n' + 'b'.repeat(400000);
+  assert.equal(pack.length, 800000);
   const inputs = await run(t, { threadContext: pack, retries: false });
   assert.ok(inputs[0].body.includes(`<earlier-runs>\n${pack}\n</earlier-runs>`));
   const bounded = await run(t, { threadContext: pack + '\n' + 'x'.repeat(101), retries: false });

@@ -6,7 +6,7 @@ import { withFsRetry } from './util.js';
 
 export function validDecision(value, options) {
   return value && options.includes(value.decision) &&
-    (value.feedback === undefined || (typeof value.feedback === 'string' && value.feedback.length <= 8000)) &&
+    (value.feedback === undefined || (typeof value.feedback === 'string' && value.feedback.length <= 16000)) &&
     (value.decision !== 'feedback' || Boolean(value.feedback?.trim()));
 }
 

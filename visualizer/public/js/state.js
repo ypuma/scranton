@@ -16,8 +16,8 @@ export const ROLE_ID_RE = /^[a-z][a-z0-9]{1,19}$/;
 const ROLE_KINDS = ['planner', 'developer', 'gate'];
 export const LOG_SIZE = 500;
 export const CHAT_SIZE = 200;
-// The control route accepts 4000; agent_chat allows more, the view keeps a bounded copy.
-export const CHAT_TEXT_MAX = 4000;
+// The control route and agent_chat accept 16000; the view keeps a bounded copy.
+export const CHAT_TEXT_MAX = 16000;
 // An error log line or a failed agent's activity is kept this long, so the open log row can show it in full.
 export const FAILURE_TEXT_MAX = 2000;
 // Live activity (.enma/live-activity-contract.md sections 1 and 2): the files an instance last touched, and the

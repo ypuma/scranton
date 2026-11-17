@@ -1,26 +1,32 @@
-// The Context surface of a chat (.enma/context-contract.md section 10): one line in the follow-up composer that says
-// what the next turn would receive, and a drawer with the chat document, the developer brief, Start fresh / Restore
-// earlier turns and the project's sharing switch and notes. It reads on scope change, when a run of the chat
+// The Context surface of a chat (.enma/context-contract.md section 10, .enma/context-budget-contract.md section 11):
+// one line in the follow-up composer that says what the next turn would receive, and a drawer with the chat
+// document, its budget in tokens, the developer brief, Start fresh / Restore earlier turns and the project's budget,
+// sharing switch and notes. It reads on scope change, when a run of the chat
 // finished, after each change and when the drawer opens; it never polls. Every answer is checked against the chat
 // it was asked for, so a reply that lands after the page moved on is dropped. Server text is only set as textContent.
 import { CLIENT_HEADERS, CONTROL_HEADERS } from './control.js';
 import { formatWhen } from './format.js';
 import { findChat, findProject, sameScope, ALIVE_STATUSES } from './scope.js';
 import {
-  NOTES_MAX, ENGINE_LABEL, UNREADABLE, contextUrl, chatContextUrl, parseProjectContext, parseChatContext, contextLine, summaryRows,
-  flagsText, resetText, resetQuestion, sectionNote, buildCrossChat, buildNotes, unsupported, contextError,
+  ENGINE_LABEL, UNREADABLE, DEFAULTS, BUDGET_MODES, METER_CELLS, contextUrl, chatContextUrl, parseProjectContext, parseChatContext, contextLine,
+  summaryRows, usageText, meterFill, windowNote, cappedText, developerText, modelText, ruleText, flagsText, resetText, resetQuestion,
+  sectionNote, budgetState, previewText, switchMode, rangeText, buildBudget, buildBudgetReset, atDefault, buildCrossChat, buildNotes,
+  notesCount, unsupported, contextError, tokenText,
 } from './context.js';
 
 const $ = (id) => document.getElementById(id);
-const BUSY_TEXT = { reset: 'Starting fresh...', restore: 'Restoring earlier turns...', settings: 'Saving...', notes: 'Saving notes...' };
+const BUSY_TEXT = { reset: 'Starting fresh...', restore: 'Restoring earlier turns...', settings: 'Saving...', notes: 'Saving notes...', budget: 'Saving budget...' };
 const DONE_TEXT = {
   reset: 'Started fresh. The next turn gets none of the earlier turns of this chat.',
   restore: 'Earlier turns restored. The next turn gets them again.',
   notes: 'Notes saved. New turns of every chat in this project get them.',
+  budget: 'Budget saved. The next turn of every chat in this project uses it.',
+  budgetReset: 'Budget reset to the default.',
 };
+// the changes that answer with the project document; budget posts to the settings route
+const PROJECT_KINDS = new Set(['settings', 'notes', 'budget']);
 const NOT_LOADED = 'Context: not loaded';
 const LINE_TITLE = 'What the next turn of this chat receives as context';
-const n = (v) => v.toLocaleString('en-US');
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -44,15 +50,21 @@ async function request(url, { body, signal } = {}) {
 }
 
 // getProjects(): the sidebar's projects document (mode, names, chat status). confirm: the shared confirm dialog,
-// used before unsaved notes are dropped.
-export function createContextPanel({ getProjects = () => null, confirm = null } = {}) {
+// used before unsaved notes or an unsaved budget are dropped. plannerModel(): the planner pick the Pipeline form
+// will send ({ provider, model } or null), the recipient of a Pipeline chat's pack.
+export function createContextPanel({ getProjects = () => null, confirm = null, plannerModel = () => null } = {}) {
   const e = {
     line: $('context-line'), lineText: $('context-line-text'),
     dialog: $('context-dialog'), chat: $('context-chat'), body: $('context-body'), error: $('context-error'),
     retryRow: $('context-retry-row'), retry: $('context-retry'), empty: $('context-empty'), content: $('context-content'),
     engine: $('context-engine'), truncated: $('context-truncated'), degraded: $('context-degraded'), resetAt: $('context-reset-at'),
+    usage: $('context-usage'), meter: $('context-meter'), windowNote: $('context-window-note'), capped: $('context-capped'),
     figures: $('context-figures'), flags: $('context-flags'), sections: $('context-sections'), sectionsEmpty: $('context-sections-empty'),
-    devSection: $('context-developer-section'), dev: $('context-developer'), devEmpty: $('context-developer-empty'),
+    budget: $('context-budget'), budgetMode: $('context-budget-mode'), budgetValue: $('context-budget-value'), budgetRange: $('context-budget-range'),
+    budgetOnlyRow: $('context-budget-only-row'), budgetOnly: $('context-budget-only'), budgetOnlyLabel: $('context-budget-only-label'),
+    budgetPreview: $('context-budget-preview'), budgetError: $('context-budget-error'), budgetStatus: $('context-budget-status'),
+    budgetReset: $('context-budget-reset'), budgetSave: $('context-budget-save'),
+    devSection: $('context-developer-section'), devUsage: $('context-developer-usage'), dev: $('context-developer'), devEmpty: $('context-developer-empty'),
     historyNote: $('context-history-note'), reset: $('context-reset'), restore: $('context-restore'), actionStatus: $('context-action-status'),
     confirmBox: $('context-reset-confirm'), question: $('context-reset-question'), resetCancel: $('context-reset-cancel'), resetOk: $('context-reset-ok'),
     form: $('context-project'), projectName: $('context-project-name'), projectError: $('context-project-error'),
@@ -73,19 +85,27 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
   let projectError = '';
   let loading = false;
   let readChat = null;
+  // the planner pick the last chat read was asked for, as JSON
+  let readPick = 'null';
   let readProject = null;
   let sending = null;
-  // the change on its way: 'reset' | 'restore' | 'settings' | 'notes'
+  // the change on its way: 'reset' | 'restore' | 'settings' | 'notes' | 'budget'
   let busy = null;
   let confirming = false;
   // the saved notes the editor started from; null while there is none
   let notesSnap = null;
+  // the budget control as it was last filled from the documents; null while it was not
+  let budgetSnap = null;
   let opener = null;
   // the chat as the sidebar last reported it: { alive, runs }
   let last = null;
 
   const registry = () => getProjects()?.mode === 'registry';
   const dirty = () => notesSnap !== null && e.notes.value !== notesSnap;
+  const budgetForm = () => JSON.stringify([e.budgetMode.value, e.budgetValue.value, e.budgetOnly.checked]);
+  const budgetDirty = () => budgetSnap !== null && budgetForm() !== budgetSnap;
+  // only a Pipeline chat sends the pick: a Team chat's recipients are the Agents defaults
+  const pick = () => (findChat(getProjects(), scope)?.engine === 'pipeline' ? plannerModel() : null);
 
   function setText(node, text, tone) {
     if (node.textContent !== text) node.textContent = text;
@@ -107,8 +127,10 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
 
   // ------------------------------------------------------------ server
   function loadChat() {
-    const url = scope && registry() ? chatContextUrl(scope.project, scope.chat) : null;
+    const asked = pick();
+    const url = scope && registry() ? chatContextUrl(scope.project, scope.chat, '', asked) : null;
     if (!url) return Promise.resolve();
+    readPick = JSON.stringify(asked);
     readChat?.abort();
     const ctl = new AbortController();
     readChat = ctl;
@@ -124,6 +146,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
         available = true;
         if (d.valid) doc = d;
         chatError = d.valid ? '' : UNREADABLE;
+        if (d.valid) syncBudget();
       } else if (unsupported(r.status)) {
         available = false;
         doc = null;
@@ -139,7 +162,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
 
   function loadProject() {
     // a change on its way answers with the project document; a read started meanwhile could land later and be older
-    const url = scope && registry() && e.dialog.open && busy !== 'settings' && busy !== 'notes' ? contextUrl(scope.project) : null;
+    const url = scope && registry() && e.dialog.open && !PROJECT_KINDS.has(busy) ? contextUrl(scope.project) : null;
     if (!url) return Promise.resolve();
     readProject?.abort();
     const ctl = new AbortController();
@@ -153,6 +176,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
         pdoc = p;
         projectError = '';
         syncNotes();
+        syncBudget();
       } else {
         projectError = r.ok ? UNREADABLE : contextError(r.status, r.data);
       }
@@ -164,11 +188,11 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     return Promise.all([loadChat(), loadProject()]);
   }
 
-  // -> {} | { error } | { stale: true }
-  async function act(kind, body = {}) {
+  // done: what the status line says once it worked, when the kind's own text does not fit. -> {} | { error } | { stale: true }
+  async function act(kind, body = {}, done = '') {
     if (!scope || busy) return { stale: true };
-    const project = kind === 'settings' || kind === 'notes';
-    const url = project ? contextUrl(scope.project, kind) : chatContextUrl(scope.project, scope.chat, kind);
+    const project = PROJECT_KINDS.has(kind);
+    const url = project ? contextUrl(scope.project, kind === 'budget' ? 'settings' : kind) : chatContextUrl(scope.project, scope.chat, kind);
     if (!url) return { stale: true };
     const at = gen;
     busy = kind;
@@ -181,9 +205,10 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
       readProject?.abort();
       readProject = null;
     }
-    const where = kind === 'settings' ? e.crossStatus : kind === 'notes' ? e.notesStatus : e.actionStatus;
-    for (const node of [e.crossStatus, e.notesStatus, e.actionStatus]) setText(node, '', '');
+    const where = kind === 'settings' ? e.crossStatus : kind === 'notes' ? e.notesStatus : kind === 'budget' ? e.budgetStatus : e.actionStatus;
+    for (const node of [e.crossStatus, e.notesStatus, e.budgetStatus, e.actionStatus]) setText(node, '', '');
     showError(e.notesError, '');
+    showError(e.budgetError, '');
     setText(where, BUSY_TEXT[kind], 'busy');
     render();
     const ctl = new AbortController();
@@ -210,7 +235,8 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
       if (p.valid) {
         pdoc = p;
         syncNotes({ force: kind === 'notes' });
-        setText(where, kind === 'notes' ? DONE_TEXT.notes : crossText(p.settings.crossChat));
+        syncBudget({ force: kind === 'budget' });
+        setText(where, done || (kind === 'settings' ? crossText(p.settings.crossChat) : DONE_TEXT[kind]));
       } else {
         setText(where, UNREADABLE, 'error');
         loadProject();
@@ -225,6 +251,8 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
         available = true;
         chatError = '';
         setText(where, DONE_TEXT[kind]);
+        // the answer has no planner pick, so a Pipeline chat reads its document again with it
+        if (pick()) loadChat();
       } else {
         setText(where, UNREADABLE, 'error');
         loadChat();
@@ -272,6 +300,57 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     render();
     e.notes.focus();
   });
+
+  // ------------------------------------------------------------ budget
+  // The control follows the documents until the human changes it; an override of this recipient wins over the
+  // project rule, as on the server.
+  function syncBudget({ force = false } = {}) {
+    if (!doc || (!force && budgetDirty())) return;
+    const s = budgetState(doc, pdoc);
+    e.budgetMode.value = s.mode;
+    e.budgetValue.value = s.value;
+    e.budgetOnly.checked = s.only;
+    budgetSnap = budgetForm();
+    e.budgetValue.removeAttribute('aria-invalid');
+  }
+
+  function budgetIdle() {
+    showError(e.budgetError, '');
+    setText(e.budgetStatus, '', '');
+    e.budgetValue.removeAttribute('aria-invalid');
+  }
+
+  e.budget.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (busy || !pdoc || !doc) return;
+    const built = buildBudget({ mode: e.budgetMode.value, value: e.budgetValue.value, only: e.budgetOnly.checked }, budgetState(doc, pdoc), pdoc);
+    if (built.error) {
+      showError(e.budgetError, built.error);
+      const field = built.field === 'value' ? e.budgetValue : built.field === 'only' ? e.budgetOnly : e.budgetMode;
+      if (field === e.budgetValue) field.setAttribute('aria-invalid', 'true');
+      field.focus();
+      return;
+    }
+    const r = await act('budget', built.body);
+    if (r.error && e.dialog.open) e.budgetValue.focus();
+  });
+  e.budgetReset.addEventListener('click', async () => {
+    if (busy || !pdoc || !doc) return;
+    const r = await act('budget', buildBudgetReset(budgetState(doc, pdoc)).body, DONE_TEXT.budgetReset);
+    if (!r.stale && e.dialog.open) (e.budgetReset.disabled ? e.budgetValue : e.budgetReset).focus();
+  });
+  // another mode keeps the budget it stands for
+  e.budgetMode.addEventListener('change', () => {
+    if (BUDGET_MODES.includes(e.budgetMode.value) && doc) e.budgetValue.value = switchMode(e.budgetMode.value, e.budgetValue.value, doc.model.window, pdoc?.defaults);
+    budgetIdle();
+    render();
+  });
+  for (const node of [e.budgetValue, e.budgetOnly]) {
+    node.addEventListener(node === e.budgetOnly ? 'change' : 'input', () => {
+      budgetIdle();
+      render();
+    });
+  }
 
   // ------------------------------------------------------------ sharing
   e.cross.addEventListener('change', async () => {
@@ -340,13 +419,14 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     e.retryRow.hidden = !(chatError || projectError) || loading || Boolean(busy);
     e.content.hidden = !d;
     e.body.setAttribute('aria-busy', String(Boolean(busy) || (loading && !d)));
-    setText(e.foot, dirty() ? 'Unsaved notes' : '');
+    setText(e.foot, dirty() ? 'Unsaved notes' : budgetDirty() ? 'Unsaved budget' : '');
     if (!d) return;
 
     setText(e.engine, ENGINE_LABEL[d.engine]);
     e.truncated.hidden = !d.truncated;
     e.degraded.hidden = !d.degraded;
     setText(e.resetAt, d.reset ? `Fresh start ${formatWhen(d.reset.at)}` : '');
+    renderUsage(d);
     fill(e.figures, JSON.stringify(summaryRows(d)), () => summaryRows(d).flatMap(([k, v]) => [el('dt', '', k), el('dd', '', v)]));
     const flags = flagsText(d);
     // shortening to fit is routine; only a part that could not be read is loud
@@ -357,7 +437,8 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     e.sectionsEmpty.hidden = d.sections.length > 0;
     blocks(e.sections, d.sections);
     e.devSection.hidden = !d.developer;
-    const dev = d.developer?.text ? [{ id: 'developer', title: 'Developer brief', chars: d.developer.chars || d.developer.text.length, text: d.developer.text, exact: true }] : [];
+    setText(e.devUsage, d.developer ? developerText(d.developer) : '');
+    const dev = d.developer?.text ? [{ id: 'developer', title: 'Developer brief', tokens: d.developer.tokens, text: d.developer.text, exact: true }] : [];
     e.devEmpty.hidden = !d.developer || dev.length > 0;
     blocks(e.dev, dev);
 
@@ -378,9 +459,54 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     e.cross.disabled = Boolean(busy) || !pdoc;
     e.crossRow.dataset.disabled = String(e.cross.disabled);
     e.notes.disabled = !pdoc || busy === 'notes';
-    setText(e.count, `${n(e.notes.value.length)} / ${n(NOTES_MAX)}`);
+    setText(e.count, notesCount(e.notes.value));
     e.save.disabled = Boolean(busy) || !pdoc || !dirty();
     e.undo.hidden = !dirty();
+    renderBudget(d);
+  }
+
+  // the summary line, the meter of used against budget, and what limited the budget
+  function renderUsage(d) {
+    const text = usageText(d);
+    setText(e.usage, text);
+    const { used, tokens: budget } = d.budget;
+    e.meter.hidden = !budget;
+    const k = meterFill(used, budget);
+    fill(e.meter, String(k), () => Array.from({ length: METER_CELLS }, (_, i) => {
+      const cell = el('i');
+      cell.dataset.fill = i < k ? 'full' : '';
+      return cell;
+    }));
+    e.meter.setAttribute('aria-valuemax', String(budget));
+    e.meter.setAttribute('aria-valuenow', String(Math.min(used, budget)));
+    e.meter.setAttribute('aria-valuetext', text);
+    const win = windowNote(d.model);
+    setText(e.windowNote, win);
+    e.windowNote.hidden = !win;
+    const capped = cappedText(d);
+    setText(e.capped, capped);
+    e.capped.hidden = !capped;
+  }
+
+  function renderBudget(d) {
+    const s = budgetState(d, pdoc);
+    const defaults = pdoc?.defaults ?? DEFAULTS;
+    const mode = BUDGET_MODES.includes(e.budgetMode.value) ? e.budgetMode.value : s.mode;
+    const [lo, hi] = defaults[mode];
+    e.budgetValue.setAttribute('min', String(lo));
+    e.budgetValue.setAttribute('max', String(hi));
+    setText(e.budgetRange, rangeText(mode, defaults));
+    // pi default has no id an override could be stored under
+    e.budgetOnlyRow.hidden = !s.id;
+    setText(e.budgetOnlyLabel, s.id ? `Only for ${modelText(s.id)}` : '');
+    const v = Number(e.budgetValue.value);
+    setText(e.budgetPreview, Number.isInteger(v) && v >= lo && v <= hi ? previewText({ mode, value: v }, d, defaults) : '');
+    const off = Boolean(busy) || !pdoc;
+    for (const x of [e.budgetMode, e.budgetValue, e.budgetOnly]) x.disabled = off;
+    e.budgetSave.disabled = off || !budgetDirty();
+    e.budgetReset.disabled = off || atDefault(s, pdoc);
+    const title = s.override ? `Remove the override for ${modelText(s.id)}; the project rule applies again` : `Back to the default: ${ruleText(defaults.budget)}`;
+    if (e.budgetReset.title !== title) e.budgetReset.title = title;
   }
 
   // one collapsible block per section; the ones the human opened stay open across a reread
@@ -393,7 +519,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
       const sum = el('summary');
       const kind = el('span', 'badge', s.exact ? 'Exact' : 'Summary');
       kind.dataset.tone = s.exact ? 'on' : 'quiet';
-      sum.append(el('span', 'context-block-title', s.title), kind, el('span', 'hint context-block-size', `${n(s.chars)} chars`));
+      sum.append(el('span', 'context-block-title', s.title), kind, el('span', 'hint context-block-size', tokenText(s.tokens)));
       const pre = el('pre', 'context-text', s.text);
       // a scroller has to be reachable from the keyboard
       pre.tabIndex = 0;
@@ -424,11 +550,14 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     return usable(opener) ? opener : null;
   }
 
+  const unsaved = () => dirty() || budgetDirty();
+
   function requestClose() {
-    if (!dirty() || !confirm) return finish();
+    if (!unsaved() || !confirm) return finish();
+    const both = dirty() && budgetDirty();
     confirm({
-      title: 'Discard notes changes?',
-      detail: 'The project notes you changed are not saved.',
+      title: both ? 'Discard unsaved changes?' : dirty() ? 'Discard notes changes?' : 'Discard budget changes?',
+      detail: both ? 'The project notes and the context budget you changed are not saved.' : dirty() ? 'The project notes you changed are not saved.' : 'The context budget you changed is not saved.',
       ok: 'Discard',
       action: () => ({ focus: finish() }),
     });
@@ -447,7 +576,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
       askReset(false);
       return;
     }
-    if (!dirty() || !confirm) return;
+    if (!unsaved() || !confirm) return;
     ev.preventDefault();
     requestClose();
   });
@@ -458,9 +587,12 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     projectError = '';
     notesSnap = null;
     e.notes.value = '';
+    // the control is filled from the documents again when the drawer opens
+    budgetSnap = null;
     confirming = false;
-    for (const node of [e.crossStatus, e.notesStatus, e.actionStatus]) setText(node, '', '');
+    for (const node of [e.crossStatus, e.notesStatus, e.budgetStatus, e.actionStatus]) setText(node, '', '');
     showError(e.notesError, '');
+    showError(e.budgetError, '');
     setText(e.foot, '');
     const target = opener;
     opener = null;
@@ -483,6 +615,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     loading = false;
     busy = null;
     confirming = false;
+    budgetSnap = null;
     const c = findChat(getProjects(), scope);
     last = c ? { alive: ALIVE_STATUSES.has(c.status), runs: c.runs } : null;
     if (e.dialog.open) e.dialog.close();
@@ -501,8 +634,14 @@ export function createContextPanel({ getProjects = () => null, confirm = null } 
     else render();
   }
 
+  // The Pipeline form's planner pick changed: a Pipeline chat's recipient is that pick, so its document is read
+  // again. A Team chat's pick is always null, so it never is.
+  function plannerChanged() {
+    if (scope && available !== false && JSON.stringify(pick()) !== readPick) loadChat();
+  }
+
   return {
-    setScope, projects, refresh, open, render,
+    setScope, projects, refresh, open, render, plannerChanged,
     doc: () => doc,
     shown: () => !e.line.hidden,
   };

@@ -11,7 +11,10 @@ import { createControl, readBody, json } from './control.js';
 import { createPipelineSupervisor } from '../core/pipeline-supervisor.js';
 import { resolveReflectionModel } from '../core/dreaming-reflection-sources.js';
 import { getAuthService } from '../core/auth.js';
+import { loadConfig, PACKAGE_ROOT } from '../core/config.js';
+import { createModelWindows } from '../core/model-windows.js';
 import { createContext } from '../core/context/index.js';
+import { UNKNOWN_RECIPIENT } from '../core/context/limits.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 function authorize(req) {
@@ -40,7 +43,7 @@ function replay(hive, runId) {
   } catch (err) { if (err.code === 'ENOENT') throw fail(404, 'Run archive not found'); throw err; }
 }
 
-export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace, contextFactory, single, completeReflection = control?.completeReflection }) {
+export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace, contextFactory, single, completeReflection = control?.completeReflection, modelWindows = control?.modelWindows ?? (dataDir ? createModelWindows() : undefined) }) {
   if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1) throw fail(400, 'Invalid maxConcurrentRuns');
   const registry = dataDir ? createProjectRegistry({ dataDir, projectsRoot }) : null;
   if (legacyWorkspace) registry?.importLegacy(legacyWorkspace);
@@ -55,9 +58,9 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
   }
   let recent = null;
   let closing = false;
-  const authController = registry ? createControl({ hive: dataDir, ...control, promptsDir: path.join(dataDir, 'prompts') }) : null;
+  const authController = registry ? createControl({ hive: dataDir, ...control, modelWindows, promptsDir: path.join(dataDir, 'prompts') }) : null;
   const allChats = () => registry.listProjects().flatMap((p) => registry.listChats(p.id));
-  const pipeline = createPipelineSupervisor({ dataDir: dataDir ?? path.dirname(hiveDir), auth: control?.auth, context: chatContext,
+  const pipeline = createPipelineSupervisor({ dataDir: dataDir ?? path.dirname(hiveDir), auth: control?.auth, context: chatContext, modelWindows,
     dreaming: registry ? (projectId) => dreaming(projectId) : undefined,
     checkCapacity() { if (running() >= maxConcurrentRuns) throw fail(429, 'too_many_runs'); },
     onStarting(chat, task) { const current = registry.getChat(chat.projectId, chat.id); registry.updateChat(chat.projectId, chat.id, current.title === 'New chat' ? { title: derivedChatTitle(task) } : {}); }
@@ -70,9 +73,9 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     if (single) return single;
     let ctx = contexts.get(chat.hiveDir);
     if (!ctx) {
-      ctx = contextFactory({ hive: chat.hiveDir, control: { ...control, promptsDir: path.join(dataDir, 'prompts'), workspace: project.workspace, closeAuth: false, prepareThread: true, fixedWorkspace: true,
+      ctx = contextFactory({ hive: chat.hiveDir, control: { ...control, modelWindows, promptsDir: path.join(dataDir, 'prompts'), workspace: project.workspace, closeAuth: false, prepareThread: true, fixedWorkspace: true,
         dreaming: () => dreaming(project.id),
-        threadContext: ({ memory }) => chatContext.forTeam(project.id, chat.id, { memory }),
+        threadContext: ({ memory, recipients }) => chatContext.forTeam(project.id, chat.id, { memory, recipients }),
         onStarting(info) {
           const current = registry.getChat(project.id, chat.id);
           registry.updateChat(project.id, chat.id, current.title === 'New chat' ? { title: derivedChatTitle(info.request) } : {});
@@ -152,7 +155,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     }
   }, 60000) : null;
   dreamTimer?.unref();
-  function inspectContext(project, chat) {
+  async function inspectContext(project, chat, req) {
     let activeRunId;
     try {
       activeRunId = chat.engine === 'pipeline' ? pipeline.list(chat).active
@@ -160,17 +163,33 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     } catch {}
     let memory = chat.engine === 'pipeline' ? [] : '';
     try { const dream = dreaming(project.id); memory = chat.engine === 'pipeline' ? dream.structuredContext() : dream.context(); } catch {}
-    return chatContext.inspect(project.id, chat.id, { activeRunId, memory });
+    let recipients;
+    if (chat.engine === 'pipeline') {
+      const query = new URL(req?.url ?? '/', 'http://localhost').searchParams;
+      const provider = query.get('provider'), model = query.get('model');
+      if (provider !== null || model !== null) {
+        if ([provider, model].some((v) => typeof v !== 'string' || v.length < 1 || v.length > 256 || /[\s\x00-\x1f\x7f-\x9f]/.test(v)) || query.getAll('provider').length !== 1 || query.getAll('model').length !== 1) throw fail(400, 'Invalid context model');
+        try { recipients = { planner: await modelWindows.resolve({ provider, model }) }; } catch {}
+      }
+    } else {
+      recipients = { planner: UNKNOWN_RECIPIENT, developer: UNKNOWN_RECIPIENT };
+      try {
+        const config = loadConfig({ cwd: PACKAGE_ROOT, validateWorkflow: false, env: { ...process.env, SCRANTON_DATA: '', SCRANTON_SETTINGS_DIR: dataDir }, flags: { workspace: project.workspace, hive: chat.hiveDir, gates: control?.gates } });
+        const [planner, developer] = await Promise.all(['michael', 'dwight'].map((id) => modelWindows.resolve(config.agents[id].modelSetting.value)));
+        recipients = { planner, developer };
+      } catch { /* Invalid configuration must not hide the context document. */ }
+    }
+    return chatContext.inspect(project.id, chat.id, { activeRunId, memory, recipients });
   }
   async function scoped(req, res, project, chat, suffix) {
     if (suffix === '/context' || suffix.startsWith('/context/')) {
       if (!chatContext) throw fail(404, 'Not found');
-      if (suffix === '/context' && req.method === 'GET') return json(res, 200, inspectContext(project, chat));
+      if (suffix === '/context' && req.method === 'GET') return json(res, 200, await inspectContext(project, chat, req));
       if (['/context/reset', '/context/restore'].includes(suffix) && req.method === 'POST') {
         const body = await readBody(req);
         if (Object.keys(body).length) throw fail(400, 'Expected an empty JSON object');
         chatContext[suffix.endsWith('/reset') ? 'reset' : 'restore'](project.id, chat.id);
-        return json(res, 200, inspectContext(project, chat));
+        return json(res, 200, await inspectContext(project, chat));
       }
       throw fail(404, 'Not found');
     }
@@ -257,10 +276,10 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
         registry.getProject(projectId);
         if (action === undefined && req.method === 'GET') { json(res, 200, chatContext.status(projectId)); return true; }
         if (!['settings', 'notes'].includes(action) || req.method !== 'POST') throw fail(404, 'Not found');
-        const body = await readBody(req), field = action === 'settings' ? 'crossChat' : 'text';
-        if (Object.keys(body).length !== 1 || !Object.hasOwn(body, field)) throw fail(400, `Expected only ${field}`);
-        if (action === 'settings' && typeof body.crossChat !== 'boolean') throw fail(400, 'crossChat must be a boolean');
-        if (action === 'notes' && (typeof body.text !== 'string' || body.text.length > 4000)) throw fail(400, 'text must be a string of at most 4000 characters');
+        const body = await readBody(req);
+        if (action === 'settings' && (!Object.keys(body).length || Object.keys(body).some((key) => !['crossChat', 'budget', 'models'].includes(key)))) throw fail(400, 'Expected a context settings patch');
+        if (action === 'notes' && (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'text'))) throw fail(400, 'Expected only text');
+        if (action === 'notes' && (typeof body.text !== 'string' || body.text.length > 16000)) throw fail(400, 'text must be a string of at most 16000 characters');
         json(res, 200, action === 'settings' ? chatContext.configure(projectId, body) : chatContext.setNotes(projectId, body.text)); return true;
       }
       if (dreamPath) {

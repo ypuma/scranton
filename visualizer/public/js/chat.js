@@ -5,7 +5,7 @@ import { lanesOf, isLive, TERMINAL_STATUSES } from './state.js';
 import { clip } from './control.js';
 
 // The control route limit; a longer text is refused before it is sent.
-export const CHAT_MAX = 4000;
+export const CHAT_MAX = 16000;
 export const RECIPIENT_RE = /^[a-z][a-z0-9-]{0,63}$/;
 // A queued message the orchestrator has not echoed by then is flagged, never relabelled.
 export const OUTBOX_STALE_MS = 20000;

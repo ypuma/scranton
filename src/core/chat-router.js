@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export class ChatRouter {
-  constructor({ hiveDir, runId, emit, maxMessages = 500, maxText = 4000 }) {
+  constructor({ hiveDir, runId, emit, maxMessages = 500, maxText = 16000 }) {
     Object.assign(this, { hiveDir, runId, emit, maxMessages, maxText });
     this.instances = new Map();
     this.counts = new Map();
@@ -104,7 +104,7 @@ export class ChatRouter {
       for (const name of fs.readdirSync(this.spool).filter((n) => /^[\w-]+\.json$/.test(n))) {
         const file = path.join(this.spool, name);
         try {
-          if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 16384) throw new Error('Invalid chat command');
+          if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 131072) throw new Error('Invalid chat command');
           const command = JSON.parse(fs.readFileSync(file, 'utf8'));
           if (!command || typeof command !== 'object' || Array.isArray(command)) throw new Error('Invalid chat command');
           if (command.runId !== this.runId) throw new Error('Stale chat command');

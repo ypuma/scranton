@@ -75,7 +75,7 @@ test('legacy unknown owner releases through protected single route and permits a
   for (const [headers, status] of [[{ 'X-Scranton-Client': '' }, 403], [{ Origin: 'https://foreign.test' }, 403], [{ 'Content-Type': 'text/plain' }, 415]]) {
     assert.equal((await req(srv, '/api/runs/release', { runId }, headers)).status, status);
   }
-  assert.equal((await req(srv, '/api/runs/release', ' '.repeat(65537))).status, 413);
+  assert.equal((await req(srv, '/api/runs/release', ' '.repeat(262145))).status, 413);
   assert.equal((await req(srv, '/api/runs/release', { runId: 'wrong' })).status, 409);
   assert.ok(leases.readRunLease(f.hive));
   assert.deepEqual(await req(srv, '/api/runs/release', { runId }), { status: 200, value: { ok: true, warnings: [] } });

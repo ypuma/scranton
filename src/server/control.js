@@ -14,6 +14,7 @@ import { killTree } from '../core/pi-command.js';
 import { validDecision } from '../core/file-control.js';
 import { withFsRetry, writeFileAtomicSync } from '../core/util.js';
 
+import { createModelWindows } from '../core/model-windows.js';
 import { listRuns, formatThreadContext } from '../core/thread.js';
 import { getAuthService } from '../core/auth.js';
 import { validateDockerModels } from '../core/sandbox.js';
@@ -34,13 +35,13 @@ export function json(res, status, value) {
 export async function readBody(req) {
   if (req.headers['x-scranton-client'] !== '1') throw error(403, 'Forbidden');
   if (!/^application\/json(?:\s*;.*)?$/i.test(req.headers['content-type'] ?? '')) throw error(415, 'Expected application/json');
-  if (Number(req.headers['content-length']) > 65536) throw error(413, 'Body too large');
+  if (Number(req.headers['content-length']) > 262144) throw error(413, 'Body too large');
   const text = await new Promise((resolve, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on('data', (chunk) => {
       bytes += chunk.length;
-      if (bytes > 65536) { chunks.length = 0; reject(error(413, 'Body too large')); }
+      if (bytes > 262144) { chunks.length = 0; reject(error(413, 'Body too large')); }
       else chunks.push(chunk);
     });
     req.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
@@ -54,7 +55,7 @@ export async function readBody(req) {
   } catch { throw error(400, 'Expected a JSON object'); }
 }
 
-export function createControl({ hive, workspace, runner = spawn, auth = getAuthService(), closeAuth = true, acquire = acquireRunLease, prepareThread = false, fixedWorkspace = false, promptsDir, gates, recoveryDocker, onStarting = () => {}, dreaming, threadContext }) {
+export function createControl({ hive, workspace, runner = spawn, auth = getAuthService(), closeAuth = true, acquire = acquireRunLease, prepareThread = false, fixedWorkspace = false, promptsDir, gates, recoveryDocker, onStarting = () => {}, dreaming, threadContext, modelWindows = prepareThread && threadContext ? createModelWindows() : undefined }) {
   workspace = path.resolve(workspace ?? 'workspace');
   let active = null;
   let lastExit = null;
@@ -154,7 +155,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     const demo = body.demo;
     if (demo !== undefined && (!object(demo) || !SCENARIOS.includes(demo.scenario) ||
       (demo.delayMs !== undefined && (!Number.isInteger(demo.delayMs) || demo.delayMs < 0 || demo.delayMs > 5000)))) throw error(400, 'Invalid demo');
-    if ((!demo || body.request !== undefined) && (typeof body.request !== 'string' || !body.request.trim() || body.request.length > 4000)) throw error(400, 'Invalid request');
+    if ((!demo || body.request !== undefined) && (typeof body.request !== 'string' || !body.request.trim() || body.request.length > 32768)) throw error(400, 'Invalid request');
     if (body.workspace !== undefined && (typeof body.workspace !== 'string' || !path.isAbsolute(body.workspace))) throw error(400, 'Workspace must be absolute');
     if (body.maxCycles !== undefined && (!Number.isInteger(body.maxCycles) || body.maxCycles < 1 || body.maxCycles > 10)) throw error(400, 'Invalid maxCycles');
     if (body.noPlan !== undefined && typeof body.noPlan !== 'boolean') throw error(400, 'Invalid noPlan');
@@ -192,7 +193,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     const mode = demo ? 'demo' : 'run';
     const args = [path.join(PACKAGE_ROOT, 'bin', 'scranton.js'), mode];
     if (demo) args.push('--scenario', demo.scenario, '--delay', String(demo.delayMs ?? 600));
-    else args.push('--', body.request);
+    else if (body.request.length <= 4000) args.push('--', body.request);
     // parseArgs accepts options after positionals, but not after the -- terminator.
     const options = ['--gates', workflow.gates.map((stage) => stage.join('+')).join(','), '--single-hive', '--hive', hive, '--workspace', ws, '--on-breaker', 'hive'];
     if (body.maxCycles !== undefined) options.push('--max-cycles', String(body.maxCycles));
@@ -212,10 +213,15 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
       if (!['bridge', 'none'].includes(body.sandboxNetwork)) throw error(400, 'Invalid sandboxNetwork');
       options.push('--sandbox-network', body.sandboxNetwork);
     }
+    let recipients;
     if (!demo) {
       const launchConfig = loadConfig({ cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_DATA: '', SCRANTON_SETTINGS_DIR: baseConfig.settingsDir }, flags: { workspace: ws, hive, gates: workflow.gates.map((s) => s.join('+')).join(','), ...(body.trustedHost || body.sandbox === 'host' ? { trustedHost: true } : body.sandbox ? { sandbox: body.sandbox } : {}) } });
       try { validateDockerModels(launchConfig, activeRoles(launchConfig, body.noPlan)); }
       catch (err) { throw error(400, err.message); }
+      if (prepareThread && threadContext) {
+        const [planner, developer] = await Promise.all(['michael', 'dwight'].map((id) => modelWindows.resolve(launchConfig.agents[id].modelSetting.value)));
+        recipients = { planner, developer };
+      }
     }
     let memory = '', effective = body.maxCycles ?? baseConfig.maxFailedCycles;
     dreamingWarning = null;
@@ -234,21 +240,38 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     }
     args.splice(2, 0, ...options);
     const info = { mode, request: body.request ?? (demo?.scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI'), workspace: ws, startedAt: new Date().toISOString(), runId: randomUUID(), exitCode: null };
+    if (active || closing) throw error(409, 'A run is already alive or the server is closing');
     let lease;
     try { lease = acquire(hive, info); }
     catch (err) { if (err.code === 'EEXIST') throw error(409, 'Hive is owned by another run; stop it or recover ownership first'); throw err; }
     let child;
+    const requestFile = path.join(hive, 'control', 'request.json');
+    const removeRequest = () => withFsRetry(() => fs.rmSync(requestFile, { force: true }));
     try {
       try { Promise.resolve(dreaming?.()?.cancelReflection?.()).catch(() => {}); } catch {}
       onStarting(info);
+      removeRequest();
+      if (!demo && body.request.length > 4000) {
+        try { writeFileAtomicSync(requestFile, JSON.stringify({ v: 1, request: body.request })); }
+        catch (err) {
+          try { withFsRetry(() => fs.rmSync(`${requestFile}.${process.pid}.tmp`, { force: true })); } catch {}
+          throw error(500, `Cannot write request file: ${err.message}`);
+        }
+        args.splice(2, 0, '--request-file', requestFile);
+      }
       if (prepareThread && !demo) {
         const file = path.join(hive, 'control', 'thread-context.json');
-        const pack = threadContext?.({ memory });
-        writeFileAtomicSync(file, JSON.stringify(pack ? { v: 2, text: pack.text, developer: pack.developer } : { v: 1, text: teamDreamingContext(formatThreadContext(listRuns(hive), { maxChars: 8000 }), memory) }));
+        const pack = threadContext?.({ memory, recipients });
+        writeFileAtomicSync(file, JSON.stringify(pack ? { v: 3, text: pack.text, developer: pack.developer } : { v: 1, text: teamDreamingContext(formatThreadContext(listRuns(hive), { maxChars: 8000 }), memory) }));
         args.splice(2, 0, '--thread-context', file);
       }
       child = runner(process.execPath, args, { cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_PROMPTS_DIR: baseConfig.promptsDir, SCRANTON_SETTINGS_DIR: baseConfig.settingsDir, SCRANTON_DATA: '', SCRANTON_RUN_ID: info.runId, SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
-    } catch (err) { releaseRunLease(hive, lease.token); throw err; }
+    } catch (err) {
+      // Cleanup must not replace the launch error.
+      try { removeRequest(); } catch {}
+      try { releaseRunLease(hive, lease.token); } catch {}
+      throw err;
+    }
     const run = { child, tail: '', info: { ...info, pid: child.pid } };
     active = run;
     let startupRefused = false;
@@ -269,6 +292,8 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
         clearTimeout(run.timer);
         clearInterval(run.stopPoll);
         clearInterval(run.heartbeat);
+        try { removeRequest(); }
+        catch (err) { run.tail = (run.tail + `Cannot clean request file: ${err.message}`).slice(-8192); }
         const file = path.join(hive, 'control', 'stop.json');
         try {
           if (run.info.runId && JSON.parse(withFsRetry(() => fs.readFileSync(file, 'utf8'))).runId === run.info.runId) {
@@ -388,7 +413,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
         if (pathname === '/api/chat') {
           if (!active || active.exited || body.runId !== active.info.runId) throw error(409, 'Run is not active');
           if (typeof body.to !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(body.to)) throw error(400, 'Invalid recipient');
-          if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 4000) throw error(400, 'Chat text must contain 1 to 4000 characters');
+          if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 16000) throw error(400, 'Chat text must contain 1 to 16000 characters');
           const instances = snapshot().instances;
           const instance = Object.hasOwn(instances, body.to) ? instances[body.to] : null;
           if (!instance || !CHAT_RECIPIENT_STATES.has(instance.status)) throw error(409, 'Recipient is unknown or terminal');

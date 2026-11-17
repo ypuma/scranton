@@ -527,7 +527,7 @@ test('the switch is two real buttons in the chat header; the Chat view sits befo
   assert.match(html, /<section class="chatview" id="chat-view" hidden /, 'hidden until the script shows it');
   assert.match(html, /<form class="steer" id="chat-view-form" hidden novalidate /);
   assert.match(html, /<textarea id="followup-text"[^>]*placeholder="Ask a question or describe a task\.\.\."/);
-  assert.match(html, /<textarea id="chat-view-input"[^>]*maxlength="4000"/);
+  assert.match(html, /<textarea id="chat-view-input"[^>]*maxlength="16000"/);
   assert.match(html, /<label class="steer-to" for="chat-view-to">/);
   assert.match(html, /<label class="sr-only" for="chat-view-input">/);
   assert.match(html, /id="chat-view-status" role="status" aria-live="polite"/);
@@ -807,7 +807,7 @@ async function script(t, name) {
   note('empty');
   h.el(name, 'to').value = 'dwight-m1';
   await h.el(name, 'to').fire('change');
-  h.el(name, 'text').value = 'x'.repeat(4001);
+  h.el(name, 'text').value = 'x'.repeat(16001);
   await h.el(name, 'text').fire('input');
   await h.el(name, 'form').fire('submit');
   note('too long');
@@ -852,12 +852,12 @@ test('the Messages composer and the Chat composer are one implementation: the sa
   assert.deepEqual([by.start.off, by.start.block], ['false', 'Ctrl+Enter sends']);
   assert.deepEqual(by.empty.status, ['Pick the agent instance that should get the message.', 'error']);
   assert.deepEqual(by.empty.invalid, ['true', null]);
-  assert.deepEqual(by['too long'].status, ['The message is 4001 characters; the limit is 4000.', 'error']);
+  assert.deepEqual(by['too long'].status, ['The message is 16001 characters; the limit is 16000.', 'error']);
   assert.deepEqual(by['too long'].invalid, [null, 'true']);
-  assert.equal(by['too long'].count, '4001 / 4000');
+  assert.equal(by['too long'].count, '16001 / 16000');
   assert.deepEqual(by.typed.invalid, [null, null], 'typing clears the mark');
   assert.deepEqual([by.sending.status, by.sending.send, by.sending.to], [['Sending to dwight-m1...', 'busy'], [true, 'Sending...'], true]);
-  assert.deepEqual([by.queued.draft, by.queued.count, by.queued.send], ['', '0 / 4000', [false, 'Send']]);
+  assert.deepEqual([by.queued.draft, by.queued.count, by.queued.send], ['', '0 / 16000', [false, 'Send']]);
   assert.match(by.queued.status[0], /^Queued for dwight-m1\./);
   assert.deepEqual(by.delivered.status, ['Message to dwight-m1 delivered', '']);
   assert.deepEqual([by.refused.status, by.refused.draft], [['dwight-m1 is not running any more', 'error'], 'Again']);

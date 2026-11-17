@@ -11,8 +11,9 @@ export const CONTROL_HEADERS = Object.freeze({ 'Content-Type': 'application/json
 export const DECISIONS = ['feedback', 'retry', 'skip', 'abort'];
 export const DECISION_LABEL = { feedback: 'Feedback for Dwight', retry: 'Retry', skip: 'Skip milestone', abort: 'Abort run' };
 export const CONFIRM_DECISIONS = new Set(['skip', 'abort']);
-export const REQUEST_MAX = 4000;
-export const FEEDBACK_MAX = 8000;
+// a Team request of more than 4000 chars travels in a file, not in argv (context-budget-contract section 7)
+export const REQUEST_MAX = 32768;
+export const FEEDBACK_MAX = 16000;
 export const BASE_TITLE = 'Scranton - Agent Orchestration';
 export const HUMAN_TITLE = '● Human needed - Scranton';
 // An answer the orchestrator has not taken up by then was probably rejected (see hive/human/archive).

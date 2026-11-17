@@ -3,7 +3,8 @@
 import { displayName, roleTitle, roleOf } from './state.js';
 import { formatTokens, formatCost, formatDuration } from './format.js';
 import { DECISION_LABEL } from './control.js';
-import { cleanText, cleanLine, REPLY_KINDS } from './chat-entries.js';
+import { CHAT_MAX } from './chat.js';
+import { cleanText, cleanLine, REPLY_KINDS, REQUEST_TEXT_MAX } from './chat-entries.js';
 import { parsePlanText } from './plan.js';
 
 // What the adapter reads. A page that buffers a live stream keeps these and drops the rest (agent_status is half
@@ -94,7 +95,7 @@ function detail(runId, events, { state, listed, outbox }) {
       case 'run_started':
         if (request) break;
         t.startedAt = ts(e);
-        request = { id: `req-${runId}`, runId, kind: 'request', ts: ts(e), who: YOU, ...cleanText(e.request) };
+        request = { id: `req-${runId}`, runId, kind: 'request', ts: ts(e), who: YOU, ...cleanText(e.request, REQUEST_TEXT_MAX) };
         out.push(request);
         break;
 
@@ -205,7 +206,7 @@ function detail(runId, events, { state, listed, outbox }) {
         const entry = known?.entry ?? {};
         Object.assign(entry, {
           id: `chat-${runId}-${id}`, runId, kind: human ? 'human' : 'agent', ts: ts(e), who: sender(e.from, names),
-          context: route(e.to, delivery, reason), ...cleanText(e.text, 4000), tone: routeTone(delivery),
+          context: route(e.to, delivery, reason), ...cleanText(e.text, CHAT_MAX), tone: routeTone(delivery),
           ...(human ? {} : { final: false }),
         });
         if (!known) out.push(entry);
@@ -277,13 +278,13 @@ function detail(runId, events, { state, listed, outbox }) {
   }
 
   // events that start after the request (a trimmed buffer): the run list still knows what was asked
-  if (!request && listed?.goal) out.unshift({ id: `req-${runId}`, runId, kind: 'request', ts: listed.startedAt ?? '', who: YOU, ...cleanText(listed.goal) });
+  if (!request && listed?.goal) out.unshift({ id: `req-${runId}`, runId, kind: 'request', ts: listed.startedAt ?? '', who: YOU, ...cleanText(listed.goal, REQUEST_TEXT_MAX) });
   // sent from this page, not echoed by the stream yet
   for (const o of outbox) {
     if (o.runId !== runId || chats.has(o.id)) continue;
     out.push({
       id: `chat-${runId}-${o.id}`, runId, kind: 'human', ts: typeof o.ts === 'string' ? o.ts : '', who: YOU,
-      context: route(o.to, o.delivery, o.reason, o.stale === true), ...cleanText(o.text, 4000), tone: routeTone(o.delivery),
+      context: route(o.to, o.delivery, o.reason, o.stale === true), ...cleanText(o.text, CHAT_MAX), tone: routeTone(o.delivery),
     });
   }
   return out;
@@ -291,7 +292,7 @@ function detail(runId, events, { state, listed, outbox }) {
 
 // One run of the run list as it reads before its events are loaded: what was asked and what came back.
 function digest(run) {
-  const out = [{ id: `req-${run.runId}`, runId: run.runId, kind: 'request', ts: run.startedAt ?? '', who: YOU, ...cleanText(run.goal) }];
+  const out = [{ id: `req-${run.runId}`, runId: run.runId, kind: 'request', ts: run.startedAt ?? '', who: YOU, ...cleanText(run.goal, REQUEST_TEXT_MAX) }];
   const kind = REPLY_KINDS.includes(run.reply?.kind) ? run.reply.kind : 'summary';
   const body = cleanText(run.reply ? run.reply.text : run.summary || (OUTCOME[run.status] ? `Run ${run.status}` : ''));
   if (!body.text.trim()) return out;

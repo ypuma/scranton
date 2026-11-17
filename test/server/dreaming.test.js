@@ -58,7 +58,7 @@ test('Dreaming project HTTP defaults, guarded bodies, preview, settings, rollbac
   const otherRes = await fetch(f.srv.url + `/api/projects/${other.id}/dreaming`, { headers: { 'X-Scranton-Client': '1' } }); assert.equal((await otherRes.json()).enabled, false);
   assert.equal((await f.req('/rollback', {})).value.enabled, false); assert.equal((await f.req('/sweep', {})).status, 200);
   const missing = await fetch(f.srv.url + '/api/projects/missing/dreaming', { headers: { 'X-Scranton-Client': '1' } }); assert.equal(missing.status, 404);
-  const oversized = await fetch(f.srv.url + f.route + '/settings', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: ' '.repeat(65537) }); assert.equal(oversized.status, 413);
+  const oversized = await fetch(f.srv.url + f.route + '/settings', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: ' '.repeat(262145) }); assert.equal(oversized.status, 413);
 });
 
 test('project idle guards include suspended Pipeline and corrupt Team owner metadata', async (t) => {

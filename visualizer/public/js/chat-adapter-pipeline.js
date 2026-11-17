@@ -2,7 +2,7 @@
 // and the run documents of the pipeline routes -> the engine-neutral entries of the Chat view (chat-entries.js).
 // Pure: no DOM, no fetch. Events are read in seq order; nothing depends on which node emitted what, or when.
 import { formatTokens, formatCost, formatDuration } from './format.js';
-import { cleanText, cleanLine } from './chat-entries.js';
+import { cleanText, cleanLine, REQUEST_TEXT_MAX } from './chat-entries.js';
 import { RUN_STATUS, TERMINAL, eventText } from './pipeline-model.js';
 
 const TYPES = new Set([
@@ -86,7 +86,7 @@ function finish(reply, status, s, citations) {
 }
 
 const request = (runId, task, at) => {
-  const body = cleanText(task);
+  const body = cleanText(task, REQUEST_TEXT_MAX);
   return body.text.trim() ? [{ id: `${runId}:req`, runId, kind: 'request', ts: at ?? '', who: YOU, ...body }] : [];
 };
 

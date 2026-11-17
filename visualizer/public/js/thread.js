@@ -5,7 +5,7 @@ import { CLIENT_HEADERS, REQUEST_MAX } from './control.js';
 import {
   findProject, findChat, parseRuns, runChoices, runEventsUrl, replayRun, replayError, detailError, composerGate, CHAT_STATUS,
 } from './scope.js';
-import { pipelineComposerGate } from './pipeline-model.js';
+import { pipelineComposerGate, byteLength, taskBytesError, TASK_MAX_BYTES } from './pipeline-model.js';
 import { shortcut } from './platform.js';
 
 const $ = (id) => document.getElementById(id);
@@ -166,10 +166,10 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
       return;
     }
     // a pipeline chat has its own run selector (Details) and starts its runs through the pipeline routes
-    const pipelineChat = chat.engine === 'pipeline';
+    const isPipeline = chat.engine === 'pipeline';
     for (const x of [e.title, e.state]) x.hidden = false;
     // the Chat view shows every run of the chat in one conversation, so it has no run to pick
-    e.runs.hidden = pipelineChat || view() === 'chat';
+    e.runs.hidden = isPipeline || view() === 'chat';
     // a single-mode server refuses renames (409 single_mode)
     e.rename.hidden = doc.mode === 'single';
     e.sep.hidden = !project;
@@ -190,7 +190,7 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     }
 
     const snap = control.snapshot();
-    const gate = pipelineChat
+    const gate = isPipeline
       ? pipelineComposerGate({ enabled: Boolean(snap?.control?.enabled), mode: snap?.mode, view: view(), ...pipeline?.gate(), submitting })
       : composerGate({
         scoped: true, enabled: Boolean(snap?.control?.enabled), mode: snap?.mode, replaying: Boolean(replay),
@@ -198,7 +198,7 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
         runs: Math.max(chat.runs, runs.length), submitting, view: view(),
       });
     // the Chat view does not show the pipeline view's message line: what it says there is said under the head
-    if (pipelineChat) {
+    if (isPipeline) {
       const note = view() === 'chat' ? pipeline?.note() : null;
       say(e.status, note?.text ?? '', note?.tone ?? '');
     }
@@ -211,7 +211,9 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     e.options.disabled = gate.disabled;
     e.send.textContent = submitting ? 'Starting...' : gate.label;
     e.fix.hidden = !problem || (gate.disabled && !submitting);
-    e.hint.textContent = gate.reason || `${pipelineChat ? PIPELINE_HINT : HINT} ${shortcut('Enter')} starts.`;
+    e.hint.textContent = gate.reason || `${isPipeline ? PIPELINE_HINT : HINT} ${shortcut('Enter')} starts.`;
+    // the unit follows the chat on screen
+    updateCount();
   }
 
   // ------------------------------------------------------------ replay
@@ -266,8 +268,10 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     e.fix.hidden = !problem;
   }
 
+  // a pipeline chat's task cap is in bytes, a Team request's in chars
   function updateCount() {
-    e.count.textContent = `${e.text.value.length} / ${REQUEST_MAX}`;
+    const text = pipelineChat() ? `${byteLength(e.text.value)} / ${TASK_MAX_BYTES} bytes` : `${e.text.value.length} / ${REQUEST_MAX}`;
+    if (e.count.textContent !== text) e.count.textContent = text;
   }
 
   e.text.addEventListener('input', () => {
@@ -301,6 +305,13 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     const goal = e.text.value.trim();
     if (!goal) {
       say(e.fStatus, 'Describe what the agents should do next.', 'error');
+      e.text.setAttribute('aria-invalid', 'true');
+      e.text.focus();
+      return;
+    }
+    const tooLong = pipelineChat() ? taskBytesError(goal) : '';
+    if (tooLong) {
+      say(e.fStatus, tooLong, 'error');
       e.text.setAttribute('aria-invalid', 'true');
       e.text.focus();
       return;

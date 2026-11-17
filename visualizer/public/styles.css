@@ -189,7 +189,7 @@ h1, h2, h3 { margin: 0; }
 }
 .field > label .hint, .hitl-feedback > label .hint, .provider-manual-label .hint, .login-code > label .hint { margin-left: var(--s2); }
 .field-count { justify-self: end; font-size: var(--fs-xs); }
-textarea, input[type="text"], input[type="password"], select {
+textarea, input[type="text"], input[type="password"], input[type="number"], select {
   width: 100%;
   min-width: 0;
   padding: var(--s2) var(--s3);
@@ -204,7 +204,7 @@ textarea { resize: vertical; min-height: 4.5rem; }
 select { height: 2rem; padding: 0 var(--s2); }
 option { background: var(--panel); color: var(--text); }
 optgroup { background: var(--panel); color: var(--text-2); font-style: normal; }
-textarea:focus-visible, input[type="text"]:focus-visible, input[type="password"]:focus-visible, select:focus-visible {
+textarea:focus-visible, input[type="text"]:focus-visible, input[type="password"]:focus-visible, input[type="number"]:focus-visible, select:focus-visible {
   outline: 1px solid var(--text); outline-offset: 0; border-color: var(--text);
 }
 textarea::placeholder, input::placeholder { color: var(--text-3); }
@@ -1705,6 +1705,15 @@ dialog[open]::backdrop { opacity: 1; }
 .dreams-quote-meta { font-size: var(--fs-xs); color: var(--text-3); overflow-wrap: anywhere; }
 
 /* the Context drawer: the summary of the chat document, one block per part of the pack, and the project's notes */
+.context-usage { margin: 0; font-size: var(--fs-s); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+/* used against budget in twenty cells: grayscale only, the filled part is the bright one */
+.context-meter { display: grid; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: 0.125rem; max-width: 24rem; }
+.context-meter[hidden] { display: none; }
+.context-meter i { display: block; height: 0.375rem; border-radius: 1px; background: var(--line-strong); }
+.context-meter i[data-fill="full"] { background: var(--text-2); }
+#context-window-note, #context-capped { margin: 0; font-size: var(--fs-xs); }
+#context-developer-usage { margin: 0; font-size: var(--fs-xs); }
+#context-budget .check { align-items: baseline; }
 .context-figures { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s1) var(--s4); margin: 0; font-size: var(--fs-s); }
 .context-figures dt { color: var(--text-3); }
 .context-figures dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
@@ -2625,7 +2634,7 @@ body[data-view="chat"][data-run="none"] .followup:not([data-off="true"]) { margi
   /* state changes cross-fade where they happen */
   .agent, .card, .pv-step, .segments i, .pill, .conn, .fig, .chat-link, .project-toggle, .rail-board, .live-line { transition: background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
   .card:hover { border-color: var(--line-strong); }
-  textarea, input[type="text"], input[type="password"], select, .composer { transition: border-color 120ms var(--ease-out), box-shadow 120ms var(--ease-out); }
+  textarea, input[type="text"], input[type="password"], input[type="number"], select, .composer { transition: border-color 120ms var(--ease-out), box-shadow 120ms var(--ease-out); }
   /* a section folds along its own height */
   .fold-toggle svg { transition: transform var(--dur) var(--ease-out); }
   .fold-body { transition: grid-template-rows var(--dur-slow) var(--ease-out); }

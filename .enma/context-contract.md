@@ -1,5 +1,8 @@
 # Context system contract (v1, 2026-11-16)
 
+Budgets, limits, documents and transports in this contract are superseded by
+`.enma/context-budget-contract.md` wherever the two differ; all other rules remain in force.
+
 User goal: "Add a context system for multiple turns and chats, so that it is not always a one shot."
 A chat becomes a real multi-turn conversation, and chats of the same project share bounded context.
 

@@ -183,10 +183,10 @@ for (const mode of ['legacy', 'context']) test(`A3 ${mode} Pipeline history reje
 });
 
 test('A3 Events documents the context-system v2 file and legacy CLI acceptance', () => {
-  const paragraph = fs.readFileSync('docs/EVENTS.md', 'utf8').split(/\r?\n/).find((line) => line.startsWith('Vor einem servergestarteten Registry-Run'));
-  assert.match(paragraph, /\{ "v": 2, "text": string <= 24000 chars, "developer": string <= 4000 chars \}/);
-  assert.match(paragraph, /262144 Bytes/);
-  assert.match(paragraph, /Kontextsystem/);
-  assert.match(paragraph, /\{ "v": 1, "text" <= 8000 \}/);
-  assert.match(paragraph, /\[CONTROL\.md\]\(CONTROL\.md\), Abschnitt 12/);
+  const paragraph = fs.readFileSync('docs/EVENTS.md', 'utf8').split(/\r?\n/).find((line) => line.startsWith('Vor einem vom Server gestarteten Registry-Team-Run'));
+  assert.match(paragraph, /\{ "v": 3, "text": string <= 800000 chars, "developer": string <= 8000 chars \}/);
+  assert.match(paragraph, /8388608 bytes/); assert.match(paragraph, /262144 bytes/);
+  assert.match(paragraph, /context system/);
+  assert.match(paragraph, /\{ "v": 1, "text": string <= 8000 chars \}/);
+  assert.match(paragraph, /\[CONTROL\.md\]\(CONTROL\.md\), section 12/);
 });

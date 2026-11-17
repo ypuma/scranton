@@ -48,7 +48,7 @@ test('proposal routes retain Host/Origin/client/content-type/size/strict-body gu
   for (const [headers, status] of [[{ 'X-Scranton-Client': '' }, 403], [{ Origin: 'https://foreign.test' }, 403], [{ 'Content-Type': 'text/plain' }, 415]]) assert.equal((await f.req('/propose', { model: 'fixture/scripted' }, headers)).status, status);
   for (const [suffix, body] of [['/propose', { model: {} }], ['/propose', { model: 'fixture/scripted', tools: [] }], ['/proposal/apply', { proposalId: 'x', path: 'private' }], ['/proposal/reject', {}], ['/cancel', { force: true }], ['/settings', { reflectionTimeoutSeconds: 61 }], ['/settings', { reflectionEnabled: 'true' }]]) assert.equal((await f.req(suffix, body)).status, 400, suffix);
   const hostStatus = await new Promise((resolve, reject) => { const req = http.request(f.srv.url + f.route + '/proposal', { headers: { Host: 'foreign.test', 'X-Scranton-Client': '1' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); req.on('error', reject); req.end(); }); assert.equal(hostStatus, 403);
-  const r = await fetch(f.srv.url + f.route + '/propose', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: ' '.repeat(65537) }); assert.equal(r.status, 413);
+  const r = await fetch(f.srv.url + f.route + '/propose', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: ' '.repeat(262145) }); assert.equal(r.status, 413);
   f.write(path.join(f.chat.hiveDir, 'control/owner.json'), 'null');
   assert.equal((await f.req('/propose', { model: 'fixture/scripted' })).status, 409);
 });

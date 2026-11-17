@@ -54,7 +54,7 @@ test('every element id the scripts look up exists exactly once in index.html', (
 });
 
 test('the message composer and run form keep their bounds and labels', () => {
-  assert.match(html, /<textarea id="chat-text"[^>]*maxlength="4000"/);
+  assert.match(html, /<textarea id="chat-text"[^>]*maxlength="16000"/);
   assert.match(html, /<label class="chat-to-label" for="chat-to">/);
   assert.match(html, /<label class="sr-only" for="chat-text">/);
   assert.match(html, /id="chat-status" role="status" aria-live="polite"/);

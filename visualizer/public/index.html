@@ -205,9 +205,9 @@
     <div class="hitl-actions" id="hitl-actions" role="group" aria-label="Your decision"></div>
     <form class="hitl-feedback" id="hitl-feedback" hidden novalidate>
       <label for="hitl-text">Feedback for Dwight <span class="hint">sent to his inbox, then the milestone continues</span></label>
-      <textarea id="hitl-text" rows="4" maxlength="8000" aria-describedby="hitl-count"></textarea>
+      <textarea id="hitl-text" rows="4" maxlength="16000" aria-describedby="hitl-count"></textarea>
       <div class="form-foot">
-        <span class="hint mono" id="hitl-count">0 / 8000</span>
+        <span class="hint mono" id="hitl-count">0 / 16000</span>
         <button type="button" class="btn" id="hitl-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary" id="hitl-send">Send feedback</button>
       </div>
@@ -252,9 +252,9 @@
   <form class="followup" id="followup" hidden novalidate aria-labelledby="followup-label">
     <label class="field-label" id="followup-label" for="followup-text">Follow up</label>
     <div class="composer">
-      <textarea id="followup-text" rows="2" maxlength="4000" aria-describedby="followup-hint followup-count" placeholder="Ask a question or describe a task..."></textarea>
+      <textarea id="followup-text" rows="2" maxlength="32768" aria-describedby="followup-hint followup-count" placeholder="Ask a question or describe a task..."></textarea>
       <div class="followup-actions">
-        <span class="hint mono" id="followup-count">0 / 4000</span>
+        <span class="hint mono" id="followup-count">0 / 32768</span>
         <button type="button" class="btn btn-small" id="followup-options" aria-haspopup="dialog">Options</button>
         <button type="submit" class="btn btn-primary btn-small" id="followup-send">Follow up</button>
       </div>
@@ -272,11 +272,11 @@
     <span class="sr-only" id="chat-view-form-label">Message a running agent</span>
     <div class="composer">
       <label class="sr-only" for="chat-view-input">Message</label>
-      <textarea id="chat-view-input" rows="2" maxlength="4000" aria-describedby="chat-view-count chat-view-block" placeholder="Message a running agent..."></textarea>
+      <textarea id="chat-view-input" rows="2" maxlength="16000" aria-describedby="chat-view-count chat-view-block" placeholder="Message a running agent..."></textarea>
       <div class="steer-actions">
         <label class="steer-to" for="chat-view-to">To</label>
         <select id="chat-view-to" class="mono" aria-describedby="chat-view-block"></select>
-        <span class="hint mono" id="chat-view-count">0 / 4000</span>
+        <span class="hint mono" id="chat-view-count">0 / 16000</span>
         <button type="submit" class="btn btn-primary btn-small" id="chat-view-send">Send</button>
       </div>
     </div>
@@ -379,10 +379,10 @@
           <div class="chat-to-row">
             <label class="chat-to-label" for="chat-to">To</label>
             <select id="chat-to" class="mono" aria-describedby="chat-block"></select>
-            <span class="hint mono" id="chat-count">0 / 4000</span>
+            <span class="hint mono" id="chat-count">0 / 16000</span>
           </div>
           <label class="sr-only" for="chat-text">Message</label>
-          <textarea id="chat-text" rows="1" maxlength="4000" aria-describedby="chat-count chat-block" placeholder="Message the selected instance"></textarea>
+          <textarea id="chat-text" rows="1" maxlength="16000" aria-describedby="chat-count chat-block" placeholder="Message the selected instance"></textarea>
           <div class="form-foot">
             <span class="hint" id="chat-block"></span>
             <button type="submit" class="btn btn-primary btn-small" id="chat-send">Send</button>
@@ -597,8 +597,8 @@
         <p class="form-error team-only" id="config-error" role="alert" hidden></p>
         <div class="field team-only">
           <label for="f-request">Request <span class="hint" id="f-request-opt" hidden>optional for a demo</span></label>
-          <textarea id="f-request" name="request" rows="5" maxlength="4000" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
-          <span class="hint mono field-count" id="f-request-count">0 / 4000</span>
+          <textarea id="f-request" name="request" rows="5" maxlength="32768" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
+          <span class="hint mono field-count" id="f-request-count">0 / 32768</span>
         </div>
         <details class="run-options team-only" id="run-options">
           <summary><span class="run-options-title">Options</span> <span class="hint" id="run-options-summary"></span></summary>
@@ -1308,9 +1308,37 @@
               <span class="badge" id="context-degraded" data-tone="loud" hidden>Degraded</span>
               <span class="hint" id="context-reset-at"></span>
             </div>
+            <p class="context-usage" id="context-usage"></p>
+            <div class="context-meter" id="context-meter" role="meter" aria-labelledby="context-usage" aria-valuemin="0"></div>
+            <p class="hint" id="context-window-note" hidden></p>
+            <p class="hint" id="context-capped" hidden></p>
             <dl class="context-figures" id="context-figures"></dl>
             <p class="dreams-state-note" id="context-flags" hidden></p>
           </section>
+          <form class="keyform" id="context-budget" novalidate aria-labelledby="context-budget-title">
+            <h3 class="keyform-title" id="context-budget-title">Budget <span class="hint">for every chat of this project, in estimated tokens</span></h3>
+            <div class="field-row">
+              <div class="field">
+                <label for="context-budget-mode">Measured as</label>
+                <select id="context-budget-mode">
+                  <option value="percent">Share of the context window (%)</option>
+                  <option value="tokens">Fixed number of tokens</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="context-budget-value">Value <span class="hint" id="context-budget-range">percent, 1-50</span></label>
+                <input id="context-budget-value" class="mono narrow" type="number" inputmode="numeric" min="1" max="50" step="1" autocomplete="off" aria-describedby="context-budget-range context-budget-preview">
+              </div>
+            </div>
+            <label class="check" id="context-budget-only-row" hidden><input type="checkbox" id="context-budget-only"><span><span id="context-budget-only-label"></span><span class="hint">Other models keep the project rule.</span></span></label>
+            <span class="hint" id="context-budget-preview"></span>
+            <p class="form-error" id="context-budget-error" role="alert" hidden></p>
+            <div class="keyform-actions">
+              <span class="hint form-status" id="context-budget-status" role="status" aria-live="polite"></span>
+              <button type="button" class="btn btn-small" id="context-budget-reset">Reset to default</button>
+              <button type="submit" class="btn btn-primary btn-small" id="context-budget-save">Save budget</button>
+            </div>
+          </form>
           <section class="dreams-section" aria-labelledby="context-sections-title">
             <h3 class="keyform-title" id="context-sections-title">Next turn receives <span class="hint">in this order</span></h3>
             <p class="hint" id="context-sections-empty" hidden></p>
@@ -1318,6 +1346,7 @@
           </section>
           <section class="dreams-section" id="context-developer-section" aria-labelledby="context-developer-title" hidden>
             <h3 class="keyform-title" id="context-developer-title">Developer brief <span class="hint">sent to Dwight with each task</span></h3>
+            <p class="hint" id="context-developer-usage"></p>
             <p class="hint" id="context-developer-empty" hidden>Empty: the developer gets no conversation context with its next task.</p>
             <div class="context-blocks" id="context-developer"></div>
           </section>
@@ -1344,9 +1373,9 @@
             <span class="hint form-status" id="context-cross-status" role="status" aria-live="polite"></span>
             <div class="field">
               <label for="context-notes">Project notes <span class="hint">standing preferences for every chat of this project</span></label>
-              <textarea id="context-notes" rows="6" maxlength="4000" aria-describedby="context-notes-hint context-notes-count"></textarea>
-              <span class="hint field-count" id="context-notes-count">0 / 4,000</span>
-              <span class="hint" id="context-notes-hint">The Team planner gets them in full, below the request it comes with; other roles and Pipeline chats get a shortened copy. Empty clears them.</span>
+              <textarea id="context-notes" rows="6" maxlength="16000" aria-describedby="context-notes-hint context-notes-count"></textarea>
+              <span class="hint field-count" id="context-notes-count">0 / 16,000 · ≈0 tokens</span>
+              <span class="hint" id="context-notes-hint">The Team planner gets them in full while they fit in half of its budget, below the request it comes with; other roles and Pipeline chats get a shortened copy. Empty clears them.</span>
             </div>
             <p class="form-error" id="context-notes-error" role="alert" hidden></p>
             <div class="keyform-actions">

@@ -5,6 +5,7 @@ import { pipelineUsage, pipelineSteps } from './pipeline-activity.js';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { PROVIDER_ENV_NAMES } from './providers.js';
+import { createModelWindows } from './model-windows.js';
 import { getAuthService } from './auth.js';
 import { validateId } from './projects.js';
 import { writeFileAtomicSync, withFsRetry } from './util.js';
@@ -43,7 +44,7 @@ const readJson = (file) => JSON.parse(withFsRetry(() => fs.readFileSync(file, 'u
 const writeJson = (file, value) => writeFileAtomicSync(file, JSON.stringify(value, null, 2) + '\n');
 const optional = (file) => { try { return readJson(file); } catch (e) { if (e.code === 'ENOENT') return null; throw fail(409, 'Unreadable Pipeline metadata'); } };
 
-export function createPipelineSupervisor({ dataDir, env = process.env, auth = getAuthService(), checkCapacity = () => {}, onStarting = () => {}, dreaming, context } = {}) {
+export function createPipelineSupervisor({ dataDir, env = process.env, auth = getAuthService(), checkCapacity = () => {}, onStarting = () => {}, dreaming, context, modelWindows = createModelWindows() } = {}) {
   const children = new Map(), starting = new Set(), diagnostics = new Map(), secrets = new Set(), normalizing = new Map();
   let closing = false, sandboxProbe = null, buildEntry = null, buildStarting = false;
   const sandboxFlights = new Map();
@@ -303,6 +304,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
           if (cap < ceiling) cfg.operator.limits.max_step_attempts = cap;
         } catch { dreamingWarning = 'Optional Dreaming unavailable; using configured retry ceiling without project memory'; }
       }
+      const planner = body.demo ? null : await modelWindows.resolve(body.models.planner);
       if (closing) throw fail(409, 'Server is closing');
       checkCapacity();
       const runId = randomBytes(6).toString('hex'), runRoot = path.join(key, 'runs'), runDir = path.join(runRoot, runId);
@@ -316,7 +318,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); if (cfg.settings.conversation) args.push('--conversation'); }
       if (!body.demo) { const taskFile = request + '.task.txt'; writeFileAtomicSync(taskFile, body.task); args.push('--source', project.workspace, '--task-file', taskFile, '--config', request); if (cfg.trustHost) args.push('--trust-host'); }
       if (!body.demo) {
-        const history = context ? context.forPipeline(chat.projectId, chat.id, { redact: sandboxText, projectMemory })
+        const history = context ? context.forPipeline(chat.projectId, chat.id, { redact: sandboxText, projectMemory, recipients: { planner } })
           : buildPipelineHistory({ dataDir, projectId: chat.projectId, chatId: chat.id, redact: sandboxText, projectMemory });
         if (history) {
           const historyFile = path.join(key, 'requests', `${runId}.history.json`);

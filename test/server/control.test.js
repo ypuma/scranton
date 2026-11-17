@@ -50,7 +50,7 @@ test('control request hardening', async (t) => {
       [{ Host: 'foreign.test' }, 403],
       [{ 'Content-Type': 'text/plain' }, 415]
     ]) assert.equal((await request(srv, route, {}, headers)).status, status, `${route} ${JSON.stringify(headers)}`);
-    assert.equal((await request(srv, route, ' '.repeat(65537))).status, 413);
+    assert.equal((await request(srv, route, ' '.repeat(262145))).status, 413);
     assert.equal((await request(srv, route, '{bad')).status, 400);
     assert.equal((await request(srv, route, {}, { Origin: srv.url })).headers['access-control-allow-origin'], undefined);
   }
@@ -58,7 +58,7 @@ test('control request hardening', async (t) => {
 
 test('run and HITL validation, no pending stop/answer conflicts', async (t) => {
   const { srv } = await setup(t);
-  for (const body of [{}, { request: '' }, { request: 'x'.repeat(4001) }, { request: 'x', workspace: 'relative' }, { demo: { scenario: 'no' } }, { demo: { scenario: 'happy', delayMs: 5001 } }, { request: 'x', maxCycles: 11 }, { request: 'x', noPlan: 'yes' }]) {
+  for (const body of [{}, { request: '' }, { request: 'x'.repeat(32769) }, { request: 'x', workspace: 'relative' }, { demo: { scenario: 'no' } }, { demo: { scenario: 'happy', delayMs: 5001 } }, { request: 'x', maxCycles: 11 }, { request: 'x', noPlan: 'yes' }]) {
     assert.equal((await request(srv, '/api/runs', body)).status, 400);
   }
   assert.equal((await request(srv, '/api/hitl', { decision: 'skip' })).status, 409);
@@ -73,7 +73,7 @@ test('real demo breaker -> pendingHuman -> feedback -> success', { timeout: 6000
   const paused = await until(control, (c) => c.pendingHuman);
   assert.equal(paused.run.runId, paused.pendingHuman.runId);
   assert.equal(paused.pendingHuman.milestoneId, 'm2');
-  for (const body of [{ decision: 'bad' }, { decision: 'feedback' }, { decision: 'feedback', feedback: ' ' }, { decision: 'feedback', feedback: 'x'.repeat(8001) }]) assert.equal((await request(srv, '/api/hitl', body)).status, 400);
+  for (const body of [{ decision: 'bad' }, { decision: 'feedback' }, { decision: 'feedback', feedback: ' ' }, { decision: 'feedback', feedback: 'x'.repeat(16001) }]) assert.equal((await request(srv, '/api/hitl', body)).status, 400);
   assert.equal((await request(srv, '/api/hitl', { decision: 'feedback', feedback: 'Use current directory' })).status, 202);
   const done = await until(control, (c) => c.lastExit);
   assert.equal(done.lastExit.exitCode, 0, done.lastExit.outputTail);
@@ -132,8 +132,8 @@ test('chunked oversized body receives 413 rather than a disconnected socket', as
   const status = await new Promise((resolve, reject) => {
     const req = http.request(`${srv.url}/api/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Scranton-Client': '1', 'Transfer-Encoding': 'chunked' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
     req.on('error', reject);
-    req.write('x'.repeat(40000));
-    req.end('x'.repeat(40000));
+    req.write('x'.repeat(150000));
+    req.end('x'.repeat(150000));
   });
   assert.equal(status, 413);
 });
@@ -218,7 +218,7 @@ test('chat uses authenticated atomic run-scoped queued commands, rejecting stale
   assert.equal((await request(srv, '/api/chat', body, { 'X-Scranton-Client': '' })).status, 403);
   assert.equal((await request(srv, '/api/chat', body, { Host: 'evil.test' })).status, 403);
   assert.equal((await request(srv, '/api/chat', body, { Origin: 'https://evil.test' })).status, 403);
-  for (const invalid of [{ runId: 'old' }, { to: 'missing' }, { to: 'constructor' }, { to: 'angela-m1' }, { to: '../escape' }, { text: '' }, { text: 'x'.repeat(4001) }]) {
+  for (const invalid of [{ runId: 'old' }, { to: 'missing' }, { to: 'constructor' }, { to: 'angela-m1' }, { to: '../escape' }, { text: '' }, { text: 'x'.repeat(16001) }]) {
     assert.ok([400, 409].includes((await request(srv, '/api/chat', { ...body, ...invalid })).status));
   }
   const queued = await request(srv, '/api/chat', body);

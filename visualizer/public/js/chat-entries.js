@@ -13,6 +13,8 @@ export const REPLY_KINDS = ['answer', 'report', 'summary', 'result'];
 export const REPLY_LABEL = { answer: 'Answer', report: 'Report', summary: 'Summary', result: 'Result' };
 // the cap of agent_message.text and run_reply.text
 export const TEXT_MAX = 16000;
+// the user's own request is shown in full: a Team request is at most 32768 chars, a Pipeline task 32768 bytes
+export const REQUEST_TEXT_MAX = 32768;
 // a message longer than about this many lines of the reading column is collapsed
 export const LONG_LINES = 12;
 export const LONG_CHARS = 1200;

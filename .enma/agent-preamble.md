@@ -1,7 +1,7 @@
 # Project Scranton — standing brief for every agent
 
 Project Scranton is an open-source multi-agent harness around the **pi** coding-agent CLI
-(npm `@earendil-works/pi-coding-agent`, v1.5.0, bin `dist/bundle/cli.js`, needs Node >= 22.19).
+(npm `@earendil-works/pi-coding-agent`, v1.5.2, bin `dist/bundle/cli.js`, needs Node >= 22.19).
 An orchestrator ("Michael") splits a request into milestones; a dev agent ("Dwight", may write code)
 and a QA agent ("Angela", read-only + may run commands) are isolated pi processes. The parallel upgrade
 adds live RPC agent chat alongside durable per-instance Hive records (see `.enma/parallel-contract.md`). Keywords in pi's final output drive the handoff; after
@@ -13,7 +13,7 @@ dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use
 - Windows, commands run through cmd.exe. Project root: `C:\Users\pumas\Documents\Project_Scranton`.
 - Node v24.22.1. npm 11.19.1 - call it as `npm.cmd` from cmd (`npm` alone is not on PATH for tools).
 - Pi is installed (project dependency; user confirms installation). Do not infer credential availability from old notes. Never print credentials. Use fake pi for deterministic tests; any real-model smoke test must be explicitly scoped and reported separately.
-- Docker Desktop 29.9.2 (Linux engine) is installed since 2026-11-09, and the image `scranton-sandbox:1.5.0` is built locally. Do not install system software or build/pull other images unless the task says so. The Docker sandbox must fail closed; explicit trusted-host execution is not OS isolation. Docker mode needs a resolved provider+model default for every active agent (pi default is refused); New run uses Agents defaults and ignores per-run model picks, while trusted host keeps overrides.
+- Docker Desktop 29.9.2 (Linux engine) is installed since 2026-11-09. The default sandbox image is `scranton-sandbox:1.5.2-r1` (`sandbox/Dockerfile`); only `scranton-sandbox:1.5.0` is known to have been built locally, so check `docker images` before relying on it. Do not install system software or build/pull other images unless the task says so. The Docker sandbox must fail closed; explicit trusted-host execution is not OS isolation. Docker mode needs a resolved provider+model default for every active agent (pi default is refused); New run uses Agents defaults and ignores per-run model picks, while trusted host keeps overrides.
 - Run the test suites one after another, not in parallel: some tests are timing-sensitive under load.
 - The npm registry is reachable.
 - Rust 1.99.1 (rustup, stable-x86_64-pc-windows-msvc) is in `%USERPROFILE%\.cargo\bin`, which is NOT on PATH
@@ -33,6 +33,22 @@ dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use
 - Zero runtime dependencies besides pi itself; use Node built-ins. Tests: `node:test` + `node:assert/strict`.
 - Code, comments, CLI/UI text and SKILL.md prompts in English. README.md is German.
 - Full suite: `node --test "test/**/*.test.js"` from the project root (also `npm.cmd test`).
+
+## Gates (as run for release 0.3.0, 2026-11-17)
+- Node: `npm.cmd run app:prepare`, then `node --test "test/**/*.test.js"` from the project root (1890 tests, about 3 minutes).
+- Python: from `engine\`, with TEMP, TMP and TMPDIR set to `<root>\.scratch\pipeline\tmp` and PYTHONPYCACHEPREFIX to `<root>\.scratch\pipeline\bytecode`:
+  `..\.scratch\pipeline\venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider --basetemp ../.scratch/pipeline/<lane>/pytest`
+  (1322 passed, 37 skipped, about 23 minutes - run targeted files while iterating). Ruff and mypy are configured in `engine/pyproject.toml`.
+- The untracked `.claude/` and `hive/live.json` belong to the user: never stage, delete, move or ignore them. Never commit or push unless the task says so.
+
+## Tool caution (agent lost on 2026-11-17)
+A `grep` whose output contained a long line with an emoji (from `test/core/context-pack.test.js`) made the agent's
+next model request fail (`unexpected end of hex escape`) and the agent was lost with its work. Files with emoji or
+other astral characters in long lines: `test/core/context-pack.test.js`, `test/core/context-pipeline.test.js`,
+`test/server/context.test.js` (also shorter ones in `test/core/context-store.test.js`,
+`test/core/context-review-fixes.test.js`, `test/core/pipeline-history.test.js`, `engine/tests/unit/test_history*.py`).
+For these use `read_file` with a line range, never `grep` / `read_around` / `find_and_read`, and exclude them from
+broad searches (`exclude` globs). If you need to search them, run a small script that prints ASCII only.
 
 ## Contract v1 - the only interface between the orchestrator and the UIs
 The full contract (hive/events.jsonl event types + fields, hive/state.json shape, Hive mailbox files,

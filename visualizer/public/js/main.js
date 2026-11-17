@@ -312,8 +312,10 @@ const pipelineView = createPipelineView({
   },
 });
 
+// a new planner pick changes the recipient of a Pipeline chat's context
+const pipelineForm = createPipelineForm({ onPlanner: () => context.plannerChanged() });
 control = createControlPanel({
-  dashboard, pipeline, lanes, models, getState: current, pipelineForm: createPipelineForm(),
+  dashboard, pipeline, lanes, models, getState: current, pipelineForm,
   url: urlFor,
   chatKey: () => trustKey(scope.get(), { projects: projectsMode }),
   workspace: () => (projectsMode ? findProject(nav?.doc(), scope.get()?.project)?.workspace || null : null),
@@ -356,7 +358,11 @@ const dreams = createDreamingPanel({
   announce: (text) => { $('control-announcer').textContent = text; },
 });
 // what the next turn of the chat on screen receives: the line in the follow-up composer and its drawer
-const context = createContextPanel({ getProjects: () => nav?.doc() ?? null, confirm: control.confirm });
+const context = createContextPanel({
+  getProjects: () => nav?.doc() ?? null,
+  confirm: control.confirm,
+  plannerModel: () => pipelineForm.plannerPick(),
+});
 
 function render() {
   frame = 0;

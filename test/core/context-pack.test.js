@@ -57,3 +57,24 @@ test('detail shrinks files then plan before reply and request; raw Pipeline inpu
   assert.deepEqual(Object.keys(buildPipelineContext({ turns: [t] })), ['notes', 'lines', 'other_chats']);
   assert.equal(buildPipelineContext({ turns: [t] }).lines[0].run_id, t.id);
 });
+
+// Guards: cutUnits/scaledLimits and incremental set/bodyUnits in pack.js, against released sources.
+// Rebuilt inputs must stay identical to those used to produce the released golden.
+test('I9: explicit anchor reproduces released ASCII planner, developer and section bytes', async () => {
+  const fs = await import('node:fs');
+  const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/context-pack-v030.json', import.meta.url), 'utf8'));
+  const releasedTurn = (i, huge = false) => ({ id: `run${i}`, engine: 'team', index: i, startedAt: '2026-01-01T00:00:00.000Z', status: i % 2 ? 'success' : 'failed', request: `request ${i} ` + 'q'.repeat(huge ? 4000 : 30), outcome: `outcome ${i} ` + 'o'.repeat(huge ? 300 : 10), plan: Array.from({ length: huge ? 32 : 2 }, (_, j) => ({ title: `plan ${j} ` + 'p'.repeat(huge ? 200 : 10), status: 'historical' })), files: Array.from({ length: huge ? 30 : 2 }, (_, j) => `src/file${j}${'f'.repeat(huge ? 50 : 0)}.js`), reply: { kind: 'report', text: 'r'.repeat(huge ? 16000 : 50), truncated: huge } });
+  const many = Array.from({ length: 80 }, (_, i) => releasedTurn(i + 1, true));
+  const cases = [ {}, {turns:[releasedTurn(1)]}, {notes:'n'.repeat(4000)}, {memory:'m'.repeat(3000)}, {turns:many}, {turns:many, notes:'n'.repeat(4000), memory:'m'.repeat(3000), unread:17, total:97}, {turns:many.slice(-4), notes:'n'.repeat(4000)}, {turns:many.slice(-1), unread:499}, {unread:500}, {otherChats:[{title:'Sibling',engine:'team',turns:many.slice(-3)}]}, {turns:[releasedTurn(1)],otherChats:Array.from({length:8},(_,i)=>({title:`Sibling ${i}`, engine:i%2?'team':'pipeline', turns:many.slice(-3)})), memory:'memory'}, {notes:'line one\nline two\n',turns:[releasedTurn(1)],memory:'memory',otherChats:[{title:'Sibling',engine:'team',turns:[releasedTurn(2)]}]} ];
+  const details = [0,100,500,1000,2000,4000,8000].map(maxChars => ({ turn: releasedTurn(1, true), maxChars }));
+  assert.equal(fixture.commit, 'ef08739');
+  assert.equal(fixture.cases.length, cases.length); assert.equal(fixture.details.length, details.length);
+  for (const [i, input] of cases.entries()) {
+    const p = buildTeamPack({ ...input, units: 23900, developerUnits: 3900 });
+    assert.deepEqual({ text: p.text, developer: p.developer, sections: p.sections.map((s) => s.text) }, fixture.cases[i]);
+  }
+  for (const [i, { turn, maxChars }] of details.entries()) {
+    assert.equal(fixture.details[i].maxChars, maxChars);
+    assert.equal(detailedTurn(turn, { latest: true, maxChars }), fixture.details[i].text);
+  }
+});

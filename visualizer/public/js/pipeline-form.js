@@ -4,11 +4,12 @@ import { CLIENT_HEADERS } from './control.js';
 import { postJson, store } from './control-panel.js';
 import {
   parseEngineInfo, modelGroups, parseModelValue, hasSupportedModel, parseDetect, buildRunBody, runErrorField, detectUrl, sandboxView, demoScenario,
-  ROLES, CHECK_KINDS, CHECKS_MAX, SETUP_MAX, COMMAND_ID_MAX, TASK_MAX_BYTES, SANDBOX_POLL_MS, BUILD_URL, byteLength,
+  ROLES, CHECK_KINDS, CHECKS_MAX, SETUP_MAX, COMMAND_ID_MAX, TASK_MAX_BYTES, SANDBOX_POLL_MS, BUILD_URL, PIPELINE_MODELS_KEY, byteLength,
+  storedPlannerPick,
 } from './pipeline-model.js';
 
 const $ = (id) => document.getElementById(id);
-const MODELS_KEY = 'scranton.pipelineModels';
+const MODELS_KEY = PIPELINE_MODELS_KEY;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -26,8 +27,9 @@ async function getDoc(url) {
   }
 }
 
-// timers: setTimeout/clearTimeout for the image build poll (tests pass fakes)
-export function createPipelineForm({ timers = globalThis } = {}) {
+// timers: setTimeout/clearTimeout for the image build poll (tests pass fakes). onPlanner(): the planner pick the
+// next run would send (plannerPick) may have changed
+export function createPipelineForm({ timers = globalThis, onPlanner = null } = {}) {
   const e = {
     dialog: $('run-dialog'), form: $('run-form'), engineRow: $('f-engine'), team: $('f-engine-team'), pipeline: $('f-engine-pipeline'),
     pipelineRow: $('f-engine-pipeline-row'), pipelineHint: $('f-engine-pipeline-hint'),
@@ -207,10 +209,19 @@ export function createPipelineForm({ timers = globalThis } = {}) {
     e.modelsNote.textContent = info && !hasSupportedModel(providers)
       ? 'No model is available yet. Sign in or add a provider under Accounts. The demo needs none.'
       : modelsNoteDefault;
+    // a stored pick the server no longer offers is dropped from the select, not from storage
+    onPlanner?.();
   }
 
   function keepModels() {
     store.set(MODELS_KEY, JSON.stringify(Object.fromEntries(ROLES.map((r) => [r, e.models[r].value]))));
+    onPlanner?.();
+  }
+
+  // What build() would send as the planner: the select once it is filled, before that the stored pick it starts from
+  function plannerPick() {
+    if (!modelsKey) return storedPlannerPick(store.get(MODELS_KEY));
+    return parseModelValue(e.models.planner.value, info?.providers ?? []);
   }
 
   for (const role of ROLES) e.models[role].addEventListener('change', keepModels);
@@ -520,6 +531,7 @@ export function createPipelineForm({ timers = globalThis } = {}) {
       return loadInfo();
     },
     active: () => engine === 'pipeline',
+    plannerPick,
     focus() {
       e.task.focus();
     },

@@ -4,7 +4,7 @@ import {
   CONTROL_HEADERS, BASE_TITLE, HUMAN_TITLE, SENT_STALE_MS, EXIT_SETTLE_MS, NOTIFY_MAX_AGE_MS,
   parseControl, isAbsolutePath, buildRunRequest, buildHitlRequest, responseError, answeredInState, sentSettled,
   hitlPhase, exitToShow, exitSettleLeft, exitKey, notificationFor, documentTitle, humanWhere,
-  exitOwner, runGone, sentOutcome, hitlAnnouncement, errorField, controlGates, openPending,
+  exitOwner, runGone, sentOutcome, hitlAnnouncement, errorField, controlGates, openPending, REQUEST_MAX, FEEDBACK_MAX,
 } from '../../visualizer/public/js/control.js';
 import { createState, reduceAll } from '../../visualizer/public/js/state.js';
 
@@ -60,8 +60,10 @@ test('buildRunRequest: a plain run sends the trimmed request and only the fields
 test('buildRunRequest: validation names the field', () => {
   const c = parseControl(doc());
   assert.equal(buildRunRequest({ request: '   ' }, c).field, 'request');
-  assert.equal(buildRunRequest({ request: 'x'.repeat(4001) }, c).field, 'request');
-  assert.ok(buildRunRequest({ request: 'x'.repeat(4000) }, c).body);
+  assert.equal(REQUEST_MAX, 32768);
+  assert.equal(buildRunRequest({ request: 'x'.repeat(32769) }, c).field, 'request');
+  assert.match(buildRunRequest({ request: 'x'.repeat(32769) }, c).error, /32769 characters; the limit is 32768/);
+  assert.ok(buildRunRequest({ request: 'x'.repeat(32768) }, c).body);
   assert.equal(buildRunRequest({ request: 'x', workspace: 'relative\\ws' }, c).field, 'workspace');
   for (const bad of ['0', '11', '2.5', '-1', 'three']) assert.equal(buildRunRequest({ request: 'x', maxCycles: bad }, c).field, 'maxCycles', bad);
   assert.equal(buildRunRequest({ request: 'x', maxCycles: '10' }, c).body.maxCycles, 10);
@@ -77,12 +79,14 @@ test('buildRunRequest: a demo needs no request but a known scenario and a sane d
   assert.deepEqual(buildRunRequest({ request: 'x', demo: false, scenario: 'nope', delayMs: 'bad' }, c), { body: { request: 'x', conversation: true } });
 });
 
-test('buildHitlRequest: decision must be offered; feedback needs text within 8000 chars', () => {
+test('buildHitlRequest: decision must be offered; feedback needs text within 16000 chars', () => {
+  assert.equal(FEEDBACK_MAX, 16000);
   assert.ok(buildHitlRequest({ decision: 'retry' }, null).error);
   assert.deepEqual(buildHitlRequest({ decision: 'retry', feedback: 'ignored' }, PENDING), { body: { decision: 'retry' } });
   assert.ok(buildHitlRequest({ decision: 'skip' }, { ...PENDING, options: ['retry', 'abort'] }).error);
   assert.equal(buildHitlRequest({ decision: 'feedback', feedback: '  ' }, PENDING).field, 'feedback');
-  assert.equal(buildHitlRequest({ decision: 'feedback', feedback: 'x'.repeat(8001) }, PENDING).field, 'feedback');
+  assert.equal(buildHitlRequest({ decision: 'feedback', feedback: 'x'.repeat(16001) }, PENDING).field, 'feedback');
+  assert.ok(buildHitlRequest({ decision: 'feedback', feedback: 'x'.repeat(16000) }, PENDING).body);
   assert.deepEqual(buildHitlRequest({ decision: 'feedback', feedback: ' Use a state machine ' }, PENDING), { body: { decision: 'feedback', feedback: 'Use a state machine' } });
 });
 

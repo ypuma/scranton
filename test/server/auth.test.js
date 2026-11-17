@@ -73,7 +73,7 @@ test('all auth routes enforce client marker, origin, host, JSON and body limits'
     if (body) {
       assert.equal((await request(srv, route, {}, { 'Content-Type': 'text/plain' })).status, 415);
       assert.equal((await request(srv, route, '{bad')).status, 400);
-      assert.equal((await request(srv, route, 'x'.repeat(65537))).status, 413);
+      assert.equal((await request(srv, route, 'x'.repeat(262145))).status, 413);
     }
   }
 });

@@ -159,3 +159,16 @@ test('usage traffic consumes neither byte nor row budget outside conversation mo
   const fresh = createHiveSource(dir, { tailBytes: 2048, maxEvents: 8 }); await fresh.poll();
   assert.deepEqual(fresh.events, visible, 'same budget on initial historical read');
 });
+
+// Regression anchor: createHiveSource's headBytes default must be 262144, not 16384.
+test('run_started with a 32768-character escaped request stays pinned beyond the tail', async t => {
+  const { mkdir } = await import('node:fs/promises');
+  const root = path.resolve('.scratch/context-budget/a2'); await mkdir(root, { recursive: true });
+  const dir = await mkdtemp(path.join(root, 'dashboard-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const request = '\u0001'.repeat(32768), started = ev('long', 1, 'run_started', { request });
+  const padding = Array.from({ length: 400 }, (_, i) => ev('long', i + 2, 'log', { message: 'padding '.repeat(30) }));
+  await writeFile(path.join(dir, 'events.jsonl'), [started, ...padding].map(line).join(''));
+  const source = createHiveSource(dir, { tailBytes: 4096, maxEvents: 5 }); await source.poll();
+  assert.deepEqual(source.events[0], started); assert.equal(source.events.at(-1).seq, 401);
+  assert.ok(source.events.length <= 5);
+});

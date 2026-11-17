@@ -42,7 +42,7 @@ test('disk history retains latest three terminal answers and older latest-plan a
 test('malformed, oversized and redirected artifacts degrade independently; artifact pointers never control reads', (t) => {
   const f = fixture(t); f.run('run00001');
   const file = f.write('run00001', 'artifacts/plan.json', plan); fs.writeFileSync(file, '{broken');
-  const metadata = f.write('run00001', 'run.json', {}); fs.writeFileSync(metadata, ' '.repeat(256 * 1024 + 1));
+  const metadata = f.write('run00001', 'run.json', {}); fs.writeFileSync(metadata, ' '.repeat(1024 * 1024 + 1));
   f.write('run00001', 'status.json', { status: 'failed', task: 'Fallback task', artifacts: { plan: '../../victim.json' } });
   assert.equal(buildPipelineHistory(f.scope).runs[0].task, 'Fallback task');
   assert.equal(buildPipelineHistory(f.scope).runs[0].plan, '');
@@ -188,9 +188,9 @@ test('oversized model-valid plans honestly fall back to an older usable advisory
   const f = fixture(t); f.run('run00001'); f.write('run00001', 'artifacts/plan.json', plan);
   f.run('run00002');
   const large = { ...plan, steps: Array.from({ length: 32 }, (_, i) => ({ ...plan.steps[0], id: `step-${i}`,
-    description: 'x'.repeat(10000), depends_on: null })) };
+    description: 'x'.repeat(40000), depends_on: null })) };
   const file = f.write('run00002', 'artifacts/plan.json', large);
-  assert.ok(fs.statSync(file).size > 256 * 1024);
+  assert.ok(fs.statSync(file).size > 1024 * 1024);
   const unavailable = buildPipelineHistory(f.scope).runs.find((r) => r.run_id === 'run00002');
   for (let i = 3; i <= 5; i++) f.run('run0000' + i);
   const h = buildPipelineHistory(f.scope);

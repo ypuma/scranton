@@ -97,6 +97,25 @@ export function byteLength(text) {
   return new TextEncoder().encode(raw(text)).length;
 }
 
+// The task cap counts UTF-8 bytes, so a long non-ASCII text is refused here, not by the server. -> '' when it fits
+export function taskBytesError(task) {
+  const k = byteLength(task);
+  return k > TASK_MAX_BYTES ? `The task is ${k.toLocaleString('en-US')} bytes of UTF-8; a pipeline run takes at most ${TASK_MAX_BYTES.toLocaleString('en-US')}. Characters outside ASCII take 2 to 4 bytes each.` : '';
+}
+
+// the model selects of the Pipeline form, kept per role as their option values
+export const PIPELINE_MODELS_KEY = 'scranton.pipelineModels';
+
+// localStorage text -> the planner pick the next run of the form starts from: { provider, model } | null
+export function storedPlannerPick(text) {
+  try {
+    const v = JSON.parse(text ?? 'null');
+    return v && typeof v === 'object' ? parseModelValue(v.planner) : null;
+  } catch {
+    return null;
+  }
+}
+
 // ------------------------------------------------------------ urls
 
 // suffix '' = GET .../pipeline (the chat's runs), 'runs', 'runs/<id>', ...

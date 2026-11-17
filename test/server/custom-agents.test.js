@@ -27,7 +27,7 @@ test('custom CRUD, deterministic starter, prompt reset, instructions and hardene
   for (const registry of [false, true]) {
     const { settings, call } = await fixture(t, registry);
     for (const headers of [{ 'X-Scranton-Client': '' }, { Origin: 'https://evil.test' }, { Host: 'evil.test' }]) assert.equal((await call('/api/agents', 'POST', definition, headers)).status, 403);
-    assert.equal((await call('/api/agents', 'POST', { ...definition, instruction: 'x'.repeat(66000) })).status, 413);
+    assert.equal((await call('/api/agents', 'POST', { ...definition, instruction: 'x'.repeat(262145) })).status, 413);
     for (const id of ['human', 'seclint-x', 'SecLint', 'x'.repeat(21)]) assert.equal((await call('/api/agents', 'POST', { ...definition, id })).status, 400);
     assert.equal((await call('/api/agents', 'POST', definition)).status, 201);
     assert.equal(fs.existsSync(path.join(settings, 'prompts', 'seclint.md')), false);
@@ -39,8 +39,8 @@ test('custom CRUD, deterministic starter, prompt reset, instructions and hardene
     assert.equal((await call('/api/agents/seclint', 'PATCH', { name: 'Updated', model: { provider: 'fake', model: 'saved' }, thinking: 'minimal' })).status, 200);
     assert.equal((await call('/api/agents/seclint/prompt', 'PUT', { text: 'Custom prompt' })).status, 200);
     assert.equal((await call('/api/agents')).body.roles.at(-1).prompt.text, 'Custom prompt');
-    assert.equal((await call('/api/agents/seclint/prompt', 'DELETE', { text: 'x'.repeat(66000) })).status, 413);
-    assert.equal((await call('/api/agents/seclint', 'DELETE', { text: 'x'.repeat(66000) })).status, 413);
+    assert.equal((await call('/api/agents/seclint/prompt', 'DELETE', { text: 'x'.repeat(262145) })).status, 413);
+    assert.equal((await call('/api/agents/seclint', 'DELETE', { text: 'x'.repeat(262145) })).status, 413);
     assert.equal((await call('/api/agents/seclint/prompt', 'DELETE')).status, 200);
     assert.match((await call('/api/agents')).body.roles.at(-1).prompt.text, /Updated/);
     assert.equal((await call('/api/agents/seclint', 'PATCH', { tools: ['write'] })).status, 400);

@@ -10,7 +10,7 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const array = (v) => Array.isArray(v) ? v : [];
 const string = (v) => typeof v === 'string' ? v : '';
 const strings = (v) => array(v).filter((s) => typeof s === 'string').slice(0, 32);
-const MAX_ARTIFACT = 256 * 1024;
+const MAX_ARTIFACT = 1024 * 1024;
 
 // Reject even in-root links: history must never acquire authority through a redirected artifact.
 function regularPath(base, rel, directory = false) {
@@ -83,7 +83,7 @@ function outcomeProjection(status, report, reply, hasPlan) {
     note: 'Historical observations only. Other verified work is repair/integration, not plan steps. Unverified attempts are not counted; failed attempted edits are not delivered changes.' };
 }
 
-export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (text) => text, projectMemory = [], context, since, budget, excludedRunId }) {
+export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (text) => text, projectMemory = [], context, since, budget, excludedRunId, allowance }) {
   if (!idPattern.test(projectId) || !idPattern.test(chatId)) return null;
   // The pack's allowance must never narrow the pre-existing §26 selection.
   const cache = budget?.cache ?? new Map();
@@ -169,7 +169,10 @@ export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (tex
     const entry = { id: item.id, text: text(item.text, 400), sources: item.sources.slice(0, 3).map((s) => text(s, 240)) };
     if (JSON.stringify([...project_memory, entry]).length <= 2000) project_memory.push(entry);
   }
-  const rawNotes = object(context) ? text(context.notes, LIMITS.pipelineNotes) : '';
+  const wireBytes = allowance ? Math.max(LIMITS.pipelineBytes, allowance.historyBytes + allowance.contextBytes) : LIMITS.pipelineBytes;
+  const contextBytes = allowance ? Math.max(LIMITS.pipelineContextBytes, allowance.contextBytes) : LIMITS.pipelineContextBytes;
+  const earlierMax = allowance ? LIMITS.pipelineEarlierMax : LIMITS.pipelineEarlier;
+  const rawNotes = object(context) ? text(context.notes, allowance ? LIMITS.pipelineNotesMax : LIMITS.pipelineNotes) : '';
   const rawLines = array(context?.lines).filter((v) => object(v) && idPattern.test(v.run_id) && typeof v.line === 'string').map((v) => ({ run_id: v.run_id, line: text(v.line, LIMITS.pipelineLine) })).filter((v) => v.line);
   const rawOther = array(context?.other_chats).slice(0, LIMITS.otherChats).filter((v) => object(v) && ['team', 'pipeline'].includes(v.engine)).map((v) => ({ title: text(v.title, 120), engine: v.engine,
     turns: array(v.turns).slice(-LIMITS.otherTurns).filter((s) => typeof s === 'string').map((s) => text(s, LIMITS.pipelineLine)).filter(Boolean) })).filter((v) => v.turns.length);
@@ -177,10 +180,10 @@ export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (tex
   function deriveContext(runs) {
     const extra = {}, ids = new Set(runs.map((r) => r.run_id)), lines = rawLines.filter((v) => !ids.has(v.run_id));
     if (rawNotes) extra.notes = rawNotes;
-    if (lines.length) extra.earlier = lines.slice(-LIMITS.pipelineEarlier).map((v) => v.line);
-    if (lines.length > LIMITS.pipelineEarlier) { extra.omitted = Math.min(100000, lines.length - LIMITS.pipelineEarlier); truncated = true; }
+    if (lines.length) extra.earlier = lines.slice(-earlierMax).map((v) => v.line);
+    if (lines.length > earlierMax) { extra.omitted = Math.min(100000, lines.length - earlierMax); truncated = true; }
     if (rawOther.length) extra.other_chats = [...rawOther];
-    while (Buffer.byteLength(JSON.stringify(extra)) > LIMITS.pipelineContextBytes) {
+    while (Buffer.byteLength(JSON.stringify(extra)) > contextBytes) {
       truncated = true;
       if (extra.other_chats?.length) { extra.other_chats.pop(); if (!extra.other_chats.length) delete extra.other_chats; }
       else if (extra.earlier?.length) { extra.earlier.shift(); extra.omitted = Math.min(100000, (extra.omitted ?? 0) + 1); if (!extra.earlier.length) { delete extra.earlier; delete extra.omitted; } }
@@ -200,18 +203,19 @@ export function buildPipelineHistory({ dataDir, projectId, chatId, redact = (tex
   const result = { schema: 1, runs, truncated, ...(project_memory.length ? { project_memory } : {}) };
   function refresh() { const extra = deriveContext(runs); if (extra) result.context = extra; else delete result.context; result.truncated ||= truncated; }
   refresh();
+  if (allowance) result.budget = { history_bytes: allowance.historyBytes, context_bytes: allowance.contextBytes };
   if (!runs.length && !project_memory.length && !result.context) return null;
   const size = () => Buffer.byteLength(JSON.stringify(result));
-  while (size() > 32768 && project_memory.length) { project_memory.pop(); result.truncated = true; }
+  while (size() > wireBytes && project_memory.length) { project_memory.pop(); result.truncated = true; }
   if (!project_memory.length) delete result.project_memory;
   // Recompute condensed history after shedding so an ordinary run cannot vanish.
-  while (size() > 32768 && runs.length > 1) {
+  while (size() > wireBytes && runs.length > 1) {
     const index = runs.findIndex((r, i) => r.run_id !== anchor?.id && i !== runs.length - 1);
     if (index < 0) break;
     runs.splice(index, 1); result.truncated = true; refresh();
   }
   const blocked = new Set();
-  while (size() > 32768) {
+  while (size() > wireBytes) {
     const fields = runs.flatMap((r) => ['task', 'plan', 'outcome'].map((key) => ({ r, key })))
       .filter(({ r, key }) => !blocked.has(r.run_id + key) && Array.from(r[key]).length > (key === 'task' ? 256 : 1024));
     fields.sort((a, b) => Buffer.byteLength(b.r[b.key]) - Buffer.byteLength(a.r[a.key]));

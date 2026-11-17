@@ -23,7 +23,7 @@ async function setup(t, cap = 2) {
   const server = await startVisualizerServer({ dataDir, publicDir: dir, port: 0, maxConcurrentRuns: cap, control: { auth: { close() {} }, runner(_exe, args, opts) {
     const hive = args[args.indexOf('--hive') + 1];
     const context = args[args.indexOf('--thread-context') + 1];
-    assert.equal(JSON.parse(fs.readFileSync(context, 'utf8')).v, 2, 'thread file exists before spawn');
+    assert.equal(JSON.parse(fs.readFileSync(context, 'utf8')).v, 3, 'thread file exists before spawn');
     const child = Object.assign(new EventEmitter(), { pid: 100 + children.length, args, hive, opts });
     child.finish = () => { releaseRunLease(hive, opts.env.SCRANTON_RUN_LEASE); child.emit('close', 0); };
     children.push(child); return child;

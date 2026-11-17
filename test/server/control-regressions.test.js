@@ -22,10 +22,10 @@ async function post(control, route, body) {
   assert.equal(res.status, 202);
 }
 
-function fixture(t) {
+function fixture(t, options = {}) {
   const hive = tempDir(t);
   const child = Object.assign(new EventEmitter(), { pid: 123 });
-  const control = createControl({ hive, workspace: path.join(hive, 'ws'), runner: () => child });
+  const control = createControl({ hive, workspace: path.join(hive, 'ws'), runner: () => child, ...options });
   t.after(() => child.emit('close', 0));
   return { hive, child, control };
 }
@@ -100,4 +100,11 @@ test('HTML carries strict security headers', async (t) => {
   assert.equal(res.headers.get('content-security-policy'), "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'self' http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+});
+
+for (const prepareThread of [false, true]) test(`start without a context pack never resolves models (prepareThread=${prepareThread})`, async (t) => {
+  let resolves = 0;
+  const { control } = fixture(t, { prepareThread, modelWindows: { resolve() { resolves++; return { id: null, window: 128000, known: false }; } } });
+  await post(control, '/api/runs', { request: 'No context service', trustedHost: true });
+  assert.equal(resolves, 0);
 });

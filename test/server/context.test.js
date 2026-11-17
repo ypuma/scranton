@@ -1,4 +1,5 @@
 import './docker-model-env.js';
+import { modelWindows } from './model-windows-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -51,7 +52,7 @@ function seedMemory(f) {
   return { text: dream.context(), structured: dream.structuredContext() };
 }
 async function server(t, control = {}, single = false) {
-  const f = fixture(t), srv = await startVisualizerServer({ ...(single ? { hiveDir: path.join(f.dir, 'hive') } : { dataDir: f.dataDir }), publicDir: f.dir, port: 0, control: { auth: { close() {} }, ...control } });
+  const f = fixture(t), srv = await startVisualizerServer({ ...(single ? { hiveDir: path.join(f.dir, 'hive') } : { dataDir: f.dataDir }), publicDir: f.dir, port: 0, control: { auth: { close() {} }, modelWindows, ...control } });
   f.onClose(() => srv.close());
   const req = async (route, body, headers = {}) => {
     const res = await fetch(srv.url + route, { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -80,24 +81,24 @@ test('context routes enforce guards, strict bodies, unknown paths and unknown sc
     assert.equal((await f.req(route.replace(f.project.id, 'missing'), body)).status, 404, route);
     if (route.includes('/chats/')) assert.equal((await f.req(route.replace(f.team.id, 'missing'), body)).status, 404, route);
   }
-  for (const [route, bodies] of [[f.projectRoute + '/settings', [{}, { crossChat: 1 }, { crossChat: false, extra: 1 }, []]], [f.projectRoute + '/notes', [{}, { text: false }, { text: 'x'.repeat(4001) }, { text: '😀'.repeat(2001) }, { text: '', extra: 1 }]], [f.chatRoute() + '/reset', [{ extra: 1 }, null]], [f.chatRoute() + '/restore', [{ extra: 1 }, []]]]) {
+  for (const [route, bodies] of [[f.projectRoute + '/settings', [{}, { crossChat: 1 }, { crossChat: false, extra: 1 }, []]], [f.projectRoute + '/notes', [{}, { text: false }, { text: 'x'.repeat(16001) }, { text: '😀'.repeat(8001) }, { text: '', extra: 1 }]], [f.chatRoute() + '/reset', [{ extra: 1 }, null]], [f.chatRoute() + '/restore', [{ extra: 1 }, []]]]) {
     for (const body of bodies) { const r = await f.req(route, body); assert.equal(r.status, 400, JSON.stringify({ route, body })); assert.ok(r.value.error.length > 5); }
   }
   for (const route of [f.projectRoute + '/unknown', f.projectRoute + '/settings/unknown', f.chatRoute() + '/unknown', f.chatRoute() + '/reset/unknown']) for (const body of [undefined, {}]) assert.equal((await f.req(route, body)).status, 404, route);
   assert.equal((await f.req(f.projectRoute + '/notes', { text: '' }, { 'Content-Type': 'text/plain' })).status, 415);
-  const oversized = await fetch(f.srv.url + f.projectRoute + '/notes', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: ' '.repeat(65537) }); assert.equal(oversized.status, 413);
+  const oversized = await fetch(f.srv.url + f.projectRoute + '/notes', { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: ' '.repeat(262145) }); assert.equal(oversized.status, 413);
   const host = await new Promise((resolve, reject) => { const req = http.request(f.srv.url + f.projectRoute, { headers: { Host: 'foreign.test', 'X-Scranton-Client': '1' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); req.on('error', reject); req.end(); }); assert.equal(host, 403);
 });
 
 test('context documents, notes round trip, crossChat setting, reset and restore use disk context', async (t) => {
   const f = await server(t);
   let project = (await f.req(f.projectRoute)).value;
-  assert.deepEqual(Object.keys(project).sort(), ['chats', 'notes', 'settings', 'v']); assert.equal(project.v, 1); assert.deepEqual(project.settings, { crossChat: true });
-  assert.deepEqual(project.notes, { text: '', chars: 0, limit: 4000, updatedAt: null });
+  assert.deepEqual(Object.keys(project).sort(), ['chats', 'defaults', 'notes', 'settings', 'v']); assert.equal(project.v, 2); assert.deepEqual(project.settings, { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} });
+  assert.deepEqual(project.notes, { text: '', chars: 0, tokens: 0, limit: 16000, updatedAt: null });
   assert.deepEqual(Object.keys(project.chats[0]).sort(), ['engine', 'id', 'lastActiveAt', 'reset', 'title', 'turns']);
   let doc = (await f.req(f.chatRoute())).value;
-  assert.deepEqual(Object.keys(doc).sort(), ['budget', 'degraded', 'developer', 'engine', 'memory', 'notes', 'otherChats', 'reset', 'sections', 'settings', 'truncated', 'turns', 'v']);
-  assert.deepEqual(doc.turns, { total: 0, visible: 0, detailed: 0, condensed: 0, omitted: 0 }); assert.deepEqual(doc.developer, { chars: 0, text: '' }); assert.equal(doc.reset, null); assert.deepEqual(doc.sections, []); assert.equal(doc.budget.limit, 24000);
+  assert.deepEqual(Object.keys(doc).sort(), ['budget', 'degraded', 'developer', 'engine', 'memory', 'model', 'notes', 'otherChats', 'reset', 'sections', 'settings', 'truncated', 'turns', 'v']);
+  assert.deepEqual(doc.turns, { total: 0, visible: 0, detailed: 0, condensed: 0, omitted: 0 }); assert.equal(doc.developer.chars, 0); assert.equal(doc.developer.text, ''); assert.equal(doc.reset, null); assert.deepEqual(doc.sections, []); assert.equal(doc.budget.tokens, 12800);
   f.teamRun(f.team, 'ownold', 'OWN-OLD'); f.teamRun(f.sibling, 'siblingold', 'SIBLING-OLD'); f.teamRun(f.stranger, 'foreignold', 'FOREIGN-SECRET'); f.pipelineRun('pipe0001', 'PIPE-OLD');
   project = (await f.req(f.projectRoute + '/notes', { text: 'Grüße 😀\r\nkeep\u0001 tabs\t' })).value;
   assert.equal(project.notes.text, 'Grüße 😀\nkeep tabs\t'); assert.equal(project.notes.chars, project.notes.text.length); assert.ok(project.notes.updatedAt);
@@ -112,12 +113,12 @@ test('context documents, notes round trip, crossChat setting, reset and restore 
     const reset = (await f.req(f.chatRoute(chat) + '/reset', {})).value; assert.ok(Date.parse(reset.reset.at)); assert.equal(reset.turns.visible, 0); assert.ok(reset.notes.chars > 0);
     const restored = (await f.req(f.chatRoute(chat) + '/restore', {})).value; assert.equal(restored.reset, null); assert.equal(restored.turns.visible, 1);
   }
-  const p = (await f.req(f.chatRoute(f.pipeline))).value; assert.equal(p.engine, 'pipeline'); assert.equal(p.developer, null); assert.equal(p.budget.limit, 32768); assert.ok(p.sections.every((s) => !s.exact));
+  const p = (await f.req(f.chatRoute(f.pipeline))).value; assert.equal(p.engine, 'pipeline'); assert.equal(p.developer, null); assert.equal(p.budget.tokens, 12800); assert.ok(p.sections.every((s) => !s.exact));
   await f.req(f.projectRoute + '/notes', { text: '' }); assert.equal((await f.req(f.projectRoute)).value.notes.chars, 0);
 });
 
-// Reverting threadContext provider wiring or the v2 file branch loses sibling context/developer text.
-test('Team start writes the exact v2 pack; inspect excludes its live run even without a root lease heuristic', async (t) => {
+// Reverting threadContext provider wiring or the v3 file branch loses sibling context/developer text.
+test('Team start writes the exact v3 pack; inspect excludes its live run even without a root lease heuristic', async (t) => {
   let child, args, opts;
   const f = await server(t, { runner(_exe, argv, options) { args = argv; opts = options; child = Object.assign(new EventEmitter(), { pid: 123 }); return child; } });
   f.onClose(() => { if (child) { releaseRunLease(f.team.hiveDir, opts.env.SCRANTON_RUN_LEASE); child.emit('close', 0); } });
@@ -127,7 +128,7 @@ test('Team start writes the exact v2 pack; inspect excludes its live run even wi
   const started = await f.req(`/api/projects/${f.project.id}/chats/${f.team.id}/runs`, { request: 'NEW-TASK', trustedHost: true }); assert.equal(started.status, 202, JSON.stringify(started));
   const file = args[args.indexOf('--thread-context') + 1], pack = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.match(pack.text, /PROJECT-MEMORY/);
-  assert.deepEqual(pack, { v: 2, text: expected.text, developer: expected.developer }); assert.match(pack.text, /OWN-PREVIOUS/); assert.match(pack.text, /#2 \[success\] SIBLING-PREVIOUS -> Delivered/); assert.doesNotMatch(JSON.stringify(pack), /FOREIGN-SECRET/); assert.doesNotMatch(pack.developer, /SIBLING-PREVIOUS/);
+  assert.deepEqual(pack, { v: 3, text: expected.text, developer: expected.developer }); assert.match(pack.text, /OWN-PREVIOUS/); assert.match(pack.text, /#2 \[success\] SIBLING-PREVIOUS -> Delivered/); assert.doesNotMatch(JSON.stringify(pack), /FOREIGN-SECRET/); assert.doesNotMatch(pack.developer, /SIBLING-PREVIOUS/);
   f.teamRun(f.team, opts.env.SCRANTON_RUN_ID, 'LIVE-PRIVATE', true);
   releaseRunLease(f.team.hiveDir, opts.env.SCRANTON_RUN_LEASE);
   const doc = (await f.req(f.chatRoute())).value; assert.equal(doc.turns.visible, 1); assert.doesNotMatch(JSON.stringify(doc), /LIVE-PRIVATE/);
@@ -209,9 +210,9 @@ test('forPipeline UTF-8 wire with notes, earlier and other_chats is accepted and
   f.write(path.join(f.pipeRoot(), 'runs/pipe0005/delivery/reply.json'), { kind: 'answer', text: 'R'.repeat(3500) });
   context.setNotes(f.project.id, '😀'.repeat(1000) + 'N'.repeat(1000));
   const large = context.forPipeline(f.project.id, f.pipeline.id), largeFile = path.join(f.dir, 'history-large.json'), bytes = Buffer.byteLength(JSON.stringify(large));
-  assert.ok(bytes >= 32000 && bytes <= 32768, `Near-limit wire: ${bytes} bytes; runs ${JSON.stringify(large.runs.map((r) => ({ task: Buffer.byteLength(r.task), plan: Buffer.byteLength(r.plan), outcome: Buffer.byteLength(r.outcome) })))}; context ${Buffer.byteLength(JSON.stringify(large.context))}`); f.write(largeFile, large);
+  assert.ok(bytes >= 32000 && bytes <= Math.max(32768, large.budget.history_bytes + large.budget.context_bytes), `Near-limit wire: ${bytes} bytes; runs ${JSON.stringify(large.runs.map((r) => ({ task: Buffer.byteLength(r.task), plan: Buffer.byteLength(r.plan), outcome: Buffer.byteLength(r.outcome) })))}; context ${Buffer.byteLength(JSON.stringify(large.context))}`); assert.ok(Buffer.byteLength(JSON.stringify(large.context)) <= Math.max(8000, large.budget.context_bytes)); f.write(largeFile, large);
   const script = path.join(f.dir, 'validate.py');
-  f.write(script, `import json, sys\nfrom pathlib import Path\nfrom scranton_pipeline.history import load_history, validate_context, conversation_context_block\nfrom scranton_pipeline.tools.secrets import Redactor\nh = load_history(Path(sys.argv[1]), Redactor())\nassert validate_context(h['context'], Redactor()) == h['context']\nassert all(h['context'].get(k) for k in ('notes', 'earlier', 'other_chats'))\nblock = conversation_context_block(h, 4000)\npayload = json.loads(block.split('\\n')[2])\nassert len(block.encode('utf-8')) <= 4000\nif Path(sys.argv[1]).name == 'history.json':\n    assert payload['notes'] == h['context']['notes']\n    assert payload['earlier'] == h['context']['earlier']\n    assert payload['other_chats'] == h['context']['other_chats']\nassert 'Advisory context' in payload['authority']\nprint('PASS: load_history + validate_context + conversation_context_block; UTF-8 notes, earlier, other_chats')\n`);
+  f.write(script, `import json, sys\nfrom pathlib import Path\nfrom scranton_pipeline.history import load_history, validate_context, conversation_context_block\nfrom scranton_pipeline.tools.secrets import Redactor\nh = load_history(Path(sys.argv[1]), Redactor())\nassert validate_context(h['context'], Redactor(), budget=True) == h['context']\nassert all(h['context'].get(k) for k in ('notes', 'earlier', 'other_chats'))\nblock = conversation_context_block(h, 4000)\npayload = json.loads(block.split('\\n')[2])\nassert len(block.encode('utf-8')) <= 4000\nif Path(sys.argv[1]).name == 'history.json':\n    assert payload['notes'] == h['context']['notes']\n    assert payload['earlier'] == h['context']['earlier']\n    assert payload['other_chats'] == h['context']['other_chats']\nassert 'Advisory context' in payload['authority']\nprint('PASS: load_history + validate_context + conversation_context_block; UTF-8 notes, earlier, other_chats')\n`);
   const tmp = path.resolve('.scratch/pipeline/tmp'); fs.mkdirSync(tmp, { recursive: true });
   for (const input of [file, largeFile]) {
     const result = spawnSync(python, [script, input], { encoding: 'utf8', timeout: 30000, env: { ...process.env, TEMP: tmp, TMP: tmp, TMPDIR: tmp, PYTHONPYCACHEPREFIX: path.resolve('.scratch/pipeline/bytecode'), PYTHONPATH: path.resolve('engine/src'), PYTHONIOENCODING: 'utf-8' } });

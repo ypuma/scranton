@@ -25,6 +25,11 @@ import { dreamingCap, teamDreamingCohort, teamDreamingContext } from './dreaming
 import { createProjectRegistry, derivedChatTitle } from './projects.js';
 import { resolveReflectionModel } from './dreaming-reflection-sources.js';
 import { createContext } from './context/index.js';
+import { LIMITS } from './context/limits.js';
+import { pct } from './context/tokens.js';
+import { createModelWindows } from './model-windows.js';
+import { boundedRead } from './thread.js';
+import { canonicalDirectory } from './context/paths.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
@@ -54,7 +59,8 @@ Usage:
                                            Local deterministic project memory (default off)
   scranton dreaming propose [--provider P --model M]|apply --proposal ID|reject --proposal ID|cancel
                                            Reviewed model reflection; requires --data DIR --project ID
-  scranton context show --data DIR --project ID [--chat ID] [--json]
+  scranton context show --data DIR --project ID [--chat ID] [--model PROVIDER/MODEL] [--json]
+  scranton context budget --data DIR --project ID (--percent N | --tokens N | --default) [--model PROVIDER/MODEL]
   scranton context notes --data DIR --project ID (--file FILE | --clear)
   scranton context share --data DIR --project ID on|off
   scranton context reset|restore --data DIR --project ID --chat ID
@@ -79,6 +85,7 @@ Options:
   --data DIR           Project registry directory (or SCRANTON_DATA)
   --project ID         run: registered project; --chat ID continues a thread
   --thread-context FILE Internal bounded earlier-thread context
+  --request-file FILE  run: read a bounded request instead of a positional
   --config FILE        Config file (default ./scranton.config.json)
   --no-plan            run: skip Michael's planning, use one milestone for the whole request
   --max-cycles N       Failed test cycles before the circuit breaker trips (default 3)
@@ -93,6 +100,9 @@ Environment and .env: see .env.example. Precedence: flags > env > scranton.confi
 
 const OPTIONS = {
   json: { type: 'boolean' },
+  percent: { type: 'string' },
+  tokens: { type: 'string' },
+  default: { type: 'boolean' },
   file: { type: 'string' },
   clear: { type: 'boolean' },
   proposal: { type: 'string' },
@@ -103,6 +113,7 @@ const OPTIONS = {
   create: { type: 'boolean' },
   'delete-history': { type: 'boolean' },
   'thread-context': { type: 'string' },
+  'request-file': { type: 'string' },
   'legacy-workspace': { type: 'string' },
   'api-key': { type: 'boolean' },
   'base-url': { type: 'string' },
@@ -184,6 +195,8 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
     if (command === 'run' && !registryRun && (values.project || values.chat)) {
       throw new UsageError('--project and --chat require --data or inherited SCRANTON_DATA');
     }
+    if (values['request-file'] !== undefined && command !== 'run') throw new UsageError('--request-file is only valid for run');
+    if (command === 'run' && values['request-file'] !== undefined && rest.length) throw new UsageError('Use either a positional request or --request-file, not both');
     if (command === 'run') {
       // Keep workspace dotenv values out of the inherited environment used by later runs.
       loadDotEnv(registryRun ? PACKAGE_ROOT : cwd, (file) => { env = { ...parseEnv(readFileSync(file, 'utf8')), ...env }; });
@@ -414,26 +427,58 @@ async function cmdDreaming(args, values, { stdout, env, cwd, auth, completeRefle
 
 const terminalText = (text) => stripVTControlCharacters(text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufe0e\ufe0f\u2028\u2029]/g, '');
 
+async function teamRecipients(config) {
+  const resolver = createModelWindows();
+  const [planner, developer] = await Promise.all(['michael', 'dwight'].map((id) => resolver.resolve(config.agents[id].modelSetting.value)));
+  return { planner, developer };
+}
+
+function contextModel(value) {
+  const slash = value.indexOf('/'), provider = value.slice(0, slash), model = value.slice(slash + 1);
+  if (slash < 1 || [provider, model].some((part) => !part || !part.isWellFormed() || part.length > 256 || /[\s\x00-\x1f\x7f-\x9f]/.test(part))) throw new UsageError('--model requires PROVIDER/MODEL (1 to 256 characters each, no whitespace or controls)');
+  return { provider, model };
+}
+
+function contextBudgetLine(label, budget, model) {
+  return `${label}: ≈${budget.used}/${budget.tokens} tokens (${pct(budget.used, budget.tokens)}% of budget, ${pct(budget.used, model.window)}% of the ${model.window}-token window of ${model.id ?? 'pi default'})${model.known ? '' : ' [window assumed]'}${budget.capped ? ` [capped: ${budget.capped}]` : ''}`;
+}
+
 function contextSummary(doc) {
   const sharing = `Sharing: ${doc.settings.crossChat ? 'on' : 'off'}; notes: ${doc.notes.chars}/${doc.notes.limit} chars`;
-  if (doc.chats) return [sharing, ...doc.chats.map((chat) => `${chat.id} | ${chat.title} | ${chat.engine} | ${chat.turns} turns${chat.reset ? ' | reset' : ''}`)].join('\n') + '\n';
+  if (doc.chats) return [sharing, `Settings: ${JSON.stringify(doc.settings)}`, ...doc.chats.map((chat) => `${chat.id} | ${chat.title} | ${chat.engine} | ${chat.turns} turns${chat.reset ? ' | reset' : ''}`)].join('\n') + '\n';
   const t = doc.turns;
   return [sharing, `Turns: ${t.total} total; ${t.visible} visible; ${t.detailed} detailed; ${t.condensed} condensed; ${t.omitted} omitted`,
     `Other chats: ${doc.otherChats.chats}; turns: ${doc.otherChats.turns}; memory: ${doc.memory.chars} chars`,
-    `Budget: ${doc.budget.used}/${doc.budget.limit} ${doc.engine === 'pipeline' ? 'bytes' : 'chars'}; truncated: ${doc.truncated}; degraded: ${doc.degraded}`,
+    contextBudgetLine('Budget', doc.budget, doc.model),
+    `Truncated: ${doc.truncated}; degraded: ${doc.degraded}`,
     `Reset: ${doc.reset?.at ?? 'none'}`,
-    ...doc.sections.map((section) => `\n${section.title} (${section.chars} chars)\n${section.text}`),
-    ...(doc.developer ? [`\nDeveloper brief (${doc.developer.chars} chars)\n${doc.developer.text}`] : [])].join('\n') + '\n';
+    ...doc.sections.map((section) => `\n${section.title} (${section.chars} chars; ≈${section.tokens} tokens)\n${section.text}`),
+    ...(doc.developer ? [`\n${contextBudgetLine('Developer brief', doc.developer.budget, doc.developer.model)}\n${doc.developer.text}`] : [])].join('\n') + '\n';
 }
 
 async function cmdContext(args, values, { stdout, env, cwd }) {
   const [action, sharing] = args;
-  if (!['show', 'notes', 'share', 'reset', 'restore'].includes(action) || args.length !== (action === 'share' ? 2 : 1) || !(values.data || env.SCRANTON_DATA) || !values.project || values['single-hive']) throw new UsageError('context requires show|notes|share|reset|restore --data DIR --project ID (Registry projects only)');
+  if (!['show', 'budget', 'notes', 'share', 'reset', 'restore'].includes(action) || args.length !== (action === 'share' ? 2 : 1) || !(values.data || env.SCRANTON_DATA) || !values.project || values['single-hive']) throw new UsageError('context requires show|budget|notes|share|reset|restore --data DIR --project ID (Registry projects only)');
   if (['reset', 'restore'].includes(action) && !values.chat) throw new UsageError(`context ${action} requires --chat ID`);
   if (!['show', 'reset', 'restore'].includes(action) && values.chat) throw new UsageError('--chat is only valid for context show|reset|restore');
   if (action === 'notes' && Boolean(values.file) === Boolean(values.clear)) throw new UsageError('context notes requires exactly one of --file FILE or --clear');
   if (action !== 'notes' && (values.file !== undefined || values.clear)) throw new UsageError('--file and --clear are only valid for context notes');
   if (action === 'share' && !['on', 'off'].includes(sharing)) throw new UsageError('context share requires on|off');
+  if (!['show', 'budget'].includes(action) && values.model !== undefined) throw new UsageError('--model is only valid for context show|budget');
+  const modes = ['percent', 'tokens', 'default'].filter((key) => values[key] !== undefined);
+  if (action !== 'budget' && modes.length) throw new UsageError('--percent, --tokens and --default are only valid for context budget');
+  let rule, model;
+  if (action === 'budget') {
+    if (modes.length !== 1) throw new UsageError('context budget requires exactly one of --percent N, --tokens N or --default');
+    const mode = modes[0];
+    rule = null;
+    if (mode !== 'default') {
+      const value = Number(values[mode]), min = mode === 'percent' ? LIMITS.percentMin : LIMITS.tokensMin, max = mode === 'percent' ? LIMITS.percentMax : LIMITS.tokensMax;
+      if (!/^\d+$/.test(values[mode]) || !Number.isInteger(value) || value < min || value > max) throw new UsageError(`--${mode} must be an integer from ${min} to ${max}`);
+      rule = { mode, value };
+    }
+    if (values.model !== undefined) model = contextModel(values.model);
+  }
   const dataDir = path.resolve(cwd, values.data || env.SCRANTON_DATA), registry = createProjectRegistry({ dataDir });
   const context = createContext({ dataDir, registry });
   let result;
@@ -446,15 +491,19 @@ async function cmdContext(args, values, { stdout, env, cwd }) {
         try { memory = chat.engine === 'pipeline' ? dream.structuredContext() : dream.context(); }
         finally { await dream.close(); }
       } catch { memory = chat.engine === 'pipeline' ? [] : ''; }
-      result = context.inspect(values.project, values.chat, { memory });
+      const recipients = chat.engine === 'pipeline'
+        ? { planner: await createModelWindows().resolve(values.model === undefined ? null : contextModel(values.model)) }
+        : await teamRecipients(loadConfig({ cwd: PACKAGE_ROOT, env, flags: { data: dataDir }, validateWorkflow: false }));
+      result = context.inspect(values.project, values.chat, { memory, recipients });
     } else if (action === 'show') result = context.status(values.project);
+    else if (action === 'budget') result = context.configure(values.project, model ? { models: { [`${model.provider}/${model.model}`]: rule } } : { budget: rule });
     else if (action === 'notes') {
       let text = '';
       if (values.file) {
         const file = path.resolve(cwd, values.file);
         const stat = statSync(file);
         if (!stat.isFile()) throw new UsageError('Context notes file must be a regular file');
-        if (stat.size > 16384) throw new UsageError('Context notes file exceeds 16384 bytes');
+        if (stat.size > LIMITS.notesBytes) throw new UsageError(`Context notes file exceeds ${LIMITS.notesBytes} bytes`);
         try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(file)).replace(/^\uFEFF/, ''); }
         catch (error) { if (error.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') throw new UsageError('Context notes file must be valid UTF-8'); throw error; }
       }
@@ -479,7 +528,17 @@ function cmdProjects(command, args, values, config, { stdout }) {
   return 0;
 }
 
-async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
+async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin }) {
+  if (values['request-file'] !== undefined) {
+    try {
+      const file = path.resolve(cwd, values['request-file']);
+      const directory = canonicalDirectory(path.dirname(file));
+      const value = JSON.parse(boundedRead(path.join(directory, path.basename(file)), 262144, directory));
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 2 ||
+          value.v !== 1 || typeof value.request !== 'string' || !value.request.trim() || value.request.length > 32768) throw Error();
+      request = value.request;
+    } catch { throw new UsageError('Invalid request file'); }
+  }
   if (!request.trim()) throw new UsageError('run needs a request, e.g. scranton run "Build a todo CLI"');
   let acquire = acquireRunLease;
   if (!config.dataDir && (values.project || values.chat)) throw new UsageError('--project and --chat require --data');
@@ -487,13 +546,14 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
   if (values['thread-context']) {
     try {
       const file = path.resolve(config.cwd, values['thread-context']);
-      if (statSync(file).size > 262144) throw Error();
-      const context = JSON.parse(readFileSync(file, 'utf8'));
-      if (![1, 2].includes(context.v) || typeof context.text !== 'string' || context.text.length > (context.v === 1 ? 8000 : 24000)) throw Error();
-      if (context.v === 2 && context.developer !== undefined && (typeof context.developer !== 'string' || context.developer.length > 4000)) throw Error();
+      const directory = canonicalDirectory(path.dirname(file));
+      const raw = boundedRead(path.join(directory, path.basename(file)), 8388608, directory), bytes = Buffer.byteLength(raw);
+      const context = JSON.parse(raw);
+      if (![1, 2, 3].includes(context.v) || bytes > (context.v === 3 ? 8388608 : 262144) || typeof context.text !== 'string' || context.text.length > (context.v === 1 ? 8000 : context.v === 2 ? 24000 : 800000)) throw Error();
+      if (context.v >= 2 && context.developer !== undefined && (typeof context.developer !== 'string' || context.developer.length > (context.v === 3 ? 8000 : 4000))) throw Error();
       contextVersion = context.v;
       threadContext = context.text;
-      if (context.v === 2) developerContext = context.developer ?? '';
+      if (context.v >= 2) developerContext = context.developer ?? '';
     } catch { throw new UsageError('Invalid thread context file'); }
   }
   if (config.dataDir) {
@@ -510,14 +570,15 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
       try { Promise.resolve(dream.cancelReflection?.()).catch(() => {}); } catch {}
       let nextMemory, maxFailedCycles;
       try {
-        nextMemory = contextVersion === 2 ? '' : dream.context();
+        nextMemory = contextVersion >= 2 ? '' : dream.context();
         maxFailedCycles = dreamingCap(dream, 'team', config.maxFailedCycles, teamDreamingCohort(config));
       } finally { await dream.close(); }
       memory = nextMemory;
       config = { ...config, maxFailedCycles };
     } catch { /* Optional dreaming must not replace context or the configured ceiling on failure. */ }
     if (!values['thread-context']) {
-      const pack = createContext({ dataDir: registry.dataDir, registry }).forTeam(project.id, chat.id, { memory });
+      const recipients = await teamRecipients(config);
+      const pack = createContext({ dataDir: registry.dataDir, registry }).forTeam(project.id, chat.id, { memory, recipients });
       threadContext = pack.text;
       developerContext = pack.developer;
     } else if (contextVersion === 1) threadContext = teamDreamingContext(threadContext, memory);

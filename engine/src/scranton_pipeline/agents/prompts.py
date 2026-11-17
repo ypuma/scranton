@@ -162,14 +162,17 @@ def build_planner_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Grap
     if history:
         # Guidance has a separate allowance; history never borrows it.
         room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes
-        section = history_block(history, min(12000, cfg.limits.max_prompt_bytes // 8, room) - len(policy.encode()))
+        budget = history.get("budget")
+        history_cap = min(budget["history_bytes"], cfg.limits.max_prompt_bytes // 4) if budget else min(12000, cfg.limits.max_prompt_bytes // 8)
+        context_cap = min(budget["context_bytes"], cfg.limits.max_prompt_bytes // 8) if budget else min(4000, cfg.limits.max_prompt_bytes // 32)
+        section = history_block(history, min(history_cap, room) - len(policy.encode()))
         if section:
             prompt.user += policy + section
         room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes
         omitted = "\n[TRUNCATED: historical data omitted; live prompt has priority]" if not section and (history["runs"] or history.get("project_memory")) else ""
         if len(omitted.encode()) > min(room, 12000, cfg.limits.max_prompt_bytes // 8):
             omitted = ""
-        context = conversation_context_block(history, min(4000, cfg.limits.max_prompt_bytes // 32,
+        context = conversation_context_block(history, min(context_cap,
                                                           room - len(omitted.encode()) - (0 if section else len(policy.encode()))))
         if context:
             prompt.user += ("" if section else policy) + context

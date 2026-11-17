@@ -1,8 +1,9 @@
 import { createContextStore } from './store.js';
 import { readTurns } from './turns.js';
 import { buildTeamPack, buildPipelineContext, pipelineSections, safeText } from './pack.js';
-import { LIMITS as L } from './limits.js';
-import { PIPELINE_TERMINAL } from './shared.js';
+import { LIMITS as L, DEFAULT_BUDGET, UNKNOWN_RECIPIENT, budgetFor, briefFor, pipelineAllowance } from './limits.js';
+import { tokens } from './tokens.js';
+import { PIPELINE_TERMINAL, maskHistoricalText } from './shared.js';
 import { redact as defaultRedact } from '../dreaming/reflection.js';
 import { listRuns, formatThreadContext, countContextRuns } from '../thread.js';
 import { teamDreamingContext } from '../dreaming-sources.js';
@@ -33,16 +34,23 @@ export function createContext({ dataDir, registry, redact = defaultRedact, now =
     }
     return { chat, settings, notes, resetAt, own, others, budget };
   }
-  function team(g, memory) { return buildTeamPack({ ...g.own, notes: g.notes.text, memory, otherChats: g.others, redact }); }
-  function legacyTeam(p, c, memory) {
+  const recipientsFor = (options) => ({ planner: options.recipients?.planner ?? UNKNOWN_RECIPIENT, developer: options.recipients?.developer ?? UNKNOWN_RECIPIENT });
+  const settingsFor = (p) => { try { return store(p).settings(); } catch { return { crossChat: true, budget: { ...DEFAULT_BUDGET }, models: {} }; } };
+  function team(g, memory, recipients) { return buildTeamPack({ ...g.own, notes: g.notes.text, memory, otherChats: g.others, redact,
+    units: 4 * budgetFor(g.settings, recipients.planner).tokens, developerUnits: 4 * briefFor(g.settings, recipients.developer) }); }
+  function legacyTeam(p, c, memory, recipients) {
     let text = '';
     try { text = teamDreamingContext(formatThreadContext(listRuns(scope(p, c).hiveDir), { maxChars: 8000 }), memory); } catch {}
     text = text.toWellFormed();
-    return { text, developer: '', sections: text ? [{ id: 'recent', title: 'Earlier runs (legacy fallback)', chars: text.length, text, exact: true }] : [], meta: { degraded: true } };
+    const settings = settingsFor(p);
+    return { text, developer: '', sections: text ? [{ id: 'recent', title: 'Earlier runs (legacy fallback)', chars: text.length, tokens: tokens(text), text, exact: true }] : [],
+      meta: { degraded: true, budget: { tokens: budgetFor(settings, recipients.planner).tokens, used: tokens(text) }, developer: { tokens: briefFor(settings, recipients.developer), used: 0 } } };
   }
   function pipeline(p, c, g, options) {
+    const { historyBytes, contextBytes } = pipelineAllowance(g.settings, recipientsFor(options).planner);
     const wire = buildPipelineHistory({ dataDir, projectId: p, chatId: c, redact: options.redact ?? redact, projectMemory: options.projectMemory ?? [],
-      context: buildPipelineContext({ turns: g.own.turns, notes: g.notes.text, otherChats: g.others, redact: options.redact ?? redact }), since: g.resetAt, budget: g.budget, excludedRunId: options.activeRunId });
+      context: buildPipelineContext({ turns: g.own.turns, notes: g.notes.text, otherChats: g.others, redact: options.redact ?? redact }), since: g.resetAt, budget: g.budget, excludedRunId: options.activeRunId,
+      allowance: { historyBytes, contextBytes } });
     if (wire) wire.truncated ||= g.own.truncated || Boolean(g.budget.exhausted);
     return wire;
   }
@@ -53,7 +61,8 @@ export function createContext({ dataDir, registry, redact = defaultRedact, now =
     registry.getProject(p);
     const project = store(p);
     let degraded = false;
-    const result = { v: 1, settings: project.settings(), notes: project.notes(), chats: registry.listChats(p).filter((c) => c.projectId === p).map((chat) => {
+    const result = { v: 2, settings: project.settings(), defaults: { budget: { ...DEFAULT_BUDGET }, window: L.window, percent: [L.percentMin, L.percentMax], tokens: [L.tokensMin, L.tokensMax], models: L.overrides,
+      pipeline: [Math.floor((L.pipelineHistoryFloor + L.pipelineContextFloor) / 4), Math.floor((Math.floor(L.enginePromptBytes / 4) + Math.floor(L.enginePromptBytes / 8)) / 4)], pipelineBytes: { history: [L.pipelineHistoryFloor, Math.floor(L.enginePromptBytes / 4)], context: [L.pipelineContextFloor, Math.floor(L.enginePromptBytes / 8)] } }, notes: project.notes(), chats: registry.listChats(p).filter((c) => c.projectId === p).map((chat) => {
       const state = store(p, chat.id), resetAt = state.state().resetAt;
       degraded ||= state.degraded;
       let turns = 0;
@@ -73,34 +82,44 @@ export function createContext({ dataDir, registry, redact = defaultRedact, now =
   }
   function inspect(p, c, options = {}) {
     const chat = scope(p, c), engine = chat.engine === 'pipeline' ? 'pipeline' : 'team';
-    let g, pack, wire, degraded = false;
+    const recipients = recipientsFor(options);
+    let g, pack, wire, pipelineNotes = '', degraded = false;
     try {
       g = gather(p, c, { ...options, inspect: true });
-      if (engine === 'team') pack = team(g, typeof options.memory === 'string' ? options.memory : '');
-      else wire = pipeline(p, c, g, { projectMemory: Array.isArray(options.memory) ? options.memory : [], activeRunId: options.activeRunId });
+      if (engine === 'team') pack = team(g, typeof options.memory === 'string' ? options.memory : '', recipients);
+      else {
+        pipelineNotes = maskHistoricalText((options.redact ?? redact)(safeText(g.notes.text, options.redact ?? redact).trim()).toWellFormed().replace(/<\/?(?:earlier-runs|conversation-context)\s*>/gi, (tag) => '[' + tag.replace(/[<>/\s]/g, '') + ']'), true);
+        wire = pipeline(p, c, g, { ...options, projectMemory: Array.isArray(options.memory) ? options.memory : [], activeRunId: options.activeRunId });
+      }
     } catch {
       degraded = true;
       g ??= { settings: store(p).settings(), notes: store(p).notes(), resetAt: store(p, c).state().resetAt, own: { turns: [], total: 0, unread: 0, truncated: false }, others: [] };
-      if (engine === 'team') pack = legacyTeam(p, c, options.memory);
+      if (engine === 'team') pack = legacyTeam(p, c, options.memory, recipients);
       else wire = legacyPipeline(p, c, { projectMemory: Array.isArray(options.memory) ? options.memory : [] }, g.resetAt);
     }
     const sections = engine === 'team' ? pack.sections : pipelineSections(wire), runs = wire?.runs ?? [], context = wire?.context;
     const meta = engine === 'team' ? { turns: { total: g.own.total, visible: g.own.turns.length, detailed: 0, condensed: 0, omitted: 0 }, otherChats: { chats: 0, turns: 0 },
-      notes: { chars: 0 }, memory: { chars: 0 }, budget: { limit: L.teamAccepted, used: pack.text.length }, truncated: false, ...pack.meta } : {
+      notes: { chars: 0, tokens: 0, cut: false }, memory: { chars: 0, tokens: 0 }, truncated: false, ...pack.meta } : {
       turns: { total: g.own.total, visible: g.own.turns.length + g.own.unread, detailed: runs.length, condensed: context?.earlier?.length ?? 0, omitted: Math.max(0, g.own.turns.length - runs.length - (context?.earlier?.length ?? 0)) + g.own.unread },
-      otherChats: { chats: context?.other_chats?.length ?? 0, turns: context?.other_chats?.reduce((n, o) => n + o.turns.length, 0) ?? 0 }, notes: { chars: context?.notes?.length ?? 0 },
-      memory: { chars: wire?.project_memory?.reduce((n, m) => n + m.text.length, 0) ?? 0 }, budget: { limit: L.pipelineBytes, used: wire ? Buffer.byteLength(JSON.stringify(wire)) : 0 }, truncated: Boolean(wire?.truncated || g.own.truncated) };
-    return { v: 1, engine, settings: g.settings, reset: g.resetAt ? { at: g.resetAt } : null, ...meta, notes: { ...meta.notes, limit: L.notes }, degraded: Boolean(degraded || g.own.degraded || g.budget?.degraded || pack?.meta.degraded),
-      sections, developer: engine === 'team' ? { chars: pack.developer.length, text: pack.developer } : null };
+      otherChats: { chats: context?.other_chats?.length ?? 0, turns: context?.other_chats?.reduce((n, o) => n + o.turns.length, 0) ?? 0 }, notes: { chars: context?.notes?.length ?? 0, tokens: tokens(context?.notes), cut: (context?.notes?.length ?? 0) < pipelineNotes.length },
+      memory: { chars: wire?.project_memory?.reduce((n, m) => n + m.text.length, 0) ?? 0, tokens: tokens(wire?.project_memory?.map((m) => m.text).join('\n')) }, truncated: Boolean(wire?.truncated || g.own.truncated) };
+    const allowance = pipelineAllowance(g.settings, recipients.planner), contextBytes = context ? Buffer.byteLength(JSON.stringify(context)) : 0;
+    const wireBytes = wire ? Buffer.byteLength(JSON.stringify(wire)) : 0;
+    const budget = engine === 'team' ? { ...budgetFor(g.settings, recipients.planner), used: tokens(pack.text) } : { ...allowance,
+      used: Math.ceil((Math.min(wireBytes - contextBytes, allowance.historyBytes) + Math.min(contextBytes, allowance.contextBytes)) / 4) };
+    return { v: 2, engine, settings: g.settings, reset: g.resetAt ? { at: g.resetAt } : null, ...meta, model: recipients.planner, budget,
+      notes: { ...meta.notes, limit: L.notes }, degraded: Boolean(degraded || g.own.degraded || g.budget?.degraded || pack?.meta.degraded),
+      sections, developer: engine === 'team' ? { model: recipients.developer, budget: { tokens: briefFor(g.settings, recipients.developer), used: tokens(pack.developer) }, chars: pack.developer.length, tokens: tokens(pack.developer), text: pack.developer } : null };
   }
   return { status, inspect,
     configure(p, value) { registry.getProject(p); store(p).configure(value); return status(p); },
     setNotes(p, text) { registry.getProject(p); store(p).setNotes(text); return status(p); },
     reset(p, c) { scope(p, c); store(p, c).setReset(new Date(now()).toISOString()); return inspect(p, c); },
     restore(p, c) { scope(p, c); store(p, c).setReset(null); return inspect(p, c); },
-    forTeam(p, c, { memory = '' } = {}) {
-      try { const { text, developer, meta } = team(gather(p, c), memory); return { text, developer, meta }; }
-      catch { const { text, developer, meta } = legacyTeam(p, c, memory); return { text, developer, meta }; }
+    forTeam(p, c, options = {}) {
+      const memory = options.memory ?? '', recipients = recipientsFor(options);
+      try { const { text, developer, meta } = team(gather(p, c), memory, recipients); return { text, developer, meta }; }
+      catch { const { text, developer, meta } = legacyTeam(p, c, memory, recipients); return { text, developer, meta }; }
     },
     forPipeline(p, c, options = {}) {
       let g;
