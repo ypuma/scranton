@@ -25,6 +25,19 @@ by: "core"
 ---
 
 ---
+file: "src/core/model-windows.js"
+symbol: "createModelWindows"
+ordinal: 0
+kind: "how"
+text: "Resolver for a model's context window: resolve({ provider?, model }) -> { id, window, known }. Order: custom provider declarations first (provider store under PI_CODING_AGENT_DIR or ~/.pi/agent; providers with status 'error' are skipped), then pi's model registry through createModelRuntime() from auth.js (one shared lazy promise per process; a failed load is cached as null). A window counts only if every match has the same positive contextWindow; otherwise, or for a malformed ref (modelId: well-formed, 1..256 chars, no whitespace or C0/C1 control characters), the answer is the unknown recipient with LIMITS.window (128000) and known:false. resolve never throws and uses no network. warm() starts the registry load in the background (about 1.3 s cold here). Both sources are injectable ({ providers, runtime }); the server creates and warms one resolver in registry mode only and tests inject a fixture (test/server/model-windows-fixture.js)."
+see_also: ".enma/context-budget-contract.md section 3; src/server/visualizer-server.js (warm), src/server/control.js (resolve only when a context pack is built)"
+hash: "span:c10e303f0672f6c7"
+written: "2026-11-17"
+commit: "6e5199a"
+by: "core"
+---
+
+---
 file: "src/core/orchestrator.js"
 symbol: "Orchestrator"
 ordinal: 0

@@ -34,11 +34,12 @@ dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use
 - Code, comments, CLI/UI text and SKILL.md prompts in English. README.md is German.
 - Full suite: `node --test "test/**/*.test.js"` from the project root (also `npm.cmd test`).
 
-## Gates (as run for release 0.3.0, 2026-11-17)
-- Node: `npm.cmd run app:prepare`, then `node --test "test/**/*.test.js"` from the project root (1890 tests, about 3 minutes).
+## Gates (as run for release 0.4.0, 2026-11-17)
+- Node: `npm.cmd run app:prepare`, then `node --test "test/**/*.test.js"` from the project root (2102 tests, about 3 minutes).
+  Run the glob directly in the shell; when spawning it from a script pass it as one argv element WITHOUT quotes (a quoted pattern matched nothing once and reported `tests 0` with exit code 0).
 - Python: from `engine\`, with TEMP, TMP and TMPDIR set to `<root>\.scratch\pipeline\tmp` and PYTHONPYCACHEPREFIX to `<root>\.scratch\pipeline\bytecode`:
   `..\.scratch\pipeline\venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider --basetemp ../.scratch/pipeline/<lane>/pytest`
-  (1322 passed, 37 skipped, about 23 minutes - run targeted files while iterating). Ruff and mypy are configured in `engine/pyproject.toml`.
+  (1381 passed, 37 skipped, about 23 minutes - run targeted files while iterating). Ruff and mypy are configured in `engine/pyproject.toml`.
 - The untracked `.claude/` and `hive/live.json` belong to the user: never stage, delete, move or ignore them. Never commit or push unless the task says so.
 
 ## Tool caution (agent lost on 2026-11-17)
