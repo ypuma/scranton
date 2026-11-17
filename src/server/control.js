@@ -250,7 +250,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     try {
       try { Promise.resolve(dreaming?.()?.cancelReflection?.()).catch(() => {}); } catch {}
       onStarting(info);
-      removeRequest();
+      try { removeRequest(); } catch (err) { if (!demo && body.request.length > 4000) throw err; }
       if (!demo && body.request.length > 4000) {
         try { writeFileAtomicSync(requestFile, JSON.stringify({ v: 1, request: body.request })); }
         catch (err) {

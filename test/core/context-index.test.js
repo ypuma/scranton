@@ -103,7 +103,6 @@ test('v2 Pipeline documents pass allowance and count only engine-renderable wire
   f.pipelineRun(f.pipe, 'pipe0001', 'task'); c.setNotes(f.p.id, 'N'.repeat(16000));
   const recipients = { planner: { id: 'provider/planner', window: 200000, known: true } }, a = pipelineAllowance({}, recipients.planner);
   const wire = c.forPipeline(f.p.id, f.pipe.id, { recipients }), d = c.inspect(f.p.id, f.pipe.id, { recipients });
-  if (!wire?.budget) { t.skip('pending lane A2 buildPipelineHistory allowance'); return; }
   assert.deepEqual(wire.budget, { history_bytes: a.historyBytes, context_bytes: a.contextBytes });
   const cb = Buffer.byteLength(JSON.stringify(wire.context)), wb = Buffer.byteLength(JSON.stringify(wire));
   assert.equal(d.v, 2); assert.equal(d.budget.tokens, 17500); assert.equal(d.budget.capped, 'engine'); assert.equal(d.developer, null); assert.deepEqual(d.model, recipients.planner);

@@ -244,6 +244,15 @@ test('budget request cleanup: argv start removes stale request before spawn', as
   assert.equal(fs.existsSync(file), false);
 });
 
+test('budget request cleanup: argv start tolerates an unremovable stale request', async (t) => {
+  const f = await fixture(t), file = path.join(f.chat.hiveDir, 'control/request.json');
+  fs.mkdirSync(file, { recursive: true }); fs.writeFileSync(path.join(file, 'stale'), 'stale');
+  assert.equal((await f.req(f.route + '/runs', { request: 'Short', trustedHost: true })).status, 202);
+  assert.deepEqual(f.invocation.args.slice(-2), ['--', 'Short']);
+  assert.equal(f.invocation.args.includes('--request-file'), false);
+  assert.equal(fs.readFileSync(path.join(file, 'stale'), 'utf8'), 'stale');
+});
+
 test('budget request cleanup: partial write fails clearly without spawning or leaving files', async (t) => {
   const f = await fixture(t), file = path.join(f.chat.hiveDir, 'control/request.json'), tmp = `${file}.${process.pid}.tmp`;
   const write = fs.writeFileSync;
