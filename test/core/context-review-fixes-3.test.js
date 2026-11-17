@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { replaceDuringRead } from './fixtures/replace-during-read.js';
+import { sameFileIdentity } from '../../src/core/context/file-identity.js';
 import { createContext } from '../../src/core/context/index.js';
 import { createContextStore } from '../../src/core/context/store.js';
 import { canonicalDirectory } from '../../src/core/context/paths.js';
@@ -24,26 +24,29 @@ function fixture(t) {
   return { dir, dataDir, projectId, chatId, root, chat, registry, write, run, scope: { dataDir, projectId, chatId } };
 }
 
-for (const budgeted of [false, true]) for (const phase of ['open', 'read']) test(`C2.1 Pipeline rejects same-size replacement at ${phase} (${budgeted ? 'budget' : 'legacy'})`, (t) => {
+for (const budgeted of [false, true]) for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`C2.1 Pipeline rejects same-size replacement at ${phase} (${budgeted ? 'budget' : 'legacy'}, ${reuseIndex ? 'reused' : 'native'} index)`, (t) => {
   const f = fixture(t), file = f.run('run1'); f.run('good');
-  const replacement = file + '.replacement'; fs.copyFileSync(file, replacement);
-  let replaced = false;
-  const swap = () => { fs.renameSync(file, file + '.old'); fs.renameSync(replacement, file); replaced = true; };
-  if (phase === 'open') {
-    const open = fs.openSync; t.mock.method(fs, 'openSync', (name, ...args) => { if (name === file && !replaced) swap(); return open(name, ...args); });
-  } else {
-    const read = fs.readSync; t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); if (!replaced) swap(); return n; });
-  }
+  const replaced = replaceDuringRead(t, file, phase, reuseIndex);
   const diagnostics = {}, options = budgeted ? { budget: { bytes: 1024 }, diagnostics } : { diagnostics };
   assert.equal(readPipelineHistoryJson(f.dataDir, path.relative(f.dataDir, file).split(path.sep).join('/'), options), null);
-  assert.equal(replaced, true); assert.equal(diagnostics.degraded, true);
+  assert.equal(replaced(), true); assert.equal(diagnostics.degraded, true);
   const history = buildPipelineHistory(f.scope); assert.equal(history.runs.find((r) => r.run_id === 'good').task, 'good');
 });
 
-for (const field of ['dev', 'ino', 'size', 'nlink']) test(`C2.1 Pipeline rejects descriptor ${field} mismatch`, (t) => {
-  const f = fixture(t), file = f.run('run1'), fstat = fs.fstatSync;
-  t.mock.method(fs, 'fstatSync', (...args) => { const stat = fstat(...args); Object.defineProperty(stat, field, { value: stat[field] + 1 }); return stat; });
+for (const field of ['dev', 'ino', 'size', 'nlink', 'mtimeNs', 'ctimeNs', 'birthtimeNs']) test(`C2.1 Pipeline rejects descriptor ${field} mismatch`, (t) => {
+  const f = fixture(t), file = f.run('run1'), fstat = fs.fstatSync; let fieldType;
+  t.mock.method(fs, 'fstatSync', (...args) => { const stat = fstat(...args); fieldType = typeof stat[field]; Object.defineProperty(stat, field, { value: stat[field] + 1n }); return stat; });
   assert.equal(readPipelineHistoryJson(f.dataDir, path.relative(f.dataDir, file).split(path.sep).join('/')), null);
+  assert.equal(fieldType, 'bigint');
+});
+
+test('C2.1 file identity ignores access time but requires BigInt fields', (t) => {
+  const f = fixture(t), file = f.run('run1'), stat = fs.lstatSync(file, { bigint: true });
+  const copy = () => Object.assign(Object.create(Object.getPrototypeOf(stat)), stat);
+  const accessed = copy(); accessed.atimeNs += 1n; accessed.atimeMs += 1n; accessed.atime = new Date(0);
+  assert.equal(sameFileIdentity(stat, accessed), true);
+  const rounded = copy(); rounded.ino = Number(stat.ino);
+  assert.equal(sameFileIdentity(stat, rounded), false);
 });
 
 test('C2.2 linked data ancestor preserves Pipeline history but links below the root degrade alone', (t) => {
@@ -117,13 +120,12 @@ test('C2.4 Pipeline readable single-line fields cannot forge summary lines and w
   assert.equal(JSON.stringify(wire), before);
 });
 
-test('C2.5 legacy whitespace-only task and plan fields match HEAD history exactly', async (t) => {
+test('C2.5 legacy whitespace-only task and plan fields match the pre-context golden bytes', (t) => {
   const f = fixture(t); f.run('run1'); const whitespace = ' \n\t\r\u2028\u2029 ';
   f.write(path.join(f.root, 'run1/run.json'), { task: whitespace });
   f.write(path.join(f.root, 'run1/artifacts/plan.json'), { summary: whitespace, steps: [{ id: whitespace, title: whitespace, description: whitespace, files: [{ path: whitespace, action: whitespace }], criteria: [whitespace] }], acceptance_criteria: [{ id: whitespace, text: whitespace, verified_by: whitespace }] });
-  const headFile = path.join(f.dir, 'head-pipeline-history.mjs');
-  fs.writeFileSync(headFile, execFileSync('git', ['show', 'HEAD:src/core/pipeline-history.js'], { encoding: 'utf8' }));
-  const head = await import(pathToFileURL(headFile).href), expected = head.buildPipelineHistory(f.scope);
-  assert.equal(expected.runs[0].task, whitespace);
-  assert.deepEqual(buildPipelineHistory(f.scope), expected);
+  // Generated once with the same inputs using 2867259:src/core/pipeline-history.js.
+  const expected = fs.readFileSync(new URL('./fixtures/pipeline-history-legacy-whitespace.json', import.meta.url), 'utf8');
+  assert.equal(JSON.parse(expected).runs[0].task, whitespace);
+  assert.equal(JSON.stringify(buildPipelineHistory(f.scope)) + '\n', expected);
 });

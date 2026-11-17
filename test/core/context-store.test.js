@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createContextStore, normalizeNotes } from '../../src/core/context/store.js';
+import { replaceDuringRead } from './fixtures/replace-during-read.js';
 
 function fixture(t) { const base = path.resolve('.scratch/context-system/lane-a'); fs.mkdirSync(base, { recursive: true }); const data = fs.mkdtempSync(path.join(base, 'store-')); t.after(() => fs.rmSync(data, { recursive: true, force: true })); return data; }
 // Anchors: normalizeNotes length/control handling, read's size/nlink checks and defaults,
@@ -26,6 +27,14 @@ test('missing/corrupt/oversized files default independently; atomic writes leave
   fs.writeFileSync(path.join(data, 'projects/project/chats/chat/context/state.json'), '{broken'); assert.equal(c.state().resetAt, null);
   assert.throws(() => s.configure({ crossChat: true, other: true })); assert.throws(() => createContextStore(data, '../escape'));
 });
+for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`store rejects same-size replacement at ${phase} (${reuseIndex ? 'reused' : 'native'} index) independently`, (t) => {
+  const data = fixture(t), store = createContextStore(data, 'project');
+  store.setNotes('ORIGINAL'); store.configure({ crossChat: false });
+  const file = path.join(data, 'projects/project/context/notes.md'), replaced = replaceDuringRead(t, file, phase, reuseIndex);
+  assert.equal(store.notes().text, ''); assert.equal(replaced(), true); assert.equal(store.degraded, true);
+  assert.deepEqual(store.settings(), { crossChat: false });
+});
+
 test('linked ancestor and hardlinked artifacts are refused without modifying their targets', (t) => {
   const data = fixture(t), victim = path.join(data, 'victim'); fs.mkdirSync(victim);
   const project = path.join(data, 'projects/project'); fs.mkdirSync(path.dirname(project), { recursive: true }); fs.symlinkSync(victim, project, process.platform === 'win32' ? 'junction' : 'dir');

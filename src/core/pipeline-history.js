@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { LIMITS } from './context/limits.js';
 import { canonicalDirectory } from './context/paths.js';
+import { sameFileIdentity } from './context/file-identity.js';
 
 import { PIPELINE_TERMINAL, maskHistoricalText } from './context/shared.js';
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -35,19 +36,18 @@ export function readPipelineHistoryJson(base, rel, { budget, cache = budget?.cac
   try {
     base = canonicalDirectory(path.resolve(base));
     const file = regularPath(base, rel);
-    const before = fs.lstatSync(file);
-    if (!before.isFile() || before.nlink !== 1 || before.size > MAX_ARTIFACT) return invalid();
+    const before = fs.lstatSync(file, { bigint: true });
+    if (!before.isFile() || before.nlink !== 1n || before.size > MAX_ARTIFACT) return invalid();
     fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    const stat = fs.fstatSync(fd);
-    const same = (a, b) => a.isFile() && a.nlink === 1 && a.dev === b.dev && a.ino === b.ino && a.size === b.size;
-    if (!same(stat, before) || stat.size > MAX_ARTIFACT) return invalid();
+    const stat = fs.fstatSync(fd, { bigint: true });
+    if (!sameFileIdentity(stat, before) || stat.size > MAX_ARTIFACT) return invalid();
     if (budget && stat.size > budget.bytes) { budget.exhausted = true; return null; }
-    const buffer = Buffer.alloc(budget ? stat.size : MAX_ARTIFACT + 1);
+    const buffer = Buffer.alloc(budget ? Number(stat.size) : MAX_ARTIFACT + 1);
     let length = 0, count;
     while (length < buffer.length && (count = fs.readSync(fd, buffer, length, buffer.length - length, null))) length += count;
     if (budget) { budget.bytes -= length; if (budget.bytes < 0) { budget.exhausted = true; return null; } }
     regularPath(base, rel);
-    if (length > MAX_ARTIFACT || length !== stat.size || !same(fs.fstatSync(fd), stat) || !same(fs.lstatSync(file), stat)) return invalid();
+    if (length > MAX_ARTIFACT || BigInt(length) !== stat.size || !sameFileIdentity(fs.fstatSync(fd, { bigint: true }), stat) || !sameFileIdentity(fs.lstatSync(file, { bigint: true }), stat)) return invalid();
     const value = JSON.parse(buffer.subarray(0, length).toString('utf8'));
     const result = object(value) ? value : invalid();
     cache?.set(key, result);

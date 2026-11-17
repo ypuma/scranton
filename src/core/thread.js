@@ -3,6 +3,7 @@ import path from 'node:path';
 import { canonicalDirectory, checkScopedPath } from './context/paths.js';
 import { LIMITS } from './context/limits.js';
 import { isRelativeFile } from './context/shared.js';
+import { sameFileIdentity } from './context/file-identity.js';
 
 const text = (value) => typeof value === 'string' ? value : '';
 const line = (value) => text(value).replace(/<\/?earlier-runs\s*>/gi, '[earlier-runs]').replace(/[\r\n\u2028\u2029]+/g, ' ').trim();
@@ -12,22 +13,23 @@ const checkPath = (target, root) => checkScopedPath(root, target, false);
 const contextRoot = (hive) => path.join(canonicalDirectory(path.dirname(path.resolve(hive))), path.basename(path.resolve(hive)));
 function boundedRead(file, max = MAX_HISTORY_BYTES, hardened = false) {
   if (hardened) checkPath(file, hardened);
-  const before = hardened ? fs.lstatSync(file) : null;
-  if (hardened && (!before.isFile() || before.nlink !== 1)) throw Error('Invalid history artifact');
-  const same = (a, b) => a.isFile() && a.nlink === 1 && a.dev === b.dev && a.ino === b.ino && a.size === b.size;
+  const options = hardened ? { bigint: true } : undefined;
+  const before = hardened ? fs.lstatSync(file, options) : null;
+  if (hardened && (!before.isFile() || before.nlink !== 1n)) throw Error('Invalid history artifact');
   const fd = fs.openSync(file, hardened ? fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) : 'r');
   try {
-    const stat = fs.fstatSync(fd), fileSize = stat.size;
-    if (hardened && !same(stat, before)) throw Error('Invalid history artifact');
-    if (fileSize > max) throw Error('History exceeds read limit');
+    const stat = fs.fstatSync(fd, options);
+    if (hardened && !sameFileIdentity(stat, before)) throw Error('Invalid history artifact');
+    if (stat.size > max) throw Error('History exceeds read limit');
+    const fileSize = Number(stat.size);
     const bytes = Buffer.allocUnsafe(Math.min(fileSize, max));
     let size = 0, count;
     while (size < bytes.length && (count = fs.readSync(fd, bytes, size, bytes.length - size, null))) size += count;
-    const after = fs.fstatSync(fd);
+    const after = fs.fstatSync(fd, options);
     if (after.size > max) throw Error('History exceeds read limit');
     if (hardened) {
       checkPath(file, hardened);
-      if (!same(after, stat) || !same(fs.lstatSync(file), stat) || size !== fileSize) throw Error('History artifact changed');
+      if (!sameFileIdentity(after, stat) || !sameFileIdentity(fs.lstatSync(file, options), stat) || size !== fileSize) throw Error('History artifact changed');
     }
     return bytes.toString('utf8', 0, size);
   } finally { fs.closeSync(fd); }

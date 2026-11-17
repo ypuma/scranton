@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { validateId } from '../projects.js';
 import { canonicalDirectory, checkScopedPath } from './paths.js';
 import { LIMITS } from './limits.js';
+import { sameFileIdentity } from './file-identity.js';
 
 const fail = (message) => { throw Object.assign(Error(message), { status: 400 }); };
 export function normalizeNotes(value) {
@@ -26,17 +27,17 @@ export function createContextStore(dataDir, projectId, chatId) {
     const file = path.join(directory, name); let fd;
     try {
       checkPath(file, false);
-      const before = fs.lstatSync(file);
-      if (!before.isFile() || before.nlink !== 1 || before.size > max) return invalid();
+      const before = fs.lstatSync(file, { bigint: true });
+      if (!before.isFile() || before.nlink !== 1n || before.size > max) return invalid();
       fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-      const stat = fs.fstatSync(fd);
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size > max || stat.dev !== before.dev || stat.ino !== before.ino || stat.size !== before.size) return invalid();
+      const stat = fs.fstatSync(fd, { bigint: true });
+      if (!sameFileIdentity(stat, before) || stat.size > max) return invalid();
       const bytes = Buffer.alloc(max + 1); let size = 0, n;
       while (size < bytes.length && (n = fs.readSync(fd, bytes, size, bytes.length - size, null))) size += n;
-      if (size > max || fs.fstatSync(fd).nlink !== 1) return invalid();
+      if (size > max) return invalid();
       checkPath(file, false);
-      const after = fs.lstatSync(file), opened = fs.fstatSync(fd);
-      if (!after.isFile() || after.nlink !== 1 || after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || opened.size !== stat.size || size !== stat.size) return invalid();
+      const after = fs.lstatSync(file, { bigint: true }), opened = fs.fstatSync(fd, { bigint: true });
+      if (!sameFileIdentity(after, stat) || !sameFileIdentity(opened, stat) || BigInt(size) !== stat.size) return invalid();
       return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size)), updatedAt: stat.mtime.toISOString() };
     } catch (error) { if (error.code !== 'ENOENT') invalid(); return null; }
     finally { if (fd !== undefined) fs.closeSync(fd); }

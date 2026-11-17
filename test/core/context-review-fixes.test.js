@@ -8,6 +8,7 @@ import { buildTeamPack, buildPipelineContext, condensedTurn } from '../../src/co
 import { clip, readTurns } from '../../src/core/context/turns.js';
 import { listRuns, listContextRuns } from '../../src/core/thread.js';
 import { buildPipelineHistory } from '../../src/core/pipeline-history.js';
+import { replaceDuringRead } from './fixtures/replace-during-read.js';
 
 function fixture(t) {
   const base = path.resolve('.scratch/context-system/lane-a2'); fs.mkdirSync(base, { recursive: true });
@@ -132,17 +133,11 @@ test('R7 redact credentials before any request/reply/file or Pipeline line cut',
   assert.doesNotMatch(JSON.stringify(turns), /sk-ABC/);
 });
 
-for (const phase of ['open', 'read']) test(`R8 hardened Team reader rejects same-size path replacement at ${phase}`, (t) => {
-  const f = fixture(t), c = f.chat('own'), file = f.team(c, 'run1', 'ORIGINAL');
-  const replacement = file + '.replacement'; fs.copyFileSync(file, replacement);
-  let replaced = false;
-  const swap = () => { fs.renameSync(file, file + '.old'); fs.renameSync(replacement, file); replaced = true; };
-  if (phase === 'open') {
-    const open = fs.openSync; t.mock.method(fs, 'openSync', (name, ...args) => { if (name === file && !replaced) swap(); return open(name, ...args); });
-  } else {
-    const read = fs.readSync; t.mock.method(fs, 'readSync', (...args) => { const n = read(...args); if (!replaced) swap(); return n; });
-  }
-  const result = listContextRuns(c.hiveDir); assert.equal(replaced, true); assert.doesNotMatch(JSON.stringify(result.runs), /ORIGINAL/);
+for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`R8 hardened Team reader rejects same-size path replacement at ${phase} (${reuseIndex ? 'reused' : 'native'} index)`, (t) => {
+  const f = fixture(t), c = f.chat('own'), file = f.team(c, 'run1', 'ORIGINAL'); f.team(c, 'good', 'HEALTHY');
+  const replaced = replaceDuringRead(t, file, phase, reuseIndex);
+  const result = listContextRuns(c.hiveDir); assert.equal(replaced(), true); assert.doesNotMatch(JSON.stringify(result.runs), /ORIGINAL/);
+  assert.equal(result.degraded, true); assert.equal(result.runs.find((r) => r.id === 'good').request, 'HEALTHY');
 });
 
 test('R8 context storage reports context paths, not dreaming paths', (t) => {
