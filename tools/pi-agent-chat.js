@@ -1,3 +1,5 @@
+import codexCompaction from './pi-codex-compaction.js';
+
 export const CHAT_TITLE = 'scranton.agent_chat.v1';
 // Leave transport headroom between recipient, broker and Pi's local UI deadline.
 export const RPC_ACK_TIMEOUT_MS = 5000;
@@ -11,6 +13,7 @@ export function validChat(value) {
 }
 
 export default function agentChat(pi) {
+  codexCompaction(pi);
   pi.registerTool({
     name: 'agent_chat',
     label: 'Agent chat',

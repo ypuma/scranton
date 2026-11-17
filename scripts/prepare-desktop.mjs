@@ -200,12 +200,12 @@ export async function prepareDesktop() {
   const installed = await json(path.join(root, piPath, 'package.json'));
   const lock = await json(path.join(root, 'package-lock.json'));
   const entrypoint = typeof installed.bin === 'string' ? installed.bin : installed.bin?.pi;
-  if (installed.name !== '@earendil-works/pi-coding-agent' || installed.version !== '1.5.0' ||
+  if (installed.name !== '@earendil-works/pi-coding-agent' || installed.version !== '1.5.2' ||
       lock.packages[piPath.replaceAll('\\', '/')]?.version !== installed.version || !entrypoint ||
       path.isAbsolute(entrypoint) || entrypoint.split(/[\\/]/).includes('..')) throw new Error('Installed Pi identity/entrypoint does not match the supported lockfile.');
   await fs.access(path.join(root, piPath, entrypoint));
   const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
-    'tools/fake-pi.js', 'tools/fake-pi-rpc.js', 'tools/pi-agent-chat.js', 'tools/pipeline-pi-complete.js', 'tools/dreaming-pi-complete.js', 'scranton.config.json', 'package.json', 'package-lock.json'];
+    'tools/fake-pi.js', 'tools/fake-pi-rpc.js', 'tools/pi-agent-chat.js', 'tools/pi-codex-compaction.js', 'tools/pipeline-pi-complete.js', 'tools/dreaming-pi-complete.js', 'scranton.config.json', 'package.json', 'package-lock.json'];
   for (const input of inputs) {
     try { await fs.access(path.join(root, input)); }
     catch { throw new Error(`Required desktop input is missing: ${input}`); }

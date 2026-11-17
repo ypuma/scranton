@@ -216,6 +216,7 @@ class Feedback(StrictModel):
     kind: Literal["output_invalid", "edits_rejected", "checks_failed", "review_changes"]
     message: str
     details: list[str] = Field(default_factory=list)
+    prior: "Feedback | None" = None  # output_invalid only: the feedback the invalid turn was answering
 
 
 class StepRecord(StrictModel):

@@ -67,7 +67,7 @@ Options:
   --parallel N         Maximum concurrent milestone pipelines (default 3)
   --trusted-host       Explicitly run outside Docker (worktrees remain isolated)
   --sandbox MODE       host (default, no OS isolation); explicit host requires --trusted-host
-  --sandbox-image IMG  Docker image (default scranton-sandbox:1.5.0-r2)
+  --sandbox-image IMG  Docker image (default scranton-sandbox:1.5.2-r1)
   --sandbox-network N  none | bridge (default bridge)
   --workspace DIR      Where the agents work (default ./workspace; demo: ./demo-workspace)
   --hive DIR           Mailbox + event directory (default ./hive)

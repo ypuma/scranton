@@ -4,6 +4,7 @@ from typing import Any
 
 from scranton_pipeline.nodes.common import Dependencies, scope_id
 from scranton_pipeline.state import PipelineState, counter, current_step, done_ids, get_plan
+from scranton_pipeline.tools.checks import check_ok
 
 
 def attempt_counter_key(state: PipelineState) -> str:
@@ -50,8 +51,8 @@ def attempt_observation(state: PipelineState, deps: Dependencies, *, rejected: b
         if (len({r["id"] for r in observed}) != len(observed)
                 or any(r.get("status") not in {"passed", "failed", "timed_out"} for r in observed)):
             return None
-        failed = any(r["status"] in {"failed", "timed_out"} for r in observed)
-        passed = {r["id"] for r in observed} == required and all(r["status"] == "passed" for r in observed)
+        failed = any(r["status"] in {"failed", "timed_out"} and not check_ok(r) for r in observed)
+        passed = {r["id"] for r in observed} == required and all(check_ok(r) for r in observed)
         if not failed and not passed:
             return None
     # JSON tuple encoding prevents model step IDs from colliding with scope separators.

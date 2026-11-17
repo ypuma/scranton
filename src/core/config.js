@@ -163,7 +163,7 @@ export function loadConfig({
     maxReplans: 0,
     sandbox: {
       mode: flags.trustedHost ? 'host' : pick(flags.sandbox, file.execution?.sandbox?.mode, 'host'),
-      image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-sandbox:1.5.0-r2'),
+      image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-sandbox:1.5.2-r1'),
       network: pick(flags.sandboxNetwork, file.execution?.sandbox?.network, 'bridge')
     }
   };
@@ -224,7 +224,7 @@ export function loadConfig({
   return { configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, pi, agents, warnings, onBreaker };
 }
 
-// Audited against pi 1.5.0 cli/args.js. Unknown flags fail closed, including future resource loaders.
+// Audited against pi 1.5.2 cli/args.js (unchanged from 1.5.0). Unknown flags fail closed, including future resource loaders.
 const GATE_VALUE_FLAGS = new Set(['--provider', '--model', '--api-key', '--system-prompt', '--append-system-prompt', '--name', '-n', '--session', '--session-id', '--fork', '--session-dir', '--models', '--thinking']);
 const GATE_BOOLEAN_FLAGS = new Set(['--continue', '-c', '--resume', '-r', '--no-session', '--no-extensions', '-ne', '--no-mcp', '--no-skills', '-ns', '--no-prompt-templates', '-np', '--no-themes', '--no-context-files', '-nc', '--verbose', '--no-approve', '-na', '--offline']);
 const GATE_TOOL_FLAGS = new Set(['--tools', '-t', '--exclude-tools', '-xt', '--no-tools', '-nt', '--no-builtin-tools', '-nbt', '--extension', '-e', '--skill', '--prompt-template', '--theme', '--']);

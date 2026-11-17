@@ -31,7 +31,7 @@
     "isolation": "worktree",
     "sandbox": {
       "mode": "host",
-      "image": "scranton-sandbox:1.5.0-r2",
+      "image": "scranton-sandbox:1.5.2-r1",
       "network": "bridge"
     },
     "persistentSessions": true,

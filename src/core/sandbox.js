@@ -23,7 +23,7 @@ const contains = (root, file) => { const rel = path.relative(root, file); return
 
 function config(value = {}) {
   for (const key of Object.keys(value)) if (!['mode', 'image', 'network', 'credentialEnvNames'].includes(key)) throw new Error(`Unsupported sandbox setting: ${key}`);
-  const result = { mode: 'host', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge', ...value };
+  const result = { mode: 'host', image: 'scranton-sandbox:1.5.2-r1', network: 'bridge', ...value };
   if (!['host', 'docker'].includes(result.mode)) throw new Error('Sandbox mode must be docker or host');
   if (!['bridge', 'none'].includes(result.network)) throw new Error('Sandbox network must be bridge or none');
   if (typeof result.image !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$/.test(result.image)) throw new Error('Invalid sandbox image');
@@ -204,7 +204,12 @@ export async function prepareSandbox(options, dependencies = {}) {
   mount(work, '/workspace');
   mount(session, '/session');
   mount(prompt, '/scranton/prompt.md', true);
-  if (extension) mount(extension, '/scranton/extension.js', true);
+  if (extension) {
+    mount(extension, '/scranton/extension.js', true);
+    // The managed extension imports its compaction module by relative path.
+    const compaction = path.join(path.dirname(extension), 'pi-codex-compaction.js');
+    if (fs.existsSync(compaction)) mount(checkPath(compaction, false), '/scranton/pi-codex-compaction.js', true);
+  }
   if (brokerExtension) mount(brokerExtension, '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/scranton-antigravity.mjs', true);
   mount(mask, '/workspace/.git', true);
   if (modelsFile) mount(modelsFile, '/home/pi/.pi/agent/models.json', true);

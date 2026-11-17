@@ -30,7 +30,7 @@ export const IMAGE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/;
 // The engine defaults (contract) for a server that does not report defaults.execution yet. trustedHost stays false:
 // the host is preselected, but its acknowledgement is only ever given by the human.
 export const EXECUTION_DEFAULTS = Object.freeze({
-  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'host', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge' }),
+  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'host', image: 'scranton-sandbox:1.5.2-r1', network: 'bridge' }),
   persistentSessions: true, simulated: false, trustedHost: false,
 });
 
@@ -416,7 +416,7 @@ export function buildRunRequest(form, control = DISABLED) {
       body.sandbox = 'docker';
       const image = raw(form.sandboxImage).trim();
       if (image) {
-        if (!IMAGE_RE.test(image)) return { error: 'The sandbox image must be a Docker image reference such as scranton-sandbox:1.5.0-r2.', field: 'sandboxImage' };
+        if (!IMAGE_RE.test(image)) return { error: 'The sandbox image must be a Docker image reference such as scranton-sandbox:1.5.2-r1.', field: 'sandboxImage' };
         body.sandboxImage = image;
       }
       const network = raw(form.sandboxNetwork);

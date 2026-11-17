@@ -120,7 +120,7 @@ test('dangerous settings, credential overrides and mount injection rejected', as
 
 test('reproducible image recipe includes pinned Pi and basic developer tools; no host context copied', () => {
   const recipe = fs.readFileSync(new URL('../../sandbox/Dockerfile', import.meta.url), 'utf8');
-  assert.match(recipe, /FROM node:24-bookworm-slim/); assert.match(recipe, /pi-coding-agent@1\.5\.0/);
+  assert.match(recipe, /FROM node:24-bookworm-slim/); assert.match(recipe, /pi-coding-agent@1.5.2/);
   assert.match(recipe, /git bash ripgrep/); assert.match(recipe, /USER 10001:10001/);
   assert.doesNotMatch(recipe, /^COPY |^ADD /m);
   assert.match(fs.readFileSync(new URL('../../sandbox/.dockerignore', import.meta.url), 'utf8'), /^\*\*/);
@@ -243,7 +243,7 @@ test('Docker default models are refused before run events; host defaults remain 
 test('error and blocked activities retain a full actionable first line in events and state', async () => {
   const { Orchestrator } = await import('../../src/core/orchestrator.js');
   const { initialState, reduce } = await import('../../src/core/state.js');
-  const line = `Failed: Docker sandbox image scranton-sandbox:1.5.0-r2 is not available locally; build it once: docker build -t scranton-sandbox:1.5.0-r2 "${fileURLToPath(new URL('../../sandbox', import.meta.url))}"`;
+  const line = `Failed: Docker sandbox image scranton-sandbox:1.5.2-r1 is not available locally; build it once: docker build -t scranton-sandbox:1.5.2-r1 "${fileURLToPath(new URL('../../sandbox', import.meta.url))}"`;
   for (const status of ['error', 'blocked']) {
     let event;
     Orchestrator.prototype.setStatus.call({ emit: (type, fields) => { event = { type, ...fields }; } }, 'michael', status, `${line}\nAdditional detail`);

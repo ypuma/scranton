@@ -202,7 +202,8 @@ def render_markdown(record: dict[str, Any]) -> str:
     for stage in ("baseline", "checks"):
         for check in record[stage]:
             lines.append("| " + " | ".join(cell(v) for v in ("final" if stage == "checks" else stage, check["id"],
-                         check["kind"], check["required"], check["status"], round(check["duration_s"], 3))) + " |")
+                         check["kind"], check["required"], check["status"] + (" (only failures already at baseline)" if check.get("baseline_unchanged") else ""),
+                         round(check["duration_s"], 3))) + " |")
     for stage in ("baseline", "checks"):
         for check in record[stage]:
             if check["status"] != "passed" and check.get("output_tail"):

@@ -17,7 +17,7 @@ test('staged desktop contains the actual installed Pi and only locked production
   const lock = await readJson(path.join(root, 'package-lock.json'));
   const manifest = await readJson(path.join(app, 'packaging-manifest.json'));
   const pi = 'node_modules/@earendil-works/pi-coding-agent';
-  assert.equal(manifest.pi.version, '1.5.0');
+  assert.equal(manifest.pi.version, '1.5.2');
   assert.equal(manifest.platform, process.platform, 'Staging is stale or belongs to another platform');
   assert.equal(manifest.arch, process.arch);
   assert.equal(manifest.target, desktopPlatform().target);
@@ -27,7 +27,7 @@ test('staged desktop contains the actual installed Pi and only locked production
     assert.equal((await readJson(path.join(app, relative, 'package.json'))).version, pkg.version, relative);
   }
   await assert.rejects(fs.access(path.join(app, 'node_modules/@tauri-apps/cli')));
-  for (const file of ['tools/pi-agent-chat.js', 'tools/pipeline-pi-complete.js', 'tools/fake-pi-rpc.js', 'tools/fake-pi.js', 'sandbox/Dockerfile', 'sandbox/.dockerignore', 'src/core/antigravity/provider.js', 'src/core/antigravity/oauth.js', 'src/core/antigravity/stream.js', 'src/core/antigravity/extension.js', 'src/core/antigravity/broker.js', 'src/core/antigravity/docker-extension.js']) {
+  for (const file of ['tools/pi-agent-chat.js', 'tools/pi-codex-compaction.js', 'tools/pipeline-pi-complete.js', 'tools/fake-pi-rpc.js', 'tools/fake-pi.js', 'sandbox/Dockerfile', 'sandbox/.dockerignore', 'src/core/antigravity/provider.js', 'src/core/antigravity/oauth.js', 'src/core/antigravity/stream.js', 'src/core/antigravity/extension.js', 'src/core/antigravity/broker.js', 'src/core/antigravity/docker-extension.js']) {
     assert.deepEqual(await fs.readFile(path.join(app, file)), await fs.readFile(path.join(root, file)), file);
   }
   for (const file of ['hive', '.env', '.pi', '.git', 'sessions', '.scratch']) await assert.rejects(fs.access(path.join(app, file)));

@@ -30,7 +30,7 @@ function parallelState(over = {}) {
       { id: 'c1', from: 'dwight-m1', to: 'dwight-m2', text: 'I export load() and save() from todo.js', delivery: 'delivered', ts: ts(40) },
       { id: 'c2', from: 'human', to: 'dwight-m2', text: 'Keep the CLI flags short', delivery: 'queued', ts: ts(55) },
     ],
-    execution: { maxParallel: 3, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'bridge' } },
+    execution: { maxParallel: 3, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-sandbox:1.5.2-r1', network: 'bridge' } },
     cycle: 1, failedCycles: 0, maxFailedCycles: 3, breaker: 'closed',
     agents: {
       michael: { status: 'waiting', activity: 'Overseeing m1', lastKeyword: 'PLAN_READY', updatedAt: ts(10), totals: { runs: 1, input: 1932, output: 407, cost: 0.006 } },

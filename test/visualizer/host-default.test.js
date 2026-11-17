@@ -7,7 +7,7 @@ import { harness, CONTROL } from './fixtures/run-drawer.js';
 const ACK = 'Confirm that the agents may run commands directly on this computer, or pick the Docker sandbox.';
 const SOL = { provider: 'openai', model: 'gpt-6.1-sol' };
 const MODELS = Object.fromEntries(['michael', 'dwight', 'oscar', 'hank', 'angela'].map((r) => [r, SOL]));
-const exec = (mode) => ({ ...CONTROL, defaults: { models: MODELS, execution: { maxParallel: 3, sandbox: { mode, image: 'scranton-sandbox:1.5.0-r2', network: 'bridge' } } } });
+const exec = (mode) => ({ ...CONTROL, defaults: { models: MODELS, execution: { maxParallel: 3, sandbox: { mode, image: 'scranton-sandbox:1.5.2-r1', network: 'bridge' } } } });
 const radios = (h) => [h.$('f-sandbox-docker').checked, h.$('f-sandbox-host').checked, h.$('f-trusted').checked];
 
 // guards `e.fHost.checked = d.sandbox === 'host';` in fillExecution and the host fallback of executionDefaults

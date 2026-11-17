@@ -50,7 +50,11 @@ def validate_plan(plan: Plan, deps: Dependencies) -> None:
 def invalid(state: PipelineState, deps: Dependencies, node: str, key: str, error: str) -> dict[str, Any]:
     if counter(state, key) >= deps.cfg.limits.max_output_repairs:
         return {"failure": EngineError(FailureClass.LLM_OUTPUT, "output_invalid", "Output repair budget exhausted").to_failure(node)}
-    return {"feedback": {"kind": "output_invalid", "message": error[:2000], "details": []},
+    # An invalid turn does not undo why the turn was asked for: keep the check, edit or review feedback it was
+    # answering, or the repair turn no longer knows what failed.
+    feedback = state.get("feedback") or {}
+    prior = feedback.get("prior") if feedback.get("kind") == "output_invalid" else feedback or None
+    return {"feedback": {"kind": "output_invalid", "message": error[:2000], "details": [], **({"prior": prior} if prior else {})},
             "counters": {key: 1}}
 
 

@@ -70,8 +70,14 @@ def render_tree(index: RepoIndex, *, max_entries: int) -> str:
     return "\n".join(shown)
 
 
+def _root_manifests(index: RepoIndex) -> set[str]:
+    # Checks run in the workspace root: a pyproject.toml or Cargo.toml of a subdirectory (engine/, src-tauri/)
+    # does not make `python -m pytest` or `cargo test` work there.
+    return {item["name"].casefold() for item in index.manifests if "/" not in item["path"].replace("\\", "/")}
+
+
 def detect_checks(index: RepoIndex) -> list[dict[str, Any]]:
-    names = {item["name"].casefold() for item in index.manifests}
+    names = _root_manifests(index)
     recipes = [("package.json", "npm-test", "test", ["npm", "test"]),
                ("pyproject.toml", "pytest", "test", ["python", "-m", "pytest", "-q"]),
                ("cargo.toml", "cargo-test", "test", ["cargo", "test"]),
@@ -81,6 +87,6 @@ def detect_checks(index: RepoIndex) -> list[dict[str, Any]]:
 
 
 def detect_setup(index: RepoIndex) -> list[dict[str, Any]]:
-    names = {item["name"].casefold() for item in index.manifests}
+    names = _root_manifests(index)
     return [{"id": "npm-ci", "argv": ["npm", "ci"], "network": True,
              "reason": "Detected package-lock.json"}] if "package-lock.json" in names and shutil.which("npm") else []

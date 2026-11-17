@@ -17,7 +17,12 @@ from scranton_pipeline.nodes.grounding import decide_criteria, evaluate, repair_
 from scranton_pipeline.nodes.planner import invalid
 from scranton_pipeline.observability import _rows
 from scranton_pipeline.state import PipelineState, counter, current_step, done_ids, get_plan
-from scranton_pipeline.tools.checks import failure_feedback, run_checks
+from scranton_pipeline.tools.checks import (
+    check_ok,
+    compare_with_baseline,
+    failure_feedback,
+    run_checks,
+)
 from scranton_pipeline.tools.context import eviction_index, fulfil, unique_evidence
 from scranton_pipeline.tools.fs import PathPolicy, write_bytes_atomic
 from scranton_pipeline.tools.git import WorkspaceRepo
@@ -88,7 +93,8 @@ def checked(state: PipelineState, deps: Dependencies, *, baseline: bool = False)
     results = run_checks(checks, sandbox=sandbox(deps), log_dir=deps.run_dir / "artifacts" / "logs",
                          label="baseline" if baseline else f"{deps.lane_suffix or ('int-' + str(state.get('wave', {}).get('number', 0)) if state.get('mode') == 'integration' else 'main')}-r{state.get('plan_revision', 0)}-step-{state.get('step_index', 0)}-R{state.get('review_round', 0)}-{counter(state, 'attempts:' + scope_id(state))}",
                          stop=deps.stop, fail_fast=not baseline, tail_bytes=deps.cfg.limits.max_output_tail_bytes,
-                         max_log_bytes=deps.cfg.limits.max_log_bytes)
+                         max_log_bytes=deps.cfg.limits.max_log_bytes,
+                         tolerated=() if baseline else {r["id"] for r in state.get("baseline", []) if r.get("status") == "failed"})
     restored = deps.repo().restore_tracked()
     if restored:
         deps.events.emit("warning", code="check_modified_tracked", message="Checks modified tracked files; restored", paths=restored)
@@ -236,19 +242,39 @@ def apply_edits(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     return update
 
 
+def against_baseline(results: list[dict[str, Any]], state: PipelineState, deps: Dependencies) -> list[dict[str, Any]]:
+    """Mark each check that failed now and at baseline with the tests that newly fail. One with none
+    (baseline_unchanged) does not block the step, since the step is not asked to repair what was broken before
+    it, unless an acceptance criterion is verified by that check: then the plan asks for it to pass."""
+    plan = get_plan(state)
+    required = [c.id for c in deps.cfg.checks if c.required]
+    demanded = {i for c in (plan.acceptance_criteria if plan else []) if c.verified_by == "checks" for i in (c.checks or required)}
+    rows = []
+    for row in results:
+        comparison = compare_with_baseline(row, state.get("baseline", []), run_dir=deps.run_dir, redactor=deps.redactor,
+                                           max_log_bytes=deps.cfg.limits.max_log_bytes) if row["status"] == "failed" else None
+        if comparison is None:
+            rows.append(row)
+            continue
+        rows.append({**row, "baseline_comparison": comparison, "baseline_unchanged": not comparison["new"] and row["id"] not in demanded})
+    return rows
+
+
 def verify(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     results = checked(state, deps)
     if deps.stop.cancel_requested():
         return {"checks": results, "outcome": "cancelled"}
+    results = against_baseline(results, state, deps)
     emit_attempt(state, deps, results=results)
-    failed = [r for r in results if r["required"] and r["status"] != "passed"]
+    failed = [r for r in results if r["required"] and not check_ok(r)]
     if failed:
         if any(r["status"] == "error" for r in failed):
             return {"checks": results, "failure": EngineError(FailureClass.INFRASTRUCTURE, "check_error",
                 "Check could not execute: " + "; ".join(r["output_tail"] for r in failed if r["status"] == "error")).to_failure("verify")}
         if counter(state, f"attempts:{scope_id(state)}") >= deps.cfg.limits.max_step_attempts:
             return {"checks": results, **request_replan({**state, "checks": results}, deps, EngineError(FailureClass.CHECKS_FAILED, "checks_exhausted", "Required checks failed"), "verify")}
-        return {"checks": results, "feedback": {"kind": "checks_failed", "message": "Required checks failed",
+        return {"checks": results, "feedback": {"kind": "checks_failed", "message": "Required checks failed. The edits of your previous attempt are"
+                                                 " applied in the files you are shown; correct or build on them rather than treating them as done.",
                                                  "details": failure_feedback(failed, state.get("baseline", []), run_dir=deps.run_dir,
                                                      redactor=deps.redactor, tail_bytes=deps.cfg.limits.max_output_tail_bytes)}}
     head = state["workspace"]["head_commit"]
@@ -301,7 +327,7 @@ def review(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
             for criterion in decided:
                 if criterion["verified_by"] != "checks" or criterion["state"] != "not_met":
                     continue
-                failed = [r for r in state.get("checks", []) if r["id"] in criterion["checks"] and r.get("commit") == state["workspace"]["head_commit"] and r["status"] != "passed"]
+                failed = [r for r in state.get("checks", []) if r["id"] in criterion["checks"] and r.get("commit") == state["workspace"]["head_commit"] and not check_ok(r)]
                 detail = "; ".join(r["id"] + ": " + r.get("output_tail", "")[-4096:] for r in failed) or "Missing current results: " + ", ".join(criterion["checks"])
                 raw["verdict"] = "request_changes"
                 raw["findings"].append({"severity": "major", "category": "tests", "path": "", "description": "Criterion " + criterion["id"] + " not met: " + detail, "suggestion": "Satisfy the named checks", "citations": [r["evidence_id"] for r in failed if r.get("evidence_id")]})

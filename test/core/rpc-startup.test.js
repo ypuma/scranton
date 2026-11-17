@@ -121,7 +121,7 @@ test('fake Docker runner tolerates startup delay and verifies named cleanup on s
 const args = process.argv.slice(2);
 const mounts = args.filter((_, i) => args[i - 1] === '--mount');
 const session = mounts.find(m => m.includes('target=/session')).slice('type=bind,source='.length).split(',target=')[0];
-const piArgs = args.slice(args.indexOf('scranton-sandbox:1.5.0-r2') + 1);
+const piArgs = args.slice(args.indexOf('scranton-sandbox:1.5.2-r1') + 1);
 piArgs[piArgs.indexOf('--session-dir') + 1] = session;
 const child = spawn(process.execPath, [${JSON.stringify(path.resolve('tools/fake-pi-rpc.js'))}, ...piArgs], { stdio: 'inherit' });
 child.on('exit', code => process.exit(code ?? 1));

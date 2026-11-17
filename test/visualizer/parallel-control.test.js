@@ -10,7 +10,7 @@ import { reduceAll, normalizeExecution } from '../../visualizer/public/js/state.
 import { executionBadges } from '../../visualizer/public/js/lanes.js';
 
 const RUN = { pid: 42, mode: 'run', request: 'Todo', workspace: 'C:\\ws', startedAt: '2026-11-08T12:00:00.000Z', runId: 'r1', exitCode: null };
-const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'none' } } };
+const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-sandbox:1.5.2-r1', network: 'none' } } };
 
 function doc(fields = {}) {
   return { v: 1, enabled: true, workspace: 'C:\\ws', scenarios: ['happy'], run: null, lastExit: null, pendingHuman: null, ...fields };
@@ -64,7 +64,7 @@ test('parseControl reads defaults.execution, instances and recovery', () => {
 });
 
 test('executionDefaults: the server defaults, else the engine defaults; Docker only when the configuration names it', () => {
-  assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-sandbox:1.5.0-r2', network: 'none' });
+  assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-sandbox:1.5.2-r1', network: 'none' });
   assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'host', image: EXECUTION_DEFAULTS.sandbox.image, network: 'bridge' });
   const host = { execution: { ...DEFAULTS.execution, sandbox: { mode: 'host' } } };
   assert.equal(executionDefaults(parseControl(doc({ defaults: host }))).sandbox, 'host');
@@ -142,7 +142,7 @@ test('control gates: an orphaned owner disables New run; a stop request needs it
 
 test('exitHint names the missing prerequisite without claiming anything works', () => {
   assert.match(exitHint({ outputTail: 'error: docker: command not found' }), /scranton doctor/);
-  assert.match(exitHint({ outputTail: 'Sandbox image scranton-sandbox:1.5.0-r2 not found' }), /trusted host/);
+  assert.match(exitHint({ outputTail: 'Sandbox image scranton-sandbox:1.5.2-r1 not found' }), /trusted host/);
   assert.match(exitHint({ outputTail: 'Hive is owned by another run' }), /recover ownership/);
   assert.equal(exitHint({ outputTail: 'TypeError: x is undefined' }), '');
   assert.equal(exitHint(null), '');
