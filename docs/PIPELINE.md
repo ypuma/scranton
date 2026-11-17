@@ -6,7 +6,7 @@ Stand: implementierter Quellcode vom 10. November 2026. Dieses Dokument beschrei
 
 Ein Chat hat eine feste Engine: `engine:"pipeline"` in seinen Metadaten; fehlt das Feld, bleibt er ein **Team**-Chat mit pi-Orchestrator, Meilensteininstanzen und Hive. Die Engine eines vorhandenen Chats wird nicht umgeschaltet. Für einen Vergleich einen neuen Chat anlegen.
 
-Pipeline benutzt einen festen Python/LangGraph-Ablauf: Snapshot, Baseline, Plan, Freigabe, Edits/Checks (bei unabhängigen Schritten in privaten parallelen Lanes), begrenzte Neuplanung mit erneuter Freigabe, Review, Python-Evidenzprüfung (`ground`), Lieferung. Sie hat keine Team-Mailboxen, keine frei steuerbaren Agenteninstanzen und keinen Team-Circuit-Breaker. Eigene Team-Gates und deren globale Prompts sind nicht die Pipeline-Rollen. Der Lauf behält private Checkpoints und kann an Gates oder nach Suspend in einem neuen Python-Prozess fortgesetzt werden. Follow-up requests are new runs. In the same chat, real runs receive a bounded historical projection of the latest three terminal runs plus an older latest-plan anchor when needed. This survives server restarts and informational answer chains; a different chat/project starts clean. It is advisory context, not a restored execution state or complete agent transcript. Current input stays unchanged and takes precedence; fresh reads, checks and approval gates still apply.
+Pipeline benutzt einen festen Python/LangGraph-Ablauf: Snapshot, Baseline, Plan, Freigabe, Edits/Checks (bei unabhängigen Schritten in privaten parallelen Lanes), begrenzte Neuplanung mit erneuter Freigabe, Review, Python-Evidenzprüfung (`ground`), Lieferung. Sie hat keine Team-Mailboxen, keine frei steuerbaren Agenteninstanzen und keinen Team-Circuit-Breaker. Eigene Team-Gates und deren globale Prompts sind nicht die Pipeline-Rollen. Der Lauf behält private Checkpoints und kann an Gates oder nach Suspend in einem neuen Python-Prozess fortgesetzt werden. Follow-up requests are new runs. In the same chat, real runs receive a bounded historical projection of the latest three terminal runs plus an older latest-plan anchor when needed. This survives server restarts and informational answer chains. Other chats of the same project can additionally contribute condensed context, not execution history; other projects remain isolated. It is advisory context, not a restored execution state or complete agent transcript. Current input stays unchanged and takes precedence; fresh reads, checks and approval gates still apply.
 
 Tauri selbst bekommt dafür keine neue Python-IPC-Schicht: Der vorhandene Node-Appserver startet die CLI und bedient HTTP. Ein separater dauerhafter Python-Webserver, LangGraph.js-Port oder zweiter Rust-Supervisor ist nicht Teil dieser Integration.
 
@@ -86,7 +86,7 @@ Nur die validierten erzeugten/ersetzten/gelöschten Dateien des privaten Workspa
     requests/<runId>.json                 generierte Operator-Konfiguration
     requests/<runId>.json.launch.json     Modellwahl, Trust, Workspace-Root, Demo
     requests/<runId>.json.task.txt        Aufgabe bei echten Läufen
-    requests/<runId>.history.json         bounded same-chat context for a new real run, when available
+    requests/<runId>.history.json         bounded history + optional project/chat context for a new real run
     requests/<runId>.error.json           Aufruffehler ohne neuen Runstatus, falls vorhanden
     runs/<runId>/                        Python-Runverzeichnis
 ```
@@ -208,7 +208,23 @@ New real runs receive up to four chronological terminal-run projections from the
 
 Valid plan artifacts successfully read within the 256 KiB artifact limit are structurally compacted, not replaced by an empty plan: the wire projection keeps revision/summary and step/dependency summaries, shortening text with `…` and `truncated:true`. Details are removed before dependencies or whole steps; each object's `omitted` maps a list field to the number of trailing entries removed. A partial dependency list retains at least one ID and reports `omitted.depends_on`; it is not an independent step. `depends_on:null` (also the omitted model default) means all earlier steps, `[]` means independent, and an ID list means explicit dependencies. Missing, malformed, oversized or unreadable artifacts instead produce an empty plan and an explicit unavailable reason in the outcome; the latest older usable plan can then be the anchor. Plan absence is normalized to exactly `""` (never whitespace), so Python's whitespace-tolerant absence check agrees. The Node wire caps remain 8000 plan characters and 32768 total UTF-8 bytes; Python may further shorten advisory text for the prompt.
 
-Total historical prompt context including policy/framing is capped at min(12000, max_prompt_bytes//8). Essential historical task/plan/latest outcome has a small bounded reserve so repository reads do not erase the follow-up intent; remaining history yields to live evidence and current controls stay protected. No-history prompts are unchanged. History is untrusted advisory context, never fresh evidence, approval or completed execution state. Fresh reads, checks and gates remain mandatory.
+The existing `historical_data` prompt block including policy/framing is capped at min(12000, max_prompt_bytes//8). Essential historical task/plan/latest outcome has a small bounded reserve so repository reads do not erase the follow-up intent; remaining history yields to live evidence and current controls stay protected. No-history prompts are unchanged. History is untrusted advisory context, never fresh evidence, approval or completed execution state. Fresh reads, checks and gates remain mandatory.
+
+The schema-1 history object additionally permits an optional, closed `context` key:
+
+```json
+{ "schema": 1, "runs": [], "truncated": false,
+  "context": {
+    "notes": "project notes, at most 2000 code points",
+    "earlier": ["#3 [failed] request -> outcome"],
+    "omitted": 0,
+    "other_chats": [{ "title": "Sibling chat", "engine": "team", "turns": ["#1 [success] request -> outcome"] }]
+  } }
+```
+
+Each context key is optional. `earlier` contains at most 16 condensed own-chat lines (240 code points each, oldest first), excluding the **final** `runs` selection; a run shed from `runs` can therefore reappear as a line. `omitted` (integer 0..100000) counts older visible turns not listed and is valid only with non-empty `earlier`. `other_chats` contains at most six same-project chats, most recently active first, with titles at most 120 code points, `engine:"team"|"pipeline"` and at most three 240-code-point lines each. Sibling chats contribute condensed lines only, never `runs`. `context` is present only with non-empty notes, earlier lines or sibling chats; `runs` may be empty with context or project memory. Node caps compact context JSON at **8000 UTF-8 bytes** (Python accepts **8192**); the complete history object remains at **32768 bytes**. Node drops sibling chats from the end, then oldest earlier lines (counting omissions), then shortens notes to fit.
+
+Python validates and sanitizes `context` with `historical_text` and persists it with `cross_run_history`. The **planner only** receives it as a separate `<<<FILE path="conversation_context">>>` JSON block after the existing history block, with explicit advisory authority. Its own allowance is **`min(4000, max_prompt_bytes // 32)` bytes**, also bounded by remaining prompt room; it never borrows from or shrinks the existing history budget. Prompt trimming drops sibling chats, then oldest earlier lines, then halves notes; empty context produces no block. Implementer and reviewer prompts are unchanged. All existing guarantees remain: current task wins, fresh workspace and reads, fresh checks and approvals, no inherited completed steps, check success or evidence. This is deterministic condensation, not a model-written summary; tests are scripted/offline, not a real-model quality claim. Sharing, reset/restore, notes and HTTP documents: [CONTROL.md §12](CONTROL.md#12-context-system-registry-only).
 
 ## Portable Desktop-Pipeline (native Buildziele)
 

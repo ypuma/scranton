@@ -616,6 +616,29 @@ body[data-scope="none"] .conn { display: none; }
 #followup-count { transition: opacity var(--dur) var(--ease-out); }
 .followup-hint { padding: 0 var(--s2); overflow-wrap: anywhere; }
 .followup-fix { justify-self: start; font-size: var(--fs-s); }
+/* what the next turn receives: one quiet line that opens the Context drawer */
+.context-line {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  max-width: 100%;
+  min-height: 1.5rem;
+  padding: 0 var(--s2);
+  border: 0;
+  border-radius: var(--radius-s);
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-s);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.context-line > span { min-width: 0; overflow-wrap: anywhere; }
+.context-line > svg { flex: none; color: var(--text-4); }
+.context-line:hover { background: var(--fill); color: var(--text); }
+.context-line:hover > svg { color: var(--text-2); }
+.context-line[data-tone="error"] { color: var(--text-2); }
 /* no run yet: the composer is the page */
 body[data-run="none"] .followup:not([data-off="true"]) { margin-top: var(--s5); }
 body[data-run="none"] .followup:not([data-off="true"]) textarea { min-height: 6.5rem; font-size: var(--fs-m); }
@@ -623,7 +646,7 @@ body[data-run="none"] .followup:not([data-off="true"]) textarea { min-height: 6.
 .followup[data-off="true"] { grid-template-columns: minmax(0, 1fr) auto; align-items: center; max-width: none; margin-top: var(--s3); }
 .followup[data-off="true"] .composer { grid-column: 2; grid-row: 1; padding: 0; border: 0; background: none; }
 .followup[data-off="true"] .followup-hint { grid-column: 1; grid-row: 1; padding: 0; }
-.followup[data-off="true"] > .hitl-status { grid-column: 1 / -1; }
+.followup[data-off="true"] > .hitl-status, .followup[data-off="true"] > .context-line { grid-column: 1 / -1; }
 .followup[data-off="true"] :is(textarea, #followup-count, #followup-options) { display: none; }
 
 /* the guidance line when there is no run; a chat's composer already says it */
@@ -1680,6 +1703,42 @@ dialog[open]::backdrop { opacity: 1; }
 .dreams-quote { margin: 0; padding-left: var(--s3); border-left: 2px solid var(--line-strong); font-size: var(--fs-s); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .dreams-quotes li[data-role="assistant"] .dreams-quote { color: var(--text-2); border-left-style: dashed; }
 .dreams-quote-meta { font-size: var(--fs-xs); color: var(--text-3); overflow-wrap: anywhere; }
+
+/* the Context drawer: the summary of the chat document, one block per part of the pack, and the project's notes */
+.context-figures { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s1) var(--s4); margin: 0; font-size: var(--fs-s); }
+.context-figures dt { color: var(--text-3); }
+.context-figures dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+#context-flags[data-tone="quiet"] { border-left-color: var(--line-strong); color: var(--text-2); }
+.context-blocks { display: grid; gap: var(--s2); min-width: 0; }
+.context-block { min-width: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--panel-2); }
+.context-block > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s2); padding: var(--s2) var(--s3); border-radius: var(--radius-s); cursor: pointer; list-style: none; }
+.context-block > summary::-webkit-details-marker { display: none; }
+.context-block > summary::before { content: "+"; display: inline-block; width: 0.875rem; font-family: var(--mono); color: var(--text-3); }
+.context-block[open] > summary::before { content: "-"; }
+.context-block > summary:hover .context-block-title { color: var(--text); }
+.context-block-title { flex: 1 1 12rem; min-width: 0; font-size: var(--fs-s); font-weight: 600; color: var(--text-2); overflow-wrap: anywhere; }
+.context-block[open] .context-block-title { color: var(--text); }
+.context-block-size { font-size: var(--fs-xs); }
+.context-block-note { margin: 0; padding: 0 var(--s3) var(--s2); font-size: var(--fs-xs); }
+.context-text {
+  margin: 0;
+  max-height: 20rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--s2) var(--s3);
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 0 0 var(--radius-s) var(--radius-s);
+  font: var(--fs-xs)/1.6 var(--mono);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.context-text:focus-visible { outline-offset: -2px; }
+.context-confirm { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--text); border-radius: var(--radius-s); min-width: 0; }
+.context-confirm p { margin: 0; font-size: var(--fs-s); color: var(--text); overflow-wrap: anywhere; }
+#context-project .check { align-items: baseline; }
+#context-project > .form-status { margin-top: calc(var(--s1) - var(--s3)); }
 @media (max-width: 520px) {
   .dreams-phases { grid-template-columns: minmax(0, 1fr); }
   .dreams-diff { grid-template-columns: minmax(0, 1fr); }

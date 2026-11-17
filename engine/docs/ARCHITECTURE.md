@@ -693,7 +693,7 @@ Schema-1 `--history-file` additionally accepts optional `project_memory`, at mos
 16 `{id,text,sources}` entries (text at most 400 characters, at most three source
 references of at most 240 characters; complete snapshot at most 32768 UTF-8 bytes).
 Old three-key snapshots retain their shape. Empty `runs` is accepted only with
-nonempty memory, never by fabricating a prior run. IDs/text/source references are
+nonempty memory or conversation context, never by fabricating a prior run. IDs/text/source references are
 redacted, E/K/H citation-shaped tokens are removed, and JSON framing prevents forged
 prompt delimiters. Node validates live source provenance before passing memory;
 Python treats those references as advisory strings, never opens them as evidence.
@@ -702,3 +702,24 @@ non-evidence and subordinate to the current task. Prompt budgeting drops memory
 entries before shortening same-chat priority task/plan/outcome context. Memory-only
 snapshots work through the unchanged CLI/run.json/checkpoint path; no approvals,
 finished steps or evidence IDs are inherited.
+
+The same schema-1 history object also accepts optional `context` (closed keys):
+`notes` (at most 2000 code points), `earlier` (at most 16 condensed own-chat lines,
+240 code points each, oldest first), `omitted` (integer 0..100000, only with nonempty
+`earlier`) and `other_chats` (at most six `{title,engine,turns}` objects: title at most
+120 code points, engine `team|pipeline`, at most three 240-code-point lines).
+At least notes, earlier lines or sibling chats must be nonempty. Same-project
+siblings contribute condensed lines only, never `runs`; `earlier` excludes the
+final selected `runs`. Node emits at most 8000 compact UTF-8 JSON bytes of context,
+Python accepts 8192; the complete history stays at 32768 bytes. `historical_text`
+sanitizes every string before persistence in `cross_run_history`.
+
+Only the planner renders this as a separate `conversation_context` FILE block after
+`historical_data`, with explicit advisory authority and its own allowance
+`min(4000, max_prompt_bytes // 32)` bytes, bounded by remaining prompt room. It never
+shrinks or borrows the history budget. Trimming drops sibling chats from the end,
+then oldest earlier lines (counting omissions), then halves notes; no content means
+no block. Implementer/reviewer prompts and the fresh-workspace, evidence, check and
+approval guarantees are unchanged. No execution state or Pi sessions are reused.
+Project sharing and per-chat reset affect selection on the Node side; other
+projects never contribute. [Wire details and controls](../../docs/PIPELINE.md#cross-run-continuity).

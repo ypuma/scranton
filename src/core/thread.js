@@ -1,24 +1,38 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { canonicalDirectory, checkScopedPath } from './context/paths.js';
+import { LIMITS } from './context/limits.js';
+import { isRelativeFile } from './context/shared.js';
 
 const text = (value) => typeof value === 'string' ? value : '';
 const line = (value) => text(value).replace(/<\/?earlier-runs\s*>/gi, '[earlier-runs]').replace(/[\r\n\u2028\u2029]+/g, ' ').trim();
 const MAX_HISTORY_BYTES = 20 * 1024 * 1024;
-const cache = new Map();
-function boundedRead(file, max = MAX_HISTORY_BYTES) {
-  const fd = fs.openSync(file, 'r');
+const cache = new Map(), contextCache = new Map();
+const checkPath = (target, root) => checkScopedPath(root, target, false);
+const contextRoot = (hive) => path.join(canonicalDirectory(path.dirname(path.resolve(hive))), path.basename(path.resolve(hive)));
+function boundedRead(file, max = MAX_HISTORY_BYTES, hardened = false) {
+  if (hardened) checkPath(file, hardened);
+  const before = hardened ? fs.lstatSync(file) : null;
+  if (hardened && (!before.isFile() || before.nlink !== 1)) throw Error('Invalid history artifact');
+  const same = (a, b) => a.isFile() && a.nlink === 1 && a.dev === b.dev && a.ino === b.ino && a.size === b.size;
+  const fd = fs.openSync(file, hardened ? fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) : 'r');
   try {
-    const fileSize = fs.fstatSync(fd).size;
+    const stat = fs.fstatSync(fd), fileSize = stat.size;
+    if (hardened && !same(stat, before)) throw Error('Invalid history artifact');
     if (fileSize > max) throw Error('History exceeds read limit');
     const bytes = Buffer.allocUnsafe(Math.min(fileSize, max));
     let size = 0, count;
     while (size < bytes.length && (count = fs.readSync(fd, bytes, size, bytes.length - size, null))) size += count;
-    if (fs.fstatSync(fd).size > max) throw Error('History exceeds read limit');
+    const after = fs.fstatSync(fd);
+    if (after.size > max) throw Error('History exceeds read limit');
+    if (hardened) {
+      checkPath(file, hardened);
+      if (!same(after, stat) || !same(fs.lstatSync(file), stat) || size !== fileSize) throw Error('History artifact changed');
+    }
     return bytes.toString('utf8', 0, size);
   } finally { fs.closeSync(fd); }
 }
-const json = (file) => { try { return JSON.parse(boundedRead(file, 1024 * 1024)); } catch { return null; } };
-const stamp = (file) => { try { const s = fs.statSync(file); return [s.ino, s.size, s.mtimeMs, s.ctimeMs]; } catch { return null; } };
+const stamp = (file, hardened) => { try { if (hardened) checkPath(file, hardened); const s = fs.statSync(file); return [s.ino, s.size, s.mtimeMs, s.ctimeMs]; } catch { return null; } };
 const linesWithin = (lines, max) => {
   const result = [];
   let size = 0;
@@ -30,23 +44,28 @@ const linesWithin = (lines, max) => {
   return result.join('\n');
 };
 
-function readRun(dir, fallbackId = null) {
-  const signature = JSON.stringify(['state.json', 'events.jsonl', 'michael/plan.json'].map((name) => stamp(path.join(dir, name))));
-  const prior = cache.get(dir);
+function readRun(dir, fallbackId = null, hardened = false, caps = {}) {
+  const key = dir, selectedCache = hardened ? contextCache : cache;
+  let degraded = false;
+  const failed = (error) => { if (error.code !== 'ENOENT') degraded = true; };
+  const signature = JSON.stringify([hardened ? caps : null, ...['state.json', 'events.jsonl', 'michael/plan.json'].map((name) => stamp(path.join(dir, name), hardened))]);
+  const readJson = (name) => { try { return JSON.parse(boundedRead(path.join(dir, name), hardened ? caps[name] ?? 0 : 1048576, hardened)); } catch (error) { failed(error); return null; } };
+  const prior = selectedCache.get(key);
   if (prior?.signature === signature) return prior.run;
-  const remember = (run) => {
-    cache.delete(dir); cache.set(dir, { signature, run });
-    if (cache.size > 512) cache.delete(cache.keys().next().value);
+  const remember = (run, context = null) => {
+    selectedCache.delete(key); selectedCache.set(key, { signature, run, context, degraded });
+    if (selectedCache.size > (hardened ? 1024 : 512)) selectedCache.delete(selectedCache.keys().next().value);
     return run;
   };
-  const state = json(path.join(dir, 'state.json'));
-  const planFile = json(path.join(dir, 'michael', 'plan.json'));
+  const state = readJson('state.json');
+  const planFile = readJson('michael/plan.json');
   let events = [];
   try {
-    events = boundedRead(path.join(dir, 'events.jsonl')).split('\n').flatMap((raw) => {
-      try { const event = JSON.parse(raw); return event && typeof event === 'object' ? [event] : []; } catch { return []; }
+    events = boundedRead(path.join(dir, 'events.jsonl'), hardened ? caps['events.jsonl'] ?? 0 : MAX_HISTORY_BYTES, hardened).split('\n').flatMap((raw) => {
+      try { const event = JSON.parse(raw); if (event && typeof event === 'object') return [event]; if (hardened) degraded = true; return []; }
+      catch { if (hardened && raw.trim()) degraded = true; return []; }
     });
-  } catch {}
+  } catch (error) { failed(error); }
   const runId = text(events.find((e) => e.type === 'run_started')?.runId) || text(state?.runId) || text(events.find((e) => text(e.runId))?.runId) || fallbackId || text(planFile?.runId);
   if (!runId) return remember(null);
   events = events.filter((e) => e.runId === runId);
@@ -77,9 +96,15 @@ function readRun(dir, fallbackId = null) {
   const stored = snapshot?.reply ?? events.findLast((e) => e.type === 'run_reply');
   const reply = stored && ['answer', 'report', 'summary'].includes(stored.kind) && typeof stored.text === 'string'
     ? { kind: stored.kind, text: stored.text.slice(0, 4000), ...(stored.truncated || stored.text.length > 4000 ? { truncated: true } : {}) } : null;
-  const usage = snapshot?.usage ? { tokens: snapshot.usage.tokens, cost: snapshot.usage.cost } : snapshot?.agents ? Object.values(snapshot.agents).reduce((sum, a) => ({ tokens: sum.tokens + (a.totals?.input ?? 0) + (a.totals?.output ?? 0), cost: sum.cost + (a.totals?.cost ?? 0) }), { tokens: 0, cost: 0 }) : null;
-  return remember({ runId, goal, status, reply, usage, startedAt: text(start?.ts) || null,
-    endedAt: text(finish?.ts) || (['finished', 'failed', 'aborted'].includes(status) ? text(snapshot?.updatedAt) || null : null), summary });
+  const usage = snapshot?.usage ? { tokens: snapshot.usage.tokens, cost: snapshot.usage.cost } : snapshot?.agents ? Object.values(snapshot.agents).reduce((sum, a) => ({ tokens: sum.tokens + (a?.totals?.input ?? 0) + (a?.totals?.output ?? 0), cost: sum.cost + (a?.totals?.cost ?? 0) }), { tokens: 0, cost: 0 }) : null;
+  const startedAt = text(start?.ts) || null, endedAt = text(finish?.ts) || (['finished', 'failed', 'aborted'].includes(status) ? text(snapshot?.updatedAt) || null : null);
+  const files = [...new Set(events.filter((e) => e.type === 'agent_tool' && e.agent === 'dwight' && ['write', 'edit'].includes(e.tool))
+    .map((e) => text(e.targetFile)).filter(isRelativeFile))].slice(0, 30);
+  const context = { id: runId, engine: 'team', startedAt, endedAt, status: finish && ['success', 'partial', 'failed', 'aborted'].includes(finish.status) ? finish.status : 'interrupted',
+    request: goal, outcome: text(finish?.summary) || (reply?.kind === 'answer' ? 'answered' : finish ? text(finish.status) : 'Interrupted'),
+    plan: [...milestones.values()].slice(0, 32).map((m) => ({ title: text(m.title), status: text(m.status) || 'pending' })), files,
+    reply: stored && ['answer', 'report', 'summary'].includes(stored.kind) && typeof stored.text === 'string' ? { kind: stored.kind, text: stored.text, truncated: Boolean(stored.truncated || stored.text.length > 16000) } : null };
+  return remember({ runId, goal, status, reply, usage, startedAt, endedAt, summary }, context);
 }
 
 export function listRuns(hiveDir) {
@@ -118,4 +143,71 @@ export function formatThreadContext(runs, { maxChars = 8000 } = {}) {
     if (remaining <= 0 || block !== lines.join('\n')) break;
   }
   return kept.join('\n\n');
+}
+
+export function listContextRuns(hiveDir, { maxRuns = LIMITS.runs, activeRunId, excludeRoot = false, budget = { bytes: LIMITS.readBytes } } = {}) {
+  const entries = [], runs = new Map();
+  let degraded = false, hive;
+  const failed = (error) => { if (error.code !== 'ENOENT') degraded = true; };
+  try { hive = contextRoot(hiveDir); checkPath(hive, hive); }
+  catch (error) { failed(error); return { runs: [], unread: 0, truncated: false, degraded }; }
+  try {
+    const root = path.join(hive, 'runs'); checkPath(root, hive);
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      try {
+        const dir = path.join(root, entry.name); checkPath(dir, hive);
+        if (entry.isDirectory()) entries.push({ dir, name: entry.name, mtime: fs.lstatSync(dir).mtimeMs });
+      } catch (error) { failed(error); }
+    }
+  } catch (error) { failed(error); }
+  let rootRun = false;
+  for (const name of ['events.jsonl', 'state.json', 'michael/plan.json']) {
+    try { checkPath(path.join(hive, name), hive); rootRun = true; }
+    catch (error) { failed(error); }
+  }
+  if (rootRun) {
+    try { entries.push({ dir: hive, name: null, mtime: fs.lstatSync(hive).mtimeMs }); }
+    catch (error) { failed(error); }
+  }
+  entries.sort((a, b) => b.mtime - a.mtime || (a.name ?? '').localeCompare(b.name ?? ''));
+  let unread = Math.max(0, entries.length - maxRuns);
+  budget.charged ??= new Set();
+  const selected = entries.slice(0, maxRuns);
+  for (const [index, { dir, name }] of selected.entries()) {
+    let bytes = 0; const caps = {}, charged = [];
+    for (const file of ['state.json', 'events.jsonl', 'michael/plan.json']) {
+      try {
+        const target = path.join(dir, file); checkPath(target, hive); const s = fs.lstatSync(target);
+        if (!s.isFile() || s.nlink !== 1 || s.size > (file === 'events.jsonl' ? MAX_HISTORY_BYTES : 1048576)) throw Error('Invalid history artifact');
+        if (!budget.charged.has(target)) { bytes += s.size; charged.push(target); }
+        caps[file] = s.size;
+      } catch (error) { failed(error); }
+    }
+    if (budget.exhausted || bytes > budget.bytes) { unread += selected.length - index; budget.exhausted = true; break; }
+    budget.bytes -= bytes; for (const file of charged) budget.charged.add(file);
+    try {
+      readRun(dir, name, hive, caps); const stored = contextCache.get(dir), value = stored?.context;
+      degraded ||= Boolean(stored?.degraded);
+      if (value && value.id !== activeRunId && !(excludeRoot && dir === hive && value.status === 'interrupted')) runs.set(value.id, value);
+    } catch { unread++; degraded = true; }
+  }
+  return { runs: [...runs.values()].sort((a, b) => (a.startedAt ?? a.id).localeCompare(b.startedAt ?? b.id) || a.id.localeCompare(b.id)), unread, truncated: unread > 0, degraded };
+}
+
+export function countContextRuns(hiveDir) {
+  let count = 0, hive;
+  try { hive = contextRoot(hiveDir); checkPath(hive, hive); } catch { return 0; }
+  try {
+    const root = path.join(hive, 'runs'); checkPath(root, hive);
+    count = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.isSymbolicLink()).length;
+  } catch {}
+  try {
+    let rootRun = false;
+    try { rootRun = Boolean(JSON.parse(boundedRead(path.join(hive, 'state.json'), 1048576, hive))?.runId); } catch {}
+    if (!rootRun) {
+      try { const file = path.join(hive, 'events.jsonl'); checkPath(file, hive); const s = fs.lstatSync(file); rootRun = s.isFile() && s.nlink === 1 && s.size > 0; } catch {}
+    }
+    if (rootRun) count++;
+  } catch {}
+  return count;
 }

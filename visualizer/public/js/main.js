@@ -9,6 +9,7 @@ import { createChatPanel } from './chat-panel.js';
 import { createAccountsPanel, createModelPicker } from './accounts-panel.js';
 import { createAgentsPanel } from './agents-panel.js';
 import { createDreamingPanel } from './dreaming-panel.js';
+import { createContextPanel } from './context-panel.js';
 import { CLIENT_HEADERS } from './control.js';
 import { createScope, parseHash, hashFor, pickScope, scopeGone, findProject, chatEngine } from './scope.js';
 import { createPipelineForm } from './pipeline-form.js';
@@ -354,6 +355,8 @@ const dreams = createDreamingPanel({
   getProjects: () => nav?.doc() ?? null,
   announce: (text) => { $('control-announcer').textContent = text; },
 });
+// what the next turn of the chat on screen receives: the line in the follow-up composer and its drawer
+const context = createContextPanel({ getProjects: () => nav?.doc() ?? null, confirm: control.confirm });
 
 function render() {
   frame = 0;
@@ -414,6 +417,7 @@ function bind(next) {
   chatLive.reset();
   thinking.reset();
   thread.setScope();
+  context.setScope(scope.get());
   nav.render();
   attach();
   schedule();
@@ -475,6 +479,8 @@ nav = createNav({
   // a chat removed elsewhere (or the one on screen) moves the page to another one
   onProjects: (doc) => {
     dreams.projects(doc);
+    // a run of the chat on screen that finished shows here first, for either engine
+    context.projects(doc);
     if (projectsMode && scopeGone(doc, scope.get())) follow({ replace: true });
     else if (projectsMode && bound && applyEngine()) {
       forgetLive();

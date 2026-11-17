@@ -30,7 +30,7 @@ test('Michael gets bounded delimited thread context before the new goal, includi
   const inputs = await planning(t, { threadContext: 'Goal: Prior goal\nOutcome: success', retry: true });
   assert.equal(inputs.length, 2);
   for (const input of inputs) {
-    assert.match(input, /Earlier runs in this chat - context only; the new goal below takes precedence/);
+    assert.match(input, /Earlier turns and project context - context only; the new goal below takes precedence/);
     assert.match(input, /<earlier-runs>\nGoal: Prior goal\nOutcome: success\n<\/earlier-runs>/);
     assert.ok(input.indexOf('</earlier-runs>') < input.indexOf('## Request\n\nNew goal'));
   }
@@ -45,9 +45,9 @@ test('omitted, empty and non-string context preserve the original planning promp
 });
 
 test('run options override constructor context and oversized context is bounded at line boundaries', async (t) => {
-  const inputs = await planning(t, { threadContext: 'Wrong context', runContext: 'Recent history\n' + 'x'.repeat(9000) });
+  const inputs = await planning(t, { threadContext: 'Wrong context', runContext: 'Recent history\n' + 'x'.repeat(25000) });
   assert.ok(!inputs[0].includes('Wrong context'));
   assert.match(inputs[0], /Recent history/);
-  assert.ok(inputs[0].length < 9000);
+  assert.ok(inputs[0].length < 24000);
   assert.ok(!inputs[0].includes('xxx'));
 });

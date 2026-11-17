@@ -49,7 +49,7 @@ const DWIGHT_INTRO = {
 };
 
 /** Dwight's inbox. Sessions are fresh per run, so every message carries the full milestone context. */
-export function dwightMessage({ kind, milestone: m, request, completed = [], angelaReport = null, gateReports = null, humanFeedback = null, note = null }) {
+export function dwightMessage({ kind, milestone: m, request, completed = [], angelaReport = null, gateReports = null, humanFeedback = null, note = null, chatContext = '' }) {
   const parts = [`# ${kind === 'task' ? 'Task' : kind === 'bug_report' ? 'Bug report' : 'Feedback'}: milestone ${m.id} - ${m.title}`, '', DWIGHT_INTRO[kind === 'bug_report' && !gateReports ? 'legacy_bug_report' : kind]];
   if (humanFeedback) parts.push('', '## Human feedback', '', humanFeedback);
   if (note) parts.push('', '## Note from Michael', '', note);
@@ -58,6 +58,7 @@ export function dwightMessage({ kind, milestone: m, request, completed = [], ang
   parts.push('', '## Milestone', '', m.description, '', '## Acceptance criteria', '', criteriaList(m));
   parts.push('', '## Overall request (context only)', '', request);
   if (completed.length) parts.push('', '## Already completed milestones', '', completed.map((c) => `- ${c}`).join('\n'));
+  if (typeof chatContext === 'string' && chatContext.trim()) parts.push('', '## Conversation so far (context only; your task is the milestone above)', '', '<conversation-context>', chatContext.replace(/<\s*\/?\s*conversation-context\s*>/gi, '[conversation-context]'), '</conversation-context>');
   return parts.join('\n');
 }
 

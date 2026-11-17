@@ -83,10 +83,11 @@ by: "core"
 ---
 file: "src/core/pipeline-supervisor.js"
 kind: "where"
-text: "Node side of Pipeline chats: one engine process per run/resume/cancel/demo invocation (`python -m scranton_pipeline ...`, always --parent-guard), run storage under `<dataDir>/projects/<p>/chats/<c>/pipeline/{runs,requests}`, workspaces under SCRANTON_PIPELINE_WORKSPACE_ROOT (Windows default %LOCALAPPDATA%\\Scranton\\pipeline), model catalogue (api_key accounts on OpenAI-compatible endpoints go direct with the key only in SCRANTON_PIPELINE_KEY_<ROLE> env; every other pi model is configured as provider \"command\" through tools/pipeline-pi-complete.js), launchError persistence, artifact reads by name. Command resolution lives in pipeline-command.js (SCRANTON_PIPELINE_COMMAND -> bundled engine-runtime/python -> dev venv .scratch/pipeline/venv). Routes are mounted in src/server/registry-router.js; a chat's engine is fixed by `engine: \"pipeline\"` in chat.json and the legacy lease/recovery path is not used for these chats."
-see_also: ".enma/pipeline-contract.md sections 6, 9, 14, 15; docs/PIPELINE.md; tests test/server/pipeline*.test.js with the fake engine tools/fake-pipeline.js"
+text: "Node side of Pipeline chats: one engine process per run/resume/cancel/demo invocation (`python -m scranton_pipeline ...`, always --parent-guard), run storage under `<dataDir>/projects/<p>/chats/<c>/pipeline/{runs,requests}`, workspaces under SCRANTON_PIPELINE_WORKSPACE_ROOT (Windows default %LOCALAPPDATA%\\Scranton\\pipeline), model catalogue (api_key accounts on OpenAI-compatible endpoints go direct with the key only in SCRANTON_PIPELINE_KEY_<ROLE> env; every other pi model is configured as provider \"command\" through tools/pipeline-pi-complete.js), launchError persistence, artifact reads by name. New non-demo starts write `requests/<runId>.history.json` from the injected context service: `context.forPipeline(p, c, { redact: sandboxText, projectMemory })`, persisted unchanged and passed as --history-file (legacy buildPipelineHistory when no service is injected); demo, resume, decision and cancel never attach history. Command resolution lives in pipeline-command.js (SCRANTON_PIPELINE_COMMAND -> bundled engine-runtime/python -> dev venv .scratch/pipeline/venv). Routes are mounted in src/server/registry-router.js; a chat's engine is fixed by `engine: \"pipeline\"` in chat.json and the legacy lease/recovery path is not used for these chats."
+see_also: ".enma/pipeline-contract.md sections 6, 9, 14, 15, 26, 27; .enma/context-contract.md section 7; docs/PIPELINE.md; tests test/server/pipeline*.test.js, test/server/context.test.js with the fake engine tools/fake-pipeline.js"
 hash: "shape:fc74c3f3aa73e7ec"
-written: "2026-11-09"
+written: "2026-11-16"
+commit: "2867259"
 by: "core"
 ---
 

@@ -11,7 +11,7 @@ from scranton_pipeline.agents.gateway import json_system
 from scranton_pipeline.config import EngineConfig
 from scranton_pipeline.grounding import diff_hunks
 from scranton_pipeline.guidance import text as guidance_text
-from scranton_pipeline.history import history_block
+from scranton_pipeline.history import conversation_context_block, history_block
 from scranton_pipeline.models import (
     ContextRequest,
     ConversationPlannerTurn,
@@ -165,10 +165,15 @@ def build_planner_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Grap
         section = history_block(history, min(12000, cfg.limits.max_prompt_bytes // 8, room) - len(policy.encode()))
         if section:
             prompt.user += policy + section
-        else:
-            omitted = "\n[TRUNCATED: historical data omitted; live prompt has priority]"
-            if len(omitted.encode()) <= min(room, 12000, cfg.limits.max_prompt_bytes // 8):
-                prompt.user += omitted
+        room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes
+        omitted = "\n[TRUNCATED: historical data omitted; live prompt has priority]" if not section and (history["runs"] or history.get("project_memory")) else ""
+        if len(omitted.encode()) > min(room, 12000, cfg.limits.max_prompt_bytes // 8):
+            omitted = ""
+        context = conversation_context_block(history, min(4000, cfg.limits.max_prompt_bytes // 32,
+                                                          room - len(omitted.encode()) - (0 if section else len(policy.encode()))))
+        if context:
+            prompt.user += ("" if section else policy) + context
+        prompt.user += omitted
     return prompt
 
 

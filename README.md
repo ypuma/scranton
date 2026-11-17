@@ -86,7 +86,7 @@ Scranton ergänzt die echte `%USERPROFILE%\.pi\agent\models.json` (bzw. das Prof
 
 ## Projekte und Chats
 
-Ein **Projekt entspricht einem Ordner** auf dem Rechner. Jeder **Chat ist ein Thread mit eigener Laufhistorie** und eigenem Hive. **Follow up** startet einen neuen Run im selben Thread; Michael erhält Ziele, Meilensteine und Ergebnisse früherer Runs als begrenzten Kontext (höchstens 8000 Zeichen, neueste Runs bevorzugt), nicht automatisch die vollständigen Pi-Transkripte. Der laufende Instanz-Chat zum Steuern von Dwight/Angela bleibt davon getrennt.
+Ein **Projekt entspricht einem Ordner** auf dem Rechner. Jeder **Chat ist ein Thread mit eigener Laufhistorie** und eigenem Hive. **Follow up** startet einen neuen Run im selben Thread; der Harness baut dafür einen begrenzten Kontext aus früheren Turns und Projektwissen, nicht aus vollständigen Pi-Transkripten oder wiederverwendeten Pi-Sessions. Der laufende Instanz-Chat zum Steuern von Dwight/Angela bleibt davon getrennt.
 
 In **New project** öffnet **Browse...** in der Desktop-App die native Ordnerauswahl. Die Auswahl trägt nur den absoluten Workspace-Pfad ein; erst **Create project** registriert das Projekt nach serverseitiger Pfadprüfung. Abbrechen lässt den bisherigen Pfad unverändert. Im normalen Browser ist die native Auswahl nicht verfügbar: den absoluten Ordnerpfad manuell eintragen. Das Pfadfeld bleibt auch in der Desktop-App editierbar; ein leerer Pfad verwendet weiterhin den Standard-Projektordner.
 
@@ -105,6 +105,39 @@ node bin/scranton.js projects remove PROJEKT-ID --data .scranton-data
 IDs aus den Listen übernehmen. Ohne `--chat` legt `run` einen neuen Thread an; mit `--chat` folgt ein weiterer Run im vorhandenen Thread. Im Registry-Modus bestimmt das Projekt den Workspace und der Chat den Hive; `run` akzeptiert dort keine zusätzlichen `--workspace`/`--hive`. Für einen fehlenden Projektordner `projects add ... --create` verwenden; ohne `--workspace` entsteht er unter `Documents\Scranton\projects\<id>`. Derselbe reale Ordner kann nicht doppelt registriert werden. Entfernen verändert niemals Workspace-Dateien; `--delete-history` löscht zusätzlich die zugehörigen Scranton-Daten unter dem Datenverzeichnis.
 
 `--data DIR` (alternativ `SCRANTON_DATA`, Konfiguration `dataDir`) aktiviert die Registry. `run --project` verlangt aus Sicherheitsgründen `--data` oder `SCRANTON_DATA`; `.env` und `scranton.config.json` im Projektordner werden für Registry-Runs nicht ausgewertet. `visualize --data` aktiviert auch die Steuerung und ist nur lokal zu verwenden. `projects`/`chats` verwenden ohne Datenpfad standardmäßig das Desktop-Datenverzeichnis. Der bisherige **Single-Modus mit `--hive`/`--workspace` ohne Registry bleibt erhalten**; die Oberfläche zeigt ein implizites Projekt und einen Chat `default`, ohne Projekt-/Chat-Verwaltung. Das Terminal-Dashboard bleibt an einen Hive gebunden. API und Speicherlayout: [CONTROL.md](docs/CONTROL.md).
+
+### Kontextsystem
+
+Ein **Turn** ist ein nicht mehr laufender Run: Nutzeranfrage und Ergebnis, auch bei Fehler oder Abbruch. Für den nächsten Turn entsteht deterministisch aus Dateien auf der Platte ein beratendes **Kontextpaket**, ohne Modellaufruf oder Pi-Session-Wiederverwendung. Das gilt nur im **Registry-/Desktop-Modus**; der Single-Hive-Modus bleibt unverändert. Projekte teilen niemals Kontext miteinander.
+
+Die Anzeige-/Lesereihenfolge der Schichten ist **Projektnotizen → Dreaming-Gedächtnis → andere Chats desselben Projekts → ältere Turns dieses Chats als Einzeiler → jüngste Turns im Detail**; innerhalb der eigenen Historie steht der neueste Turn zuletzt. Die Budgetpriorität ist davon verschieden: neuester Turn im Detail, vollständige Projektnotizen, weitere jüngste Turns (neueste zuerst), ältere eigene Turns, andere Chats, zuletzt Dreaming. Die aktuelle Anfrage hat immer Vorrang; Notizen sind nachgeordnete Nutzerpräferenzen, dieser Chat hat Vorrang vor anderen Chats und neuerer Kontext vor älterem. Nicht mehr passende eigene Turns werden verdichtet oder ausdrücklich als ausgelassen gezählt.
+
+| Grenze (`src/core/context/limits.js`) | Wert |
+|---|---|
+| Team-Planung (Michael) | Paket höchstens **23900 Zeichen**, Verbraucher akzeptieren **24000** |
+| Team-Entwicklung (Dwight) | Kurzbrief höchstens **3900 Zeichen**, akzeptiert **4000**; Notizen darin höchstens **1500**, höchstens **6** eigene Turns als Einzeiler; keine fremden Chats, kein Gedächtnis, keine Antworten |
+| Gespeicherte Projektnotizen / Dreaming-Kontext | **4000 Zeichen / 16384 Bytes** bzw. **2000 Zeichen** |
+| Eigene jüngste Turns im Team-Paket | Höchstens **4** im Detail; neuester: Anfrage **2000**, Ergebnis **300**, Planblock **3000**, Dateiblock **1500**, Antwort **6000** Zeichen; ältere: **800 / 300 / 1200 / 600 / 1500**; höchstens **24** Planzeilen und **30** Dateien |
+| Ältere eigene Turns / Einzeiler | Schicht höchstens **4000 Zeichen**; Einzeiler **300**, Anfrageanteil **160**, Ergebnisanteil **200**, höchstens **6** Dateipfade |
+| Andere Chats | Höchstens **6 Chats × 3 Turns**, Team-Schicht höchstens **3000 Zeichen**, nur Restbudget |
+| Pipeline-`context` | Notizen **2000 Codepoints**, ältere Turns **16 × 240**, andere Chats **6 × 3 × 240**; höchstens **8000 UTF-8-Bytes** (Python akzeptiert **8192**), gesamtes History-Objekt **32768 Bytes** |
+| Gelesene Historie je Paket | Eigener Chat höchstens **500** Runs; **12** zuletzt aktualisierte andere Chats mit je **4** neuesten Runs; insgesamt **64 MiB** Artefakte |
+
+Team-Zeichengrenzen zählen JS-Stringlänge; Surrogatpaare werden nicht zerschnitten. Bei Platzmangel schrumpft ein detaillierter Turn zuerst um Dateien, dann Plan, Antwort und Anfrage (nicht unter **500** Anfragezeichen), sonst wird er zum Einzeiler. Gate-Agenten (Oscar, Hank, Angela und eigene Gates) erhalten nichts Neues. Dwight erhält den Kurzbrief bei Aufgaben und Wiederholungen, auch ohne Planung. In **Pipeline-Chats** erhält nur der Planner zusätzlich zur bisherigen begrenzten History einen separaten `conversation_context`-Block mit eigener Zulage **`min(4000, max_prompt_bytes // 32)` Bytes**, soweit noch Promptplatz frei ist; Implementer und Reviewer bleiben unverändert. Andere Chats liefern dafür nur verdichtete Zeilen, niemals Einträge in `runs`.
+
+Die **Context**-Zeile bei **Follow up** öffnet die Seitenleiste mit Zählern, Budget, aufklappbaren Schichten und bei Team dem Entwicklerbrief. Team-Schichten zeigen den eingespeisten Text, Pipeline-Schichten eine lesbare Projektion, nicht den wörtlichen Prompt. **Share context between the chats of this project** ist pro Projekt standardmäßig an; aus bedeutet weder Empfang noch Weitergabe der Schicht „andere Chats“. Projektnotizen lassen sich dort bearbeiten und speichern; leerer Text löscht ihren Inhalt. **Start fresh from here** setzt einen Chatmarker: Turns, die zu diesem Zeitpunkt oder früher begannen, werden aus allen Paketen ausgeblendet, auch aus der Sicht anderer Chats. Die Historie bleibt erhalten, **Restore earlier turns** entfernt den Marker. Projektnotizen und Dreaming bleiben vom Reset unberührt; Kontextänderungen gelten für nächste Turns, nicht rückwirkend für laufende Prompts.
+
+```text
+scranton context show    --data DIR --project ID [--chat ID] [--json]
+scranton context notes   --data DIR --project ID (--file FILE | --clear)
+scranton context share   --data DIR --project ID on|off
+scranton context reset   --data DIR --project ID --chat ID
+scranton context restore --data DIR --project ID --chat ID
+```
+
+Gespeichert werden `<data>/projects/<id>/context/settings.json` (`{v:1,crossChat:true}`), daneben `notes.md` und `<data>/projects/<id>/chats/<chat>/context/state.json` (`{v:1,resetAt:null}` oder ISO-Zeitpunkt). Turns und Pakete werden daraus und aus der Laufhistorie abgeleitet, nicht als neue Zusammenfassungen gespeichert. Fehlende/defekte Einstellungen verwenden die Defaults; unlesbare, zu große oder verlinkte Artefakte werden isoliert ausgelassen, statt einen Runstart zu verhindern. HTTP-Dokumente und Transport: [CONTROL.md, Abschnitt 12](docs/CONTROL.md#12-context-system-registry-only).
+
+**Grenzen:** Kontext ist nur beratend: Keine Freigaben, abgeschlossenen Schritte, Check-Erfolge, Evidenz-IDs, Checkpoints oder Ausführungszustände werden übernommen; neue Reads, Prüfungen und Freigaben bleiben erforderlich. Redaktion von Zugangsdaten ist Best Effort, keine Anonymisierung. **Files touched** in Team-Turns stammt aus journalisierten `write`-/`edit`-Toolereignissen von Dwight und ist ein Pfadzeiger, kein Liefernachweis. Verdichtung ist deterministisch, keine modellgeschriebene Zusammenfassung. Die Kontextprüfungen sind scripted/offline; daraus folgt keine Aussage über die Qualität mit echten Modellen.
 
 ## Dreaming: lokales Projektgedächtnis
 
@@ -283,5 +316,5 @@ node bin/scranton.js run "Änderungen prüfen" --gates "oscar+seclint,angela" --
 
 Mit `scranton run "Wie ist diese Codebasis aufgebaut?" --conversation` zeigt die CLI die Nachrichten jeder Rolle und am Ende einen eigenen Antwortblock. Fragen kann Michael direkt beantworten, ohne Plan oder Meilensteine. Nach einer Aufgabe schreibt er einen Abschlussbericht; bei Fehler oder Zeitüberschreitung erscheint stattdessen eine deterministische Zusammenfassung. `scranton demo --scenario question --conversation` demonstriert den Fragepfad ohne Modellaufruf.
 
-Engine und CLI lassen den Modus standardmäßig aus (`--no-conversation`); alternativ `execution.conversation:true` in der Konfiguration oder `SCRANTON_CONVERSATION=1`. Die Weboberfläche fordert ihn mit `conversation:true` an. Frühere Antworten fließen begrenzt in Folgefragen desselben Threads ein. Antworten werden als untrusted Text behandelt; der Modus verleiht Agenten keine zusätzlichen Werkzeuge oder Rechte.
+Engine und CLI lassen den Modus standardmäßig aus (`--no-conversation`); alternativ `execution.conversation:true` in der Konfiguration oder `SCRANTON_CONVERSATION=1`. Die Weboberfläche fordert ihn mit `conversation:true` an. Im Registry-Modus fließen frühere Antworten als Teil des oben beschriebenen Kontextsystems in Folgefragen ein, nicht als vollständiges Transkript. Antworten werden als untrusted Text behandelt; der Modus verleiht Agenten keine zusätzlichen Werkzeuge oder Rechte.
 Michael erhält nur bei aktivem Gesprächsmodus einen zusätzlichen Systemprompt-Abschnitt für Plan, direkte Antwort oder Bericht; gespeicherte Prompts bleiben unverändert. Fehlgeschlagene Berichtstexte bleiben als Agentennachricht sichtbar. CLI und Terminal-Dashboard entfernen Steuer-/Bidi-Zeichen aus Nachrichtentexten; große, im Terminal unterdrückte Agentennachrichten verdrängen keine sichtbaren Ereignisse.

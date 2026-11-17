@@ -260,6 +260,10 @@
       </div>
     </div>
     <span class="hint followup-hint" id="followup-hint"></span>
+    <button type="button" class="context-line" id="context-line" aria-haspopup="dialog" title="What the next turn of this chat receives as context" hidden>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      <span id="context-line-text"></span>
+    </button>
     <div class="hitl-status" id="followup-status" role="status" aria-live="polite" tabindex="-1"></div>
     <button type="button" class="link-btn followup-fix" id="followup-fix" aria-haspopup="dialog" hidden>Open Options</button>
   </form>
@@ -1279,6 +1283,82 @@
       </div>
       <footer class="drawer-foot">
         <span class="hint" id="dreams-foot"></span>
+        <button type="button" class="btn" data-close>Close</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog class="drawer drawer-wide" id="context-dialog" aria-labelledby="context-title">
+    <div class="drawer-frame">
+      <header class="drawer-head">
+        <h2 id="context-title">Context <span class="hint dreams-project" id="context-chat"></span></h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </header>
+      <div class="drawer-body" id="context-body">
+        <p class="hint accounts-intro">What the next turn of this chat receives along with its request: your project notes, other chats of this project, and this chat's earlier turns. It is built from what is saved on disk and is advisory only. The new request always takes precedence, and nothing here carries over approvals, checks or evidence.</p>
+        <p class="form-error" id="context-error" role="alert" hidden></p>
+        <div class="dreams-retry" id="context-retry-row" hidden><button type="button" class="btn btn-small" id="context-retry">Try again</button></div>
+        <p class="hint" id="context-empty">Loading context...</p>
+        <div class="dreams-content" id="context-content" hidden>
+          <section class="dreams-summary" aria-labelledby="context-summary-title">
+            <h3 class="sr-only" id="context-summary-title">Summary</h3>
+            <div class="dreams-state-row">
+              <span class="badge" id="context-engine"></span>
+              <span class="badge" id="context-truncated" data-tone="quiet" hidden>Shortened</span>
+              <span class="badge" id="context-degraded" data-tone="loud" hidden>Degraded</span>
+              <span class="hint" id="context-reset-at"></span>
+            </div>
+            <dl class="context-figures" id="context-figures"></dl>
+            <p class="dreams-state-note" id="context-flags" hidden></p>
+          </section>
+          <section class="dreams-section" aria-labelledby="context-sections-title">
+            <h3 class="keyform-title" id="context-sections-title">Next turn receives <span class="hint">in this order</span></h3>
+            <p class="hint" id="context-sections-empty" hidden></p>
+            <div class="context-blocks" id="context-sections"></div>
+          </section>
+          <section class="dreams-section" id="context-developer-section" aria-labelledby="context-developer-title" hidden>
+            <h3 class="keyform-title" id="context-developer-title">Developer brief <span class="hint">sent to Dwight with each task</span></h3>
+            <p class="hint" id="context-developer-empty" hidden>Empty: the developer gets no conversation context with its next task.</p>
+            <div class="context-blocks" id="context-developer"></div>
+          </section>
+          <section class="dreams-section" aria-labelledby="context-history-title">
+            <h3 class="keyform-title" id="context-history-title">This chat's turns</h3>
+            <p class="hint keyform-note" id="context-history-note"></p>
+            <div class="dreams-actions" role="group" aria-labelledby="context-history-title">
+              <button type="button" class="btn btn-small" id="context-reset" aria-expanded="false" aria-controls="context-reset-confirm">Start fresh from here</button>
+              <button type="button" class="btn btn-small" id="context-restore" hidden>Restore earlier turns</button>
+              <span class="hint form-status" id="context-action-status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="context-confirm" id="context-reset-confirm" role="group" aria-labelledby="context-reset-question" hidden>
+              <p id="context-reset-question"></p>
+              <div class="keyform-actions">
+                <button type="button" class="btn btn-small" id="context-reset-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary btn-small" id="context-reset-ok">Start fresh</button>
+              </div>
+            </div>
+          </section>
+          <form class="keyform" id="context-project" novalidate aria-labelledby="context-project-title">
+            <h3 class="keyform-title" id="context-project-title">Project <span class="hint" id="context-project-name"></span></h3>
+            <p class="form-error" id="context-project-error" role="alert" hidden></p>
+            <label class="check" id="context-cross-row"><input type="checkbox" id="context-cross"><span>Share context between the chats of this project<span class="hint">Off: no chat of this project receives or provides the other chats part. Projects never share anything with each other.</span></span></label>
+            <span class="hint form-status" id="context-cross-status" role="status" aria-live="polite"></span>
+            <div class="field">
+              <label for="context-notes">Project notes <span class="hint">standing preferences for every chat of this project</span></label>
+              <textarea id="context-notes" rows="6" maxlength="4000" aria-describedby="context-notes-hint context-notes-count"></textarea>
+              <span class="hint field-count" id="context-notes-count">0 / 4,000</span>
+              <span class="hint" id="context-notes-hint">The Team planner gets them in full, below the request it comes with; other roles and Pipeline chats get a shortened copy. Empty clears them.</span>
+            </div>
+            <p class="form-error" id="context-notes-error" role="alert" hidden></p>
+            <div class="keyform-actions">
+              <span class="hint form-status" id="context-notes-status" role="status" aria-live="polite"></span>
+              <button type="button" class="btn btn-small" id="context-notes-undo" hidden>Undo changes</button>
+              <button type="submit" class="btn btn-primary btn-small" id="context-notes-save">Save notes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <footer class="drawer-foot">
+        <span class="hint" id="context-foot"></span>
         <button type="button" class="btn" data-close>Close</button>
       </footer>
     </div>

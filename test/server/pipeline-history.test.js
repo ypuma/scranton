@@ -53,7 +53,7 @@ console.log(JSON.stringify({type:'agent_settled',aborted:false}));`);
   return { dir, root, workspace, body, route, req, wait, start, decide, restart, seed, other };
 }
 
-test('HTTP fresh run receives disk history after restart, exact task and redaction; demo/resume/other chat do not', async (t) => {
+test('HTTP fresh run receives disk history after restart, exact task and redaction; demo/resume omit history and sibling turns stay outside runs', async (t) => {
   const f = await fixture(t); const original = f.seed(); await f.restart();
   const id = await f.start(), s = await f.wait(id, 'awaiting_approval');
   const argv = JSON.parse(fs.readFileSync(path.join(f.root, 'runs', id, 'argv.json')));
@@ -69,7 +69,10 @@ test('HTTP fresh run receives disk history after restart, exact task and redacti
   await f.decide(demo, d, 'reject'); await f.wait(demo, 'rejected');
   const other = await f.start(f.other); await f.wait(other, 'awaiting_approval', f.other);
   const otherRoot = path.join(path.dirname(path.dirname(f.root)), f.other.id, 'pipeline');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(otherRoot, 'runs', other, 'argv.json'))).includes('--history-file'), false);
+  const otherArgs = JSON.parse(fs.readFileSync(path.join(otherRoot, 'runs', other, 'argv.json')));
+  const otherHistory = JSON.parse(fs.readFileSync(otherArgs[otherArgs.indexOf('--history-file') + 1], 'utf8'));
+  assert.deepEqual(otherHistory.runs, []);
+  assert.match(JSON.stringify(otherHistory.context.other_chats), /Original visualization request/);
   assert.equal(fs.readFileSync(path.join(f.root, 'runs/oldrun01/run.json'), 'utf8'), original);
   assert.equal((await f.req(f.route(), { ...f.body, history: h })).code, 400);
   const invocations = fs.readFileSync(path.join(f.dir, 'invocations.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

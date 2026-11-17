@@ -91,7 +91,7 @@ test('shortcut names Cmd on a Mac only, and falls back to Ctrl when the page can
 for (const [name, [platform, mod]] of Object.entries(PLATFORMS)) {
   test(`${name}: the Follow up hint, the steering composer and the copy fallback name ${mod}`, async (t) => {
     pin(platform);
-    assert.equal(threadHint(), `Earlier runs of this chat are given to Michael as context. ${mod}+Enter starts.`);
+    assert.equal(threadHint(), `Earlier turns of this chat are given to the team as context. ${mod}+Enter starts.`);
     assert.equal(steerBlock(), `${mod}+Enter sends`);
     assert.equal(await copyFallback(t), `Selected - press ${mod}+C to copy`);
   });

@@ -11,7 +11,7 @@ import { shortcut } from './platform.js';
 const $ = (id) => document.getElementById(id);
 const RUNS_ON = new Set(['run_started', 'run_finished']);
 const PLACEHOLDER = 'Ask a question or describe a task...';
-const HINT = 'Earlier runs of this chat are given to Michael as context.';
+const HINT = 'Earlier turns of this chat are given to the team as context.';
 const PIPELINE_HINT = 'Starts a pipeline run with the choices under Options.';
 
 function el(tag, cls, text) {

@@ -54,7 +54,7 @@ export async function readBody(req) {
   } catch { throw error(400, 'Expected a JSON object'); }
 }
 
-export function createControl({ hive, workspace, runner = spawn, auth = getAuthService(), closeAuth = true, acquire = acquireRunLease, prepareThread = false, fixedWorkspace = false, promptsDir, gates, recoveryDocker, onStarting = () => {}, dreaming }) {
+export function createControl({ hive, workspace, runner = spawn, auth = getAuthService(), closeAuth = true, acquire = acquireRunLease, prepareThread = false, fixedWorkspace = false, promptsDir, gates, recoveryDocker, onStarting = () => {}, dreaming, threadContext }) {
   workspace = path.resolve(workspace ?? 'workspace');
   let active = null;
   let lastExit = null;
@@ -241,9 +241,10 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     try {
       try { Promise.resolve(dreaming?.()?.cancelReflection?.()).catch(() => {}); } catch {}
       onStarting(info);
-      if (prepareThread) {
+      if (prepareThread && !demo) {
         const file = path.join(hive, 'control', 'thread-context.json');
-        writeFileAtomicSync(file, JSON.stringify({ v: 1, text: teamDreamingContext(formatThreadContext(listRuns(hive), { maxChars: 8000 }), memory) }));
+        const pack = threadContext?.({ memory });
+        writeFileAtomicSync(file, JSON.stringify(pack ? { v: 2, text: pack.text, developer: pack.developer } : { v: 1, text: teamDreamingContext(formatThreadContext(listRuns(hive), { maxChars: 8000 }), memory) }));
         args.splice(2, 0, '--thread-context', file);
       }
       child = runner(process.execPath, args, { cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_PROMPTS_DIR: baseConfig.promptsDir, SCRANTON_SETTINGS_DIR: baseConfig.settingsDir, SCRANTON_DATA: '', SCRANTON_RUN_ID: info.runId, SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });

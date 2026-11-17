@@ -297,7 +297,7 @@ Die Runliste umfasst Archiv plus aktuellen/letzten Hive-Run, älteste zuerst (So
 
 Replay liest ausschließlich `<hive>/runs/<runId>/events.jsonl`, nicht die aktuelle Root-Datei. Es liefert nur vollständige LF-terminierte, als JSON-Objekt lesbare Zeilen; ungültige Zeilen werden übersprungen. Run-ID: `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`. Antworten: 400 `Invalid run ID`, 404 `Run archive not found`, 403 `Forbidden archive path` bei Pfadausbruch oder 413 `Archive exceeds 20 MiB`. Replay ist ein JSON-Read, kein SSE-Stream und keine Wiederaufnahme eines alten Runs.
 
-Vor dem nächsten servergestarteten Registry-Run werden frühere Ziele, Meilensteintitel/-status und Ergebnisse zusammengefasst: pro Run höchstens 1500 Zeichen Ergebnis-/Meilensteinzusammenfassung, zusätzlich höchstens 1500 Zeichen einer früheren Antwort (`Reply (<kind>): ...`), insgesamt höchstens 8000 Zeichen Thread-Kontext, neueste Runs bevorzugt. `<hive>/control/thread-context.json` enthält `{v:1,text:string}` und wird per `--thread-context` an den Kindprozess übergeben. Michael erhält diesen Kontext für die Planung, nicht als Anweisung zum Überschreiben des neuen Ziels. Die Registry-CLI berechnet ihn direkt. Es werden keine alten Pi-Prozesse fortgesetzt und keine vollständigen Transkripte zugesichert.
+Vor dem nächsten Registry-Run wird das Kontextpaket aus Dateien neu aufgebaut: Projektnotizen, Dreaming-Gedächtnis, andere Chats desselben Projekts sowie verdichtete ältere und detaillierte jüngste Turns dieses Chats. Michael erhält bis zu 24000 Zeichen, Dwight einen separaten Kurzbrief; die Gates erhalten nichts Neues. Der Server übergibt `<hive>/control/thread-context.json` per `--thread-context`, die direkte Registry-CLI baut dasselbe Paket selbst. Dokumente, Limits, v2-Transport und v1-Kompatibilität stehen in [Abschnitt 12](#12-context-system-registry-only). Es werden keine alten Pi-Prozesse fortgesetzt und keine vollständigen Transkripte zugesichert.
 
 ### Unscoped Aliase und aggregiertes Control
 
@@ -408,3 +408,81 @@ The project-scoped structural Dreaming routes are `GET /api/projects/:id/dreamin
 Reflection adds `GET /api/projects/:id/dreaming/proposal` (200 reflection status), `POST /api/projects/:id/dreaming/propose` with `{provider?,model?}` (202 complete Dreaming status after synchronous preflight), `POST /api/projects/:id/dreaming/proposal/apply` and `/proposal/reject` with `{proposalId}` (200 complete status), and `POST /api/projects/:id/dreaming/cancel` with `{}` (200 complete status). The same guards and strict body limits apply. Propose uses the authenticated catalog selection or configured model; 202 confirms acceptance, not successful completion or adoption. Poll status to observe running/ready/failed/cancelled. Pending proposals require explicit ID-specific review; deterministic commands never call a model. Project removal drains owned reflection cancellation/cleanup before deleting history, so cancellation cannot recreate its directory.
 
 Defaults: scheduling off, policy application independently off, interval 360 minutes. Scheduling runs only in the live Registry server, defers project activity/recovery and is stopped on server close. Explicit sweeps require no model. New runs may receive bounded, live-source-revalidated advisory project memory; separately opted-in retry caps cannot exceed current operator ceilings and require an exact current evaluator cohort. No approvals or mandatory checks are inherited or removed. Full payload, provenance/privacy, CLI, replay exclusions and legacy Pipeline coverage: [DREAMING.md](DREAMING.md).
+
+## 12. Context system (Registry only)
+
+A turn is a run that is no longer live, including failed or interrupted runs. The next turn's advisory pack is rebuilt deterministically from disk, without model calls, network access or Pi session reuse. Projects never share context with other projects. Single-hive behavior is unchanged; these routes do not exist there. Context operations are non-journaled and add no event types.
+
+### Routes and documents
+
+All six routes use the scoped protections of §8: loopback peer, local Host, `X-Scranton-Client: 1` (also GET), and an exact local Origin when supplied. POST requires `Content-Type: application/json` and a JSON object of at most 65536 bytes; no extra fields are accepted. Responses are the documents below, not an envelope.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| GET | `/api/projects/:p/context` | — | project document |
+| POST | `/api/projects/:p/context/settings` | exactly `{ "crossChat": boolean }` | project document |
+| POST | `/api/projects/:p/context/notes` | exactly `{ "text": string }` (at most 4000 JS string characters) | project document |
+| GET | `/api/projects/:p/chats/:c/context` | — | chat document |
+| POST | `/api/projects/:p/chats/:c/context/reset` | `{}` | chat document |
+| POST | `/api/projects/:p/chats/:c/context/restore` | `{}` | chat document |
+
+Errors: 404 for an unknown project/chat or absent Single-mode route; 400 for invalid/extra body fields or oversized notes; existing guard errors are 403 (authorization/origin), 415 (content type), 413 (body size). Notes also have a 16384-byte UTF-8 storage cap.
+
+Project document (example):
+
+```json
+{ "v": 1, "settings": { "crossChat": true },
+  "notes": { "text": "", "chars": 0, "limit": 4000, "updatedAt": null },
+  "chats": [{ "id": "", "title": "", "engine": "team", "turns": 0, "lastActiveAt": null, "reset": false }] }
+```
+
+Chat document (example; what the next turn would receive now, excluding the live run):
+
+```json
+{ "v": 1, "engine": "team", "settings": { "crossChat": true }, "reset": { "at": "<ISO>" },
+  "turns": { "total": 7, "visible": 5, "detailed": 4, "condensed": 1, "omitted": 0 },
+  "otherChats": { "chats": 2, "turns": 5 }, "notes": { "chars": 120, "limit": 4000 }, "memory": { "chars": 0 },
+  "budget": { "limit": 24000, "used": 10321 }, "truncated": false, "degraded": false,
+  "sections": [{ "id": "recent", "title": "This chat - recent turns", "chars": 4210, "text": "...", "exact": true }],
+  "developer": { "chars": 800, "text": "..." } }
+```
+
+`engine` is `team` or `pipeline`; `reset` is null without a marker. Non-empty `sections` follow the order `notes`, `memory`, `other-chats`, `earlier`, `recent`. Team sections are exact injected text (`exact:true`, apart from the orchestrator's wrapper); `budget.used` counts JS string characters. Pipeline sections are readable wire projections (`exact:false`), `budget.limit` is 32768 UTF-8 wire bytes and `developer` is null; `recent` projects the existing history `runs`, the other conversation layers project `context`. `truncated` signals bounded reading/rendering; `degraded` signals fallback to legacy context after an internal error or at least one unreadable run or artifact.
+
+### Storage and controls
+
+| File | Content |
+|---|---|
+| `<data>/projects/<p>/context/settings.json` | `{ "v": 1, "crossChat": true }` |
+| `<data>/projects/<p>/context/notes.md` | UTF-8 text, at most 4000 JS string characters and 16384 bytes |
+| `<data>/projects/<p>/chats/<c>/context/state.json` | `{ "v": 1, "resetAt": null }` or an ISO string for `resetAt` |
+
+Missing/corrupt files read as sharing on, empty notes and no reset. Context storage and the Pipeline history reader canonicalise the data-directory root once, accepting links at or above it, then reject every linked component below it; the Team context reader canonicalises ancestors above the hive but rejects a linked hive root and every linked component below it. All three readers reject files with multiple hard links; storage writes use a same-directory temporary file, fsync and atomic rename (mode `0o600`). Notes normalize CRLF to LF and remove controls except newline/tab; empty text clears them. Turns and packs are derived, not separately stored.
+
+With `crossChat:false`, no chat of this project receives or provides the other-chats layer. Reset hides turns of this chat that started at or before the marker from all packs, including sibling digests, without deleting history or renumbering turns. Restore sets `resetAt:null`. Project notes and Dreaming memory are unaffected. Changes affect subsequent packs, not already running prompts. The Context drawer exposes these controls, counters and collapsible sections; it refreshes on scope change, turn completion, mutation and opening, not by polling.
+
+### Team transport and CLI
+
+Before a non-demo server-started Team run, `<hive>/control/thread-context.json` carries the pack below; demo-scenario runs neither receive nor write a context pack:
+
+```json
+{ "v": 2, "text": "...", "developer": "..." }
+```
+
+`--thread-context FILE` accepts at most 262144 file bytes; v2 `text` is at most 24000 characters and optional `developer` at most 4000. The still-accepted v1 form is `{ "v": 1, "text": "..." }`, at most 8000 characters, without a developer brief. Invalid versions/types/limits produce `Invalid thread context file`. Without this internal flag, the registry CLI builds the same pack from disk.
+
+The builder stays below the consumer clamps: 23900 planner characters, 3900 developer characters. Michael's heading is `## Earlier turns and project context - context only; the new goal below takes precedence`, retaining the `<earlier-runs>` wrapper. Dwight gets notes (at most 1500 characters) plus at most six condensed own turns, no memory, sibling chats or replies. Every task/bug-report/feedback message includes it under `## Conversation so far (context only; your task is the milestone above)` in `<conversation-context>` tags, including retries and `--no-plan`. Gate prompts get nothing new. Empty context leaves existing prompts unchanged. Pipeline uses the optional history `context` key and planner-only `conversation_context` block described in [PIPELINE.md](PIPELINE.md#cross-run-continuity).
+
+```text
+scranton context show    --data DIR --project ID [--chat ID] [--json]
+scranton context notes   --data DIR --project ID (--file FILE | --clear)
+scranton context share   --data DIR --project ID on|off
+scranton context reset   --data DIR --project ID --chat ID
+scranton context restore --data DIR --project ID --chat ID
+```
+
+### Authority and limits
+
+The current request wins; notes are subordinate standing preferences, this chat outranks siblings and newer turns outrank older ones. Rendering order is not budget priority: reserve the latest detailed turn, then full notes, other recent own turns, condensed earlier own turns, sibling digests and finally memory. Other chats use left-over budget only. Full layer/read limits are in [README.md](../README.md#kontextsystem).
+
+No approvals, completed steps/gates, check success, evidence IDs, checkpoints, sessions or execution state carry over. Fresh workspace/reads/checks/approvals remain required. Redaction is best effort; private absolute paths and proof-like references are masked or dropped and context delimiters are neutralized. Team “Files touched” comes from journaled Dwight write/edit tool events, not a delivery proof. Corrupt, oversized or linked artifacts degrade individually; unexpected pack errors fall back to the legacy result rather than prevent a run start. Condensation is deterministic, not a model-written summary; scripted/offline tests do not establish real-model quality.

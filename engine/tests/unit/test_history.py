@@ -285,3 +285,26 @@ def test_memory_evicted_before_same_chat_priority_and_total_bytes():
         row.update(task="😀" * 4000, plan="😀" * 8000, outcome="😀" * 4000)
     with pytest.raises(EngineError):
         validate_history(huge, Redactor())
+
+
+@pytest.mark.parametrize("size", [32767, 32769])
+def test_compact_history_wire_byte_boundary(tmp_path, size):
+    raw = {"schema": 1, "runs": [
+        {"run_id": f"run-{i}", "status": "failed", "task": "x" * 4000,
+         "plan": "x" * 8000, "outcome": "x" * 4000} for i in range(2)], "truncated": False}
+    raw["runs"].append({"run_id": "tail", "status": "failed", "task": "", "plan": "", "outcome": ""})
+    def compact():
+        return json.dumps(raw, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    raw["runs"][-1]["outcome"] = "x" * (size - len(compact()))
+    data = compact()
+    assert len(data) == size and len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > 32768
+    path = tmp_path / "compact-history.json"
+    path.write_bytes(data)
+    if size <= 32768:
+        assert validate_history(raw, Redactor()) == raw
+        assert load_history(path, Redactor()) == raw
+    else:
+        for validate in (lambda: validate_history(raw, Redactor()), lambda: load_history(path, Redactor())):
+            with pytest.raises(EngineError) as error:
+                validate()
+            assert error.value.code == "invalid_history"

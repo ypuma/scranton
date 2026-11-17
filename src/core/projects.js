@@ -21,7 +21,7 @@ function label(value, max, fallback) {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x1f\x7f]/.test(value)) throw fail(400, 'Invalid name or title');
   return value.trim();
 }
-export const derivedChatTitle = (request) => request.replace(/[\s\x00-\x1f\x7f-\x9f]+/g, ' ').trim().slice(0, 60) || 'New chat';
+export const derivedChatTitle = (request) => request.replace(/[\s\x00-\x1f\x7f-\x9f]+/g, ' ').trim().slice(0, 60).toWellFormed() || 'New chat';
 const key = (p) => process.platform === 'win32' ? p.toLowerCase() : p;
 const within = (p, root) => key(p) === key(root) || key(p).startsWith(key(root) + path.sep);
 function canonical(p) {

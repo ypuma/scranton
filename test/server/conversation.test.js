@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { releaseRunLease } from '../../src/core/run-lease.js';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
+import { createContext } from '../../src/core/context/index.js';
 
 async function setup(t, runner) {
   const root = path.resolve('.scratch/chat-backend/server'); fs.mkdirSync(root, { recursive: true });
@@ -70,7 +71,7 @@ test('real question demo followed by a new run archives reply and supplies it to
   const archive = fs.readFileSync(path.join(f.hive, 'runs', runs[0].runId, 'events.jsonl'), 'utf8'); assert.match(archive, /run_reply/);
 });
 
-test('registry follow-up passes earlier reply bounded to 1500 characters in thread context', async (t) => {
+test('registry follow-up passes the v2 context pack with the latest earlier reply', async (t) => {
   const { createProjectRegistry } = await import('../../src/core/projects.js');
   const root = path.resolve('.scratch/chat-backend/server'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'registry-')), workspace = path.join(dir, 'ws'); fs.mkdirSync(workspace);
@@ -83,6 +84,8 @@ test('registry follow-up passes earlier reply bounded to 1500 characters in thre
   t.after(async () => { if (child) { releaseRunLease(chat.hiveDir, env.SCRANTON_RUN_LEASE); child.emit('close', 0); } await server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const res = await fetch(server.url + `/api/projects/${project.id}/chats/${chat.id}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Scranton-Client': '1' }, body: JSON.stringify({ request: 'follow-up', trustedHost: true, conversation: true }) });
   assert.equal(res.status, 202, await res.text());
-  const context = JSON.parse(fs.readFileSync(args[args.indexOf('--thread-context') + 1], 'utf8')).text;
-  assert.match(context, /Reply \(answer\): a{1500}\nSummary:/); assert.ok(context.length <= 8000);
+  const context = JSON.parse(fs.readFileSync(args[args.indexOf('--thread-context') + 1], 'utf8'));
+  const pack = createContext({ dataDir, registry }).forTeam(project.id, chat.id);
+  assert.deepEqual(context, { v: 2, text: pack.text, developer: pack.developer });
+  assert.match(context.text, /Reply \(answer\):\na{5000}/); assert.ok(context.text.length <= 24000);
 });

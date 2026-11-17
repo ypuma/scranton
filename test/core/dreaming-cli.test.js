@@ -8,7 +8,7 @@ import { createProjectRegistry } from '../../src/core/projects.js';
 import { loadConfig, PACKAGE_ROOT } from '../../src/core/config.js';
 import { auditRole } from '../../src/core/agents-config.js';
 import { promptAudit } from '../../src/core/prompts.js';
-import { formatThreadContext, listRuns } from '../../src/core/thread.js';
+import { createContext } from '../../src/core/context/index.js';
 
 function fixture(t) {
   const root = path.resolve('.scratch/dreaming-cli-fix/tests');
@@ -35,7 +35,7 @@ function fixture(t) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, rows.map((row, i) => JSON.stringify({ v: 1, runId, seq: i + 1, ts: new Date().toISOString(), ...row })).join('\n') + '\n');
   }
-  const history = formatThreadContext(listRuns(chat.hiveDir));
+  const history = createContext({ dataDir, registry }).forTeam(project.id, chat.id).text;
   const dreamDir = path.join(dataDir, 'projects', project.id, 'dreaming');
   let observed;
   t.mock.method(Orchestrator.prototype, 'run', async function (request) {
@@ -73,7 +73,9 @@ test('CLI corrupt optional dreaming state preserves history and ceiling and stil
   t.mock.method(Orchestrator.prototype, 'run', async function () {
     started = true;
     assert.equal(this.config.maxFailedCycles, 3);
-    assert.equal(this.threadContext, '');
+    const chat = f.registry.listChats(f.project.id).find((c) => c.hiveDir === this.config.hiveDir);
+    assert.equal(this.threadContext, createContext({ dataDir: path.join(f.dir, 'data'), registry: f.registry }).forTeam(f.project.id, chat.id).text);
+    assert.match(this.threadContext, /Other chats.*\n/s);
     return { status: 'success', cleanupComplete: true };
   });
   const stream = { write() {} };
@@ -116,7 +118,12 @@ for (const applyPolicy of [false, true]) test(`CLI dreaming adoption opt-in=${ap
   const f = fixture(t); f.sweep(applyPolicy);
   const result = await f.run();
   assert.equal(result.config.maxFailedCycles, applyPolicy ? 1 : 3);
-  assert.ok(result.threadContext.startsWith(f.history));
+  const dream = f.registry.dreaming(f.project.id);
+  try {
+    const pack = createContext({ dataDir: path.join(f.dir, 'data'), registry: f.registry }).forTeam(f.project.id, f.chat.id, { memory: dream.context() });
+    assert.equal(result.threadContext, pack.text);
+  } finally { dream.close(); }
+  assert.ok(result.threadContext.indexOf('Project memory') < result.threadContext.indexOf('This chat - recent turns'));
   assert.match(result.threadContext, /Project memory \(advisory historical data/);
   assert.equal((await f.run(['--max-cycles', '2'])).config.maxFailedCycles, 2, 'different ceiling abstains');
 });

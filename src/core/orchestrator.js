@@ -34,7 +34,7 @@ class RunAborted extends Error {
  * to inject decisions, `listener(event)` for live output, `extraEnv` for the pi children, stdin/stdout.
  */
 export class Orchestrator {
-  constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startPi, prepareExecution = prepareSandbox, threadContext = '' }) {
+  constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startPi, prepareExecution = prepareSandbox, threadContext = '', developerContext = '' }) {
     this.config = config;
     this.conversation = config.execution?.conversation === true;
     this.roles = structuredClone(config.roles ?? BUILTIN_ROLES);
@@ -48,6 +48,7 @@ export class Orchestrator {
     this.workflow = normalizeWorkflow(config.workflow, this.gates);
     this.legacyGates = JSON.stringify(this.workflow.gates) === '[["angela"]]';
     this.threadContext = threadContext;
+    this.developerContext = developerContext;
     this.startRunner = startRunner;
     this.prepareExecution = prepareExecution;
     this.noPlan = noPlan;
@@ -101,12 +102,18 @@ export class Orchestrator {
     this.emit('agent_status', { agent, status, activity: ['error', 'blocked'].includes(status) ? clip(String(activity ?? '').split(/\r?\n/)[0], 300) : clip(activity, 80), ...(instanceId ? { instanceId } : {}) });
   }
 
-  async run(request, { threadContext = this.threadContext } = {}) {
+  async run(request, { threadContext = this.threadContext, developerContext = this.developerContext } = {}) {
     const { config } = this;
     validateDockerModels(config, this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan));
     let result = { status: 'failed', summary: '', signaled: false };
     this.request = String(request).trim();
     this.threadContext = typeof threadContext === 'string' ? threadContext : '';
+    this.developerContext = '';
+    for (const line of (typeof developerContext === 'string' ? developerContext.trim() : '').split(/\r?\n/)) {
+      if (this.developerContext.length + line.length + 1 > 4000) break;
+      this.developerContext += `${line}\n`;
+    }
+    this.developerContext = this.developerContext.trimEnd();
     try {
       fs.mkdirSync(config.workspace, { recursive: true });
       this.hive.init();
@@ -222,10 +229,10 @@ export class Orchestrator {
     const contextLines = this.threadContext.trim().split(/\r?\n/);
     let context = '';
     for (const line of contextLines) {
-      if (context.length + line.length + 1 > 8000) break;
+      if (context.length + line.length + 1 > 24000) break;
       context += `${line}\n`;
     }
-    const planningInput = (context.trim() ? `## Earlier runs in this chat - context only; the new goal below takes precedence\n\n<earlier-runs>\n${context.replace(/<\/?earlier-runs\s*>/gi, '[earlier-runs]')}</earlier-runs>\n\n` : '') + planRequestBody(this.request, this.conversation);
+    const planningInput = (context.trim() ? `## Earlier turns and project context - context only; the new goal below takes precedence\n\n<earlier-runs>\n${context.replace(/<\s*\/?\s*earlier-runs\s*>/gi, '[earlier-runs]')}</earlier-runs>\n\n` : '') + planRequestBody(this.request, this.conversation);
     let body = planningInput;
     let kind = 'plan_request';
     let from = 'human';
@@ -292,7 +299,7 @@ export class Orchestrator {
     const { maxFailedCycles } = this.config;
     this.emit('milestone_started', { milestoneId: m.id, index, total, title: m.title });
     this.setStatus('michael', 'waiting', `Overseeing ${m.id}: ${m.title}`);
-    const ctx = { milestone: m, request: this.request, completed };
+    const ctx = { milestone: m, request: this.request, completed, chatContext: this.developerContext };
     let stage = 0;
     let cycle = 0;
     let failed = 0;

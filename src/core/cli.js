@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseArgs, parseEnv } from 'node:util';
+import { parseArgs, parseEnv, stripVTControlCharacters } from 'node:util';
 import { ConfigError, PACKAGE_ROOT, loadConfig, loadDotEnv } from './config.js';
 import { runDoctor } from './doctor.js';
 import { createTerminalLog, styler } from './log.js';
@@ -24,7 +24,7 @@ import os from 'node:os';
 import { dreamingCap, teamDreamingCohort, teamDreamingContext } from './dreaming-sources.js';
 import { createProjectRegistry, derivedChatTitle } from './projects.js';
 import { resolveReflectionModel } from './dreaming-reflection-sources.js';
-import { listRuns, formatThreadContext } from './thread.js';
+import { createContext } from './context/index.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
@@ -54,6 +54,11 @@ Usage:
                                            Local deterministic project memory (default off)
   scranton dreaming propose [--provider P --model M]|apply --proposal ID|reject --proposal ID|cancel
                                            Reviewed model reflection; requires --data DIR --project ID
+  scranton context show --data DIR --project ID [--chat ID] [--json]
+  scranton context notes --data DIR --project ID (--file FILE | --clear)
+  scranton context share --data DIR --project ID on|off
+  scranton context reset|restore --data DIR --project ID --chat ID
+                                           Inspect and manage advisory project/chat context
   scranton chats <project>                 List threads in a project
   scranton agents                          List agents and effective settings
   scranton agent set-model <id> --provider P --model M [--thinking T]
@@ -88,6 +93,8 @@ Environment and .env: see .env.example. Precedence: flags > env > scranton.confi
 
 const OPTIONS = {
   json: { type: 'boolean' },
+  file: { type: 'string' },
+  clear: { type: 'boolean' },
   proposal: { type: 'string' },
   data: { type: 'string' },
   'single-hive': { type: 'boolean' },
@@ -182,6 +189,7 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
       loadDotEnv(registryRun ? PACKAGE_ROOT : cwd, (file) => { env = { ...parseEnv(readFileSync(file, 'utf8')), ...env }; });
     } else loadDotEnv(cwd);
     if (command === 'dreaming') return await cmdDreaming(rest, values, { stdout, env, cwd, auth, completeReflection });
+    if (command === 'context') return await cmdContext(rest, values, { stdout, env, cwd });
     if (['accounts', 'login', 'logout', 'provider'].includes(command)) {
       return await cmdAuth(command, rest, values, { stdout, stderr, stdin, auth: auth ?? createAuthService({ env }) });
     }
@@ -404,6 +412,61 @@ async function cmdDreaming(args, values, { stdout, env, cwd, auth, completeRefle
   } finally { await dream.close(); await ownAuth?.close(); }
 }
 
+const terminalText = (text) => stripVTControlCharacters(text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufe0e\ufe0f\u2028\u2029]/g, '');
+
+function contextSummary(doc) {
+  const sharing = `Sharing: ${doc.settings.crossChat ? 'on' : 'off'}; notes: ${doc.notes.chars}/${doc.notes.limit} chars`;
+  if (doc.chats) return [sharing, ...doc.chats.map((chat) => `${chat.id} | ${chat.title} | ${chat.engine} | ${chat.turns} turns${chat.reset ? ' | reset' : ''}`)].join('\n') + '\n';
+  const t = doc.turns;
+  return [sharing, `Turns: ${t.total} total; ${t.visible} visible; ${t.detailed} detailed; ${t.condensed} condensed; ${t.omitted} omitted`,
+    `Other chats: ${doc.otherChats.chats}; turns: ${doc.otherChats.turns}; memory: ${doc.memory.chars} chars`,
+    `Budget: ${doc.budget.used}/${doc.budget.limit} ${doc.engine === 'pipeline' ? 'bytes' : 'chars'}; truncated: ${doc.truncated}; degraded: ${doc.degraded}`,
+    `Reset: ${doc.reset?.at ?? 'none'}`,
+    ...doc.sections.map((section) => `\n${section.title} (${section.chars} chars)\n${section.text}`),
+    ...(doc.developer ? [`\nDeveloper brief (${doc.developer.chars} chars)\n${doc.developer.text}`] : [])].join('\n') + '\n';
+}
+
+async function cmdContext(args, values, { stdout, env, cwd }) {
+  const [action, sharing] = args;
+  if (!['show', 'notes', 'share', 'reset', 'restore'].includes(action) || args.length !== (action === 'share' ? 2 : 1) || !(values.data || env.SCRANTON_DATA) || !values.project || values['single-hive']) throw new UsageError('context requires show|notes|share|reset|restore --data DIR --project ID (Registry projects only)');
+  if (['reset', 'restore'].includes(action) && !values.chat) throw new UsageError(`context ${action} requires --chat ID`);
+  if (!['show', 'reset', 'restore'].includes(action) && values.chat) throw new UsageError('--chat is only valid for context show|reset|restore');
+  if (action === 'notes' && Boolean(values.file) === Boolean(values.clear)) throw new UsageError('context notes requires exactly one of --file FILE or --clear');
+  if (action !== 'notes' && (values.file !== undefined || values.clear)) throw new UsageError('--file and --clear are only valid for context notes');
+  if (action === 'share' && !['on', 'off'].includes(sharing)) throw new UsageError('context share requires on|off');
+  const dataDir = path.resolve(cwd, values.data || env.SCRANTON_DATA), registry = createProjectRegistry({ dataDir });
+  const context = createContext({ dataDir, registry });
+  let result;
+  try {
+    if (action === 'show' && values.chat) {
+      const chat = registry.getChat(values.project, values.chat);
+      let memory = chat.engine === 'pipeline' ? [] : '';
+      try {
+        const dream = registry.dreaming(values.project);
+        try { memory = chat.engine === 'pipeline' ? dream.structuredContext() : dream.context(); }
+        finally { await dream.close(); }
+      } catch { memory = chat.engine === 'pipeline' ? [] : ''; }
+      result = context.inspect(values.project, values.chat, { memory });
+    } else if (action === 'show') result = context.status(values.project);
+    else if (action === 'notes') {
+      let text = '';
+      if (values.file) {
+        const file = path.resolve(cwd, values.file);
+        const stat = statSync(file);
+        if (!stat.isFile()) throw new UsageError('Context notes file must be a regular file');
+        if (stat.size > 16384) throw new UsageError('Context notes file exceeds 16384 bytes');
+        try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(file)).replace(/^\uFEFF/, ''); }
+        catch (error) { if (error.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') throw new UsageError('Context notes file must be valid UTF-8'); throw error; }
+      }
+      result = context.setNotes(values.project, text);
+    } else if (action === 'share') result = context.configure(values.project, { crossChat: sharing === 'on' });
+    else result = context[action](values.project, values.chat);
+  } catch (err) { throw new UsageError(terminalText(err.message)); }
+  // Escape display-only formatting in JSON without changing the raw document's values.
+  stdout.write(values.json ? JSON.stringify(result).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufe0e\ufe0f\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`) + '\n' : terminalText(contextSummary(result)));
+  return 0;
+}
+
 function cmdProjects(command, args, values, config, { stdout }) {
   const registry = createProjectRegistry({ dataDir: config.dataDir ?? path.join(process.env.APPDATA ?? path.join(os.homedir(), '.local', 'share'), 'dev.scranton.desktop') });
   if (command === 'chats') {
@@ -420,14 +483,17 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
   if (!request.trim()) throw new UsageError('run needs a request, e.g. scranton run "Build a todo CLI"');
   let acquire = acquireRunLease;
   if (!config.dataDir && (values.project || values.chat)) throw new UsageError('--project and --chat require --data');
-  let threadContext = '';
+  let threadContext = '', developerContext = '', contextVersion;
   if (values['thread-context']) {
     try {
       const file = path.resolve(config.cwd, values['thread-context']);
-      if (statSync(file).size > 65536) throw Error();
+      if (statSync(file).size > 262144) throw Error();
       const context = JSON.parse(readFileSync(file, 'utf8'));
-      if (context.v !== 1 || typeof context.text !== 'string' || context.text.length > 8000) throw Error();
+      if (![1, 2].includes(context.v) || typeof context.text !== 'string' || context.text.length > (context.v === 1 ? 8000 : 24000)) throw Error();
+      if (context.v === 2 && context.developer !== undefined && (typeof context.developer !== 'string' || context.developer.length > 4000)) throw Error();
+      contextVersion = context.v;
       threadContext = context.text;
+      if (context.v === 2) developerContext = context.developer ?? '';
     } catch { throw new UsageError('Invalid thread context file'); }
   }
   if (config.dataDir) {
@@ -437,19 +503,24 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
     const project = registry.getProject(values.project);
     const chat = values.chat ? registry.getChat(project.id, values.chat) : registry.createChat(project.id, { title: derivedChatTitle(request) });
     if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
-    if (!values['thread-context']) threadContext = formatThreadContext(listRuns(chat.hiveDir), { maxChars: 8000 });
     config = loadConfig({ cwd: PACKAGE_ROOT, env, flags: { ...toFlags(values), config: undefined, workspace: project.workspace, hive: chat.hiveDir } });
+    let memory = '';
     try {
       const dream = registry.dreaming(project.id);
       try { Promise.resolve(dream.cancelReflection?.()).catch(() => {}); } catch {}
-      let context, maxFailedCycles;
+      let nextMemory, maxFailedCycles;
       try {
-        context = teamDreamingContext(threadContext, dream.context());
+        nextMemory = contextVersion === 2 ? '' : dream.context();
         maxFailedCycles = dreamingCap(dream, 'team', config.maxFailedCycles, teamDreamingCohort(config));
-      } finally { dream.close(); }
-      threadContext = context;
+      } finally { await dream.close(); }
+      memory = nextMemory;
       config = { ...config, maxFailedCycles };
-    } catch { /* Optional dreaming must not prevent a run or replace its existing context/ceiling on failure. */ }
+    } catch { /* Optional dreaming must not replace context or the configured ceiling on failure. */ }
+    if (!values['thread-context']) {
+      const pack = createContext({ dataDir: registry.dataDir, registry }).forTeam(project.id, chat.id, { memory });
+      threadContext = pack.text;
+      developerContext = pack.developer;
+    } else if (contextVersion === 1) threadContext = teamDreamingContext(threadContext, memory);
     acquire = (hive, info) => registry.locked(() => {
       registry.getChat(project.id, chat.id);
       if (readRunLease(hive)) throw Object.assign(Error('Chat is already owned'), { code: 'EEXIST' });
@@ -462,6 +533,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, begin }) {
   const orchestrator = new Orchestrator({
     config,
     threadContext,
+    developerContext,
     noPlan: Boolean(values['no-plan']),
     onBreaker: policyOf(values, config),
     listener: createTerminalLog({ stream: stdout, env, ascii: Boolean(values.ascii) }),
