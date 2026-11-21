@@ -7,7 +7,11 @@ export function quotePathArgument(value, platform = process.platform) {
   return "'" + value.replaceAll("'", "'\\''") + "'";
 }
 
-export function formatRunSummary(orchestrator, result, durationMs) {
+export function formatCommandScope(hiveDir, scope) {
+  return scope ? `--data ${quotePathArgument(scope.dataDir)} --project ${scope.projectId} --chat ${scope.chatId}` : `--hive ${quotePathArgument(hiveDir)}`;
+}
+
+export function formatRunSummary(orchestrator, result, durationMs, scope) {
   const state = orchestrator.rec.state, trees = orchestrator.worktrees;
   const milestones = state.milestones ?? [];
   const count = (status) => milestones.filter((m) => m.status === status).length;
@@ -23,7 +27,10 @@ export function formatRunSummary(orchestrator, result, durationMs) {
     if (files.length && !orchestrator.standaloneAgent) {
       try {
         const point = listRestorePoints(orchestrator.config.hiveDir).find((p) => p.runId === orchestrator.runId && !p.unreadable);
-        if (point?.remaining > 0) lines.push(`Undo: scranton undo --hive ${quotePathArgument(orchestrator.config.hiveDir)} --run ${orchestrator.runId}`);
+        if (point?.remaining > 0) {
+          const target = formatCommandScope(orchestrator.config.hiveDir, scope);
+          lines.push(`Undo: scranton undo ${target} --run ${orchestrator.runId}`);
+        }
         if (point?.unrestorable > 0) lines.push(`Not restorable: ${point.unrestorable} ${point.unrestorable === 1 ? 'file has' : 'files have'} no backup.`);
       } catch { lines.push('Undo: restore point could not be inspected'); }
     }

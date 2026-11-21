@@ -185,11 +185,11 @@ by: "core"
 ---
 file: "src/core/run-summary.js"
 kind: "where"
-text: "What `scranton run` prints when a run ends. `formatRunSummary(orchestrator, result, durationMs)` builds the block from recorded data only: outcome, milestone counts by status from `orchestrator.rec.state`, the files whose integrated content differs from the initial snapshot (`orchestrator.worktrees.initial` vs `.integrated`; count plus up to 20 paths), an `Undo: scranton undo --hive <dir> --run <id>` line only when the run changed files and its restore point exists and is not undone, the private worktree for the standalone `scranton agent` command, duration, recorded usage / cost, and the path of `events.jsonl`. `quotePathArgument(value, platform)` quotes a path for the commands the CLI and doctor print (double quotes on Windows without doubling backslashes inside the path; single quotes elsewhere)."
-see_also: "src/core/cli.js execute (writes the block to stderr); src/core/doctor.js; test/core/cli-usability.test.js; test/core/cli-undo.test.js"
-hash: "shape:93ebef10277dfce6"
+text: "`formatRunSummary(orchestrator, result, durationMs, scope)` builds the final CLI block from recorded milestone counts, initial/integrated file snapshots (up to 20 paths), restore point availability, duration, usage/cost and events path. With a restorable change it prints an Undo command. `formatCommandScope` selects `--data ... --project ... --chat ...` for a registry run, or `--hive ...` for standalone; `quotePathArgument` quotes the directory. CLI recovery and conflict retry instructions share that formatter so copying them preserves chat ownership checks."
+see_also: "src/core/cli.js; test/core/cli-usability.test.js; test/core/cli-undo.test.js; test/core/registry-summary.test.js"
+hash: "shape:df02152a948ff0eb"
 written: "2026-11-21"
-commit: "cd0d158"
+commit: "81f6ea4"
 by: "core"
 ---
 

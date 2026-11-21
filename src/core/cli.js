@@ -15,7 +15,7 @@ import { PiNotFoundError, resolvePiCommand } from './pi-command.js';
 import { startPi, writeSystemPrompt } from './pi-runner.js';
 import { acquireRunLease, readRunLease, releaseRunLease, startRunHeartbeat, guardParent, registerParentStartup, cliRecoveryStatus } from './run-lease.js';
 import { orphanSnapshot, recoverOrphan } from './run-recovery.js';
-import { formatRunSummary, quotePathArgument } from './run-summary.js';
+import { formatRunSummary, quotePathArgument, formatCommandScope } from './run-summary.js';
 import { listRestorePoints, undoRun, workspaceState } from './restore-points.js';
 import { randomUUID } from 'node:crypto';
 import { AGENT_IDS } from './state.js';
@@ -288,7 +288,7 @@ function onInterrupt(handler, repeated = () => process.exit(130)) {
   return () => process.off('SIGINT', listener);
 }
 
-async function execute(orchestrator, request, { stderr, env = process.env, acquire = acquireRunLease }) {
+async function execute(orchestrator, request, { stderr, env = process.env, acquire = acquireRunLease, scope }) {
   const hiveDir = orchestrator.config.hiveDir;
   const dispose = guardParent({ hiveDir, env, abort: (reason) => orchestrator.abort(reason) });
   let lease;
@@ -315,8 +315,8 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
     if (lease) releaseRunLease(hiveDir, lease.token);
     if (err.code === 'EEXIST') {
       const orphan = orphanSnapshot(hiveDir, err.recoveryError);
-      if (readRunLease(hiveDir)?.mode === 'undo') { stderr.write(`scranton: An undo is running in this chat; wait for it to finish or recover it before starting a run.\n${recoveryObservation(hiveDir)}\n`); return 1; }
-      stderr.write(`scranton: Hive is already owned by another run or recovery is required. Owner state: ${orphan?.owner ?? 'unknown'}; run: ${terminalText(orphan?.runId ?? 'unverifiable')}. Ownership was not changed.\n${recoveryObservation(hiveDir)}\n${orphan?.recoveryError ? terminalText(orphan.recoveryError) + '\n' : ''}Inspect/recover: scranton recover --hive ${quotePathArgument(hiveDir)}\n`);
+      if (readRunLease(hiveDir)?.mode === 'undo') { stderr.write(`scranton: An undo is running in this chat; wait for it to finish or recover it before starting a run.\n${recoveryObservation(hiveDir, scope)}\n`); return 1; }
+      stderr.write(`scranton: Hive is already owned by another run or recovery is required. Owner state: ${orphan?.owner ?? 'unknown'}; run: ${terminalText(orphan?.runId ?? 'unverifiable')}. Ownership was not changed.\n${recoveryObservation(hiveDir, scope)}\n${orphan?.recoveryError ? terminalText(orphan.recoveryError) + '\n' : ''}Inspect/recover: scranton recover ${formatCommandScope(hiveDir, scope)}\n`);
       return 1;
     }
     throw err;
@@ -343,7 +343,7 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
       orchestrator.stdout.write(`${result.text ?? ''}\nkeyword: ${result.keyword ? `[${result.keyword}]` : '(none)'}\n`);
       if (result.status === 'failed') stderr.write(`scranton: ${result.summary}\n`);
     }
-    if (env.SCRANTON_PARENT_GUARD !== '1') stderr.write(terminalText(formatRunSummary(orchestrator, result, Date.now() - started)));
+    if (env.SCRANTON_PARENT_GUARD !== '1') stderr.write(terminalText(formatRunSummary(orchestrator, result, Date.now() - started, scope)));
     if (result.status === 'success') return 0;
     return result.status === 'aborted' && result.signaled ? 130 : 1;
   } finally {
@@ -356,19 +356,20 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
 
 function maintenanceHive(command, values, { env, cwd }, siblings = []) {
   const registryMode = Boolean(values.project || values.chat || values.data || env.SCRANTON_DATA) && !values.hive;
-  let hiveDir;
+  let hiveDir, scope;
   if (registryMode) {
     if (!values.project || !values.chat) throw new UsageError(`Registry ${command} requires --project ID --chat ID`);
     const registry = createProjectRegistry({ dataDir: path.resolve(cwd, values.data || env.SCRANTON_DATA || defaultDataDir(env)) });
     const chat = registry.getChat(values.project, values.chat);
     if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
     hiveDir = chat.hiveDir;
+    scope = { dataDir: registry.dataDir, projectId: values.project, chatId: chat.id };
     siblings.push(...registry.listChats(values.project).filter((c) => c.id !== chat.id).map((c) => c.hiveDir));
   } else {
     if (values.hive && (values.data || values.project || values.chat)) throw new UsageError(`Use --hive or registry ${command} options, not both`);
     hiveDir = loadConfig({ cwd, env, flags: { ...toFlags(values), singleHive: true }, validateWorkflow: false }).hiveDir;
   }
-  return hiveDir;
+  return { hiveDir, scope };
 }
 
 async function cmdUndo(args, values, io) {
@@ -376,7 +377,8 @@ async function cmdUndo(args, values, io) {
   if (values.list && (values.run !== undefined || values.force)) throw new UsageError('--list cannot be combined with --run or --force');
   if (values.run !== undefined && !/^[a-zA-Z0-9_-]{1,128}$/.test(values.run)) throw new UsageError('Invalid restore point identifier');
   const siblings = [];
-  const hiveDir = maintenanceHive('undo', values, io, siblings), scope = `--hive ${quotePathArgument(hiveDir)}`;
+  const target = maintenanceHive('undo', values, io, siblings), { hiveDir } = target;
+  const scope = formatCommandScope(hiveDir, target.scope);
   try {
     if (values.list) {
       const points = listRestorePoints(hiveDir);
@@ -404,14 +406,14 @@ async function cmdUndo(args, values, io) {
   }
 }
 
-function recoveryObservation(hiveDir) {
+function recoveryObservation(hiveDir, scope) {
   const s = cliRecoveryStatus(hiveDir);
-  return `Owner check: ${s.owner === 'gone' ? 'process not found here' : `owner ${s.owner}`}; heartbeat ${s.seconds === null ? 'age unknown' : `${s.seconds} seconds old`}; host: ${terminalText(s.host ?? 'not recorded')}. Please wait and retry, or use scranton recover --hive ${quotePathArgument(hiveDir)} --confirm-stopped after making sure nothing of that run is still running.`;
+  return `Owner check: ${s.owner === 'gone' ? 'process not found here' : `owner ${s.owner}`}; heartbeat ${s.seconds === null ? 'age unknown' : `${s.seconds} seconds old`}; host: ${terminalText(s.host ?? 'not recorded')}. Please wait and retry, or use scranton recover ${formatCommandScope(hiveDir, scope)} --confirm-stopped after making sure nothing of that run is still running.`;
 }
 
 async function cmdRecover(args, values, { stdout, stderr, env, cwd }) {
   if (args.length) throw new UsageError('recover takes no positional arguments');
-  const hiveDir = maintenanceHive('recover', values, { env, cwd });
+  const { hiveDir, scope } = maintenanceHive('recover', values, { env, cwd });
   const orphan = orphanSnapshot(hiveDir);
   if (!orphan) { stdout.write('No run owns this Hive; no recovery needed.\n'); return 0; }
   const lease = readRunLease(hiveDir);
@@ -420,7 +422,7 @@ async function cmdRecover(args, values, { stdout, stderr, env, cwd }) {
   if (orphan.recoveryError) stderr.write(terminalText(orphan.recoveryError) + '\n');
   if (orphan.owner === 'alive') { stderr.write('The run is still running. Request a stop instead.\n'); return 1; }
   if (!values['confirm-stopped'] && !cliRecoveryStatus(hiveDir).automatic) {
-    stderr.write(recoveryObservation(hiveDir) + '\n');
+    stderr.write(recoveryObservation(hiveDir, scope) + '\n');
     return 1;
   }
   try {
@@ -430,7 +432,7 @@ async function cmdRecover(args, values, { stdout, stderr, env, cwd }) {
     stdout.write(lease?.mode === 'undo' ? 'Released interrupted undo; run history was not changed.\n' : `Recovered run ${terminalText(orphan.runId)}; recorded as aborted.\n`);
     return 0;
   } catch (err) {
-    stderr.write(`scranton: ${terminalText(err.message)}\nOwnership was retained. Inspect with scranton recover --hive ${quotePathArgument(hiveDir)}; use --confirm-stopped only after independently confirming all prior processes/containers have stopped.\n`);
+    stderr.write(`scranton: ${terminalText(err.message)}\nOwnership was retained. Inspect with scranton recover ${formatCommandScope(hiveDir, scope)}; use --confirm-stopped only after independently confirming all prior processes/containers have stopped.\n`);
     return 1;
   }
 }
@@ -698,7 +700,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin
   }
   if (!request.trim()) throw new UsageError('run needs a request, e.g. scranton run "Build a todo CLI"');
   if (request.length > 32768) throw new UsageError('Request exceeds 32768 characters');
-  let acquire = acquireRunLease;
+  let acquire = acquireRunLease, scope;
   if (!config.dataDir && (values.project || values.chat)) throw new UsageError('--project and --chat require --data');
   let threadContext = '', developerContext = '', contextVersion;
   if (values['thread-context']) {
@@ -721,6 +723,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin
     const project = registry.getProject(values.project);
     const chat = values.chat ? registry.getChat(project.id, values.chat) : registry.createChat(project.id, { title: derivedChatTitle(request) });
     if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
+    scope = { dataDir: registry.dataDir, projectId: project.id, chatId: chat.id };
     stderr.write(`Project: ${project.id}; chat: ${chat.id}; continue: scranton run "<request>" --data ${quotePathArgument(config.dataDir)} --project ${project.id} --chat ${chat.id}\n`);
     config = loadConfig({ cwd: PACKAGE_ROOT, env, flags: { ...toFlags(values), config: undefined, workspace: project.workspace, hive: chat.hiveDir } });
     let memory = '';
@@ -761,7 +764,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin
     stdout
   });
   await begin();
-  return execute(orchestrator, request, { stderr, env, acquire });
+  return execute(orchestrator, request, { stderr, env, acquire, scope });
 }
 
 async function cmdDemo(values, { stdout, stderr, env, cwd, begin }) {
