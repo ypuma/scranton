@@ -194,9 +194,23 @@ Die Windows-Befehle weiter oben verwenden `npm.cmd` und MSVC/WebView2 statt der 
 
 ### Workflow, Artefakte und Signierung
 
-`.github/workflows/desktop-native.yml` läuft bei Pushes auf `master`, bei Pull Requests oder explizit über **Actions → Native desktop builds → Run workflow** (`workflow_dispatch`). Pro nativem Host: Node 24, Rust stable und Python 3.14, `npm ci`, serielle portable Core-/Resolver-/CSP-Gates und Python-Dateirechte-/Sandbox-User-Gates (`test_fs_modes.py`, `test_snapshot_modes.py`, `test_sandbox_user.py` nach Installation von `engine[dev]`), `app:prepare` einschließlich credential-freier Pi-/Pipeline-Smokes, Manifestpflichtprüfung, vollständige serielle Packagingtests, Rusttests, `app:build`. Die Pipeline darf dabei nicht absichtlich ausgelassen werden. Tests werden nicht pauschal auf Nicht-Windows übersprungen; Plattformregressionen sollen den betreffenden Job scheitern lassen. Das ist ein begrenztes Buildgate, **nicht die vollständige JS-/Python-/UI-Testsuite**. Diese weiter separat seriell ausführen. Weder echte OAuth-/Modellaufrufe noch Docker-Imagebuilds sind CI-Bestandteil.
+**Checks und native Builds laufen standardmäßig lokal auf dem Entwicklerrechner, nicht auf GitHub Actions.** `.github/workflows/desktop-native.yml` hat ausschließlich den manuellen Trigger `workflow_dispatch`, keine automatischen Push-, Pull-Request- oder Zeitplantrigger. Ein Cloudlauf über **Actions → Native desktop builds → Run workflow** ist nur eine Ausnahme nach neuer ausdrücklicher Zustimmung des Nutzers, niemals der automatische oder standardmäßige Buildweg; das gilt auch für Wiederholungen fehlgeschlagener Cloudläufe.
 
-Jedes Format wird separat hochgeladen, mit OS/Architektur und **unsigned** im Namen, 14 Tage Aufbewahrung; fehlende Dateien führen zum Fehler. Das `.app` liegt als `.app.tar.gz` vor, damit Unix-Rechte und Symlinks beim Artefakttransport erhalten bleiben. DMG, NSIS, DEB und AppImage haben eigene Downloads. Der Workflow veröffentlicht **keinen GitHub Release**, pusht nicht und verändert keine Repositorydateien im Remote.
+Unter Windows aus dem Projektroot mit den oben genannten Voraussetzungen, nacheinander:
+
+```bat
+set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+npm.cmd run app:prepare
+node --test --test-concurrency=1 "test/packaging/*.test.js"
+cargo test --manifest-path src-tauri/Cargo.toml
+npm.cmd run app:build
+```
+
+Die lokalen Pakete liegen unter `src-tauri/target/release/bundle/`, unter Windows der NSIS-Installer in `nsis/`. Windows baut ausschließlich Windows; macOS- und Linux-Pakete benötigen jeweils einen nativen Builder mit passender OS-/CPU-Architektur und den Voraussetzungen aus den Abschnitten oben. Ein lokaler Windows-Build liefert keinen plattformübergreifenden Build- oder Laufzeitnachweis.
+
+Der nur ausnahmsweise manuell freigegebene GitHub-Workflow behält seine Gates bei. Pro nativem Host: Node 24, Rust stable und Python 3.14, `npm ci`, serielle portable Core-/Resolver-/CSP-Gates und Python-Dateirechte-/Sandbox-User-Gates (`test_fs_modes.py`, `test_snapshot_modes.py`, `test_sandbox_user.py` nach Installation von `engine[dev]`), `app:prepare` einschließlich credential-freier Pi-/Pipeline-Smokes, Manifestpflichtprüfung, vollständige serielle Packagingtests, Rusttests, `app:build`. Die Pipeline darf dabei nicht absichtlich ausgelassen werden. Tests werden nicht pauschal auf Nicht-Windows übersprungen; Plattformregressionen sollen den betreffenden Job scheitern lassen. Das ist ein begrenztes Buildgate, **nicht die vollständige JS-/Python-/UI-Testsuite**. Diese weiter separat lokal und seriell ausführen. Weder echte OAuth-/Modellaufrufe noch Docker-Imagebuilds sind CI-Bestandteil.
+
+Nur bei einem ausdrücklich freigegebenen Cloudlauf wird jedes Format separat hochgeladen, mit OS/Architektur und **unsigned** im Namen, 14 Tage Aufbewahrung; fehlende Dateien führen zum Fehler. Das `.app` liegt als `.app.tar.gz` vor, damit Unix-Rechte und Symlinks beim Artefakttransport erhalten bleiben. DMG, NSIS, DEB und AppImage haben eigene Downloads. Der Workflow veröffentlicht **keinen GitHub Release**, pusht nicht und verändert keine Repositorydateien im Remote.
 
 Diese CI ist absichtlich **unsigniert** und braucht keine Signing-Secrets. Windows SmartScreen und macOS Gatekeeper können warnen oder den Start blockieren; dies ist kein notarisiertes, öffentlich freigegebenes Macpaket. Sicherheitsprüfungen nicht pauschal deaktivieren. Signierung/Notarisierung ist ein separater geschützter Maintainerprozess: Apple Developer ID mit `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` sowie Notarisierungszugang (z. B. `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, alternativ API-Key-Verfahren gemäß aktueller Tauri-Doku); Windows-Codesigning entsprechend Zertifikat und Signaturwerkzeug. Keine solchen Secrets in PR-Jobs geben. Ein späterer optionaler Signierjob muss bei nicht konfigurierten Secrets ausbleiben, ohne die unsignierten Buildjobs zu blockieren. [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 

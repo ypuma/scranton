@@ -35,12 +35,19 @@ function checkGates(source) {
   assert.doesNotMatch(source, /continue-on-error|SCRANTON_SKIP_PIPELINE: ['"]?1|--target\s|pull_request_target/);
 }
 
-test('native CI starts on master pushes and retains manual and pull request triggers', () => {
-  const triggers = workflow.match(/^on:\r?\n([\s\S]*?)\r?\npermissions:/m)?.[1];
-  assert.ok(triggers, 'Workflow triggers must be declared');
-  assert.match(triggers, /^  workflow_dispatch:\s*$/m);
-  assert.match(triggers, /^  pull_request:\s*$/m);
-  assert.match(triggers, /^  push:\r?\n    branches: \[master\]\s*$/m);
+function checkTriggers(source) {
+  const triggers = source.match(/^on:\r?\n([\s\S]*?)\r?\npermissions:/m)?.[1];
+  assert.equal(triggers?.trim(), 'workflow_dispatch:', 'Native builds must allow only explicit workflow_dispatch');
+}
+
+test('native CI allows only manual workflow_dispatch', () => checkTriggers(workflow));
+
+test('trigger contract rejects added automatic or callable triggers', () => {
+  const manual = workflow.replace(/^on:\r?\n[\s\S]*?\r?\npermissions:/m, 'on:\n  workflow_dispatch:\n\npermissions:');
+  checkTriggers(manual);
+  for (const trigger of ['push', 'pull_request', 'pull_request_target', 'schedule', 'workflow_run', 'workflow_call', 'repository_dispatch']) {
+    assert.throws(() => checkTriggers(manual.replace('  workflow_dispatch:', `  workflow_dispatch:\n  ${trigger}:`)), /Native builds must allow only explicit workflow_dispatch/);
+  }
 });
 
 test('native CI pins all five real host runner/target pairs', () => checkMatrix(workflow));
@@ -59,7 +66,6 @@ test('CI contracts reject wrong Intel runner and omitted runtime/package gates',
 
 test('unsigned CI only uploads explicitly separated expected bundle formats', () => {
   assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /pull_request:/);
   assert.match(workflow, /permissions:\s*\n  contents: read/);
   assert.doesNotMatch(workflow, /secrets\.|contents: write|gh release|release create|git push|git commit|docker build|npm run app:dev/);
   for (const dependency of ['libwebkit2gtk-4.1-dev', 'libayatana-appindicator3-dev', 'librsvg2-dev', 'patchelf', 'libfuse2']) assert.ok(workflow.includes(dependency));

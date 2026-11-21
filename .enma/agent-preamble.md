@@ -15,6 +15,7 @@ dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use
 - Pi is installed (project dependency; user confirms installation). Do not infer credential availability from old notes. Never print credentials. Use fake pi for deterministic tests; any real-model smoke test must be explicitly scoped and reported separately.
 - Docker Desktop 29.9.2 (Linux engine) is installed since 2026-11-09. The default sandbox image is `scranton-sandbox:1.5.2-r1` (`sandbox/Dockerfile`); only `scranton-sandbox:1.5.0` is known to have been built locally, so check `docker images` before relying on it. Do not install system software or build/pull other images unless the task says so. The Docker sandbox must fail closed; explicit trusted-host execution is not OS isolation. Docker mode needs a resolved provider+model default for every active agent (pi default is refused); New run uses Agents defaults and ignores per-run model picks, while trusted host keeps overrides.
 - Run the test suites one after another, not in parallel: some tests are timing-sensitive under load.
+- Run tests and native builds locally. Do not dispatch or retry cloud GitHub Actions runs, or add automatic workflow triggers, without the user's new explicit approval.
 - The npm registry is reachable.
 - Rust 1.99.1 (rustup, stable-x86_64-pc-windows-msvc) is in `%USERPROFILE%\.cargo\bin`, which is NOT on PATH
   in tool shells: prefix `set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"` (cmd). MSVC build tools: VS 2026 Community
