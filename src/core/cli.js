@@ -55,6 +55,9 @@ Usage:
   scranton dashboard [--once] [--ascii]    Live terminal dashboard (second terminal)
   scranton visualize [--port N] [--host H] Web dashboard in the browser (default http://127.0.0.1:1725)
   scranton app-server [--port N]           Controlled server for desktop (default port 0)
+  scranton relay --origin HTTPS_URL [--target-port N] [--port N]
+                 [--tls-cert PEM --tls-key PEM [--listen-ip IP]]
+                                           Pair a phone with a running dashboard over private HTTPS
   scranton login <claude|chatgpt|antigravity> Sign in with a subscription in your browser
   scranton login <provider> --api-key        Store an API key (hidden prompt or stdin, never argv)
   scranton login gemini                    Store a Gemini API key
@@ -160,6 +163,11 @@ const OPTIONS = {
   port: { type: 'string' },
   host: { type: 'string' },
   control: { type: 'boolean' },
+  origin: { type: 'string' },
+  'target-port': { type: 'string' },
+  'tls-cert': { type: 'string' },
+  'tls-key': { type: 'string' },
+  'listen-ip': { type: 'string' },
   help: { type: 'boolean', short: 'h' }
 };
 
@@ -204,6 +212,8 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
       stdout.write(HELP);
       return 0;
     }
+    if (command === 'relay') return await cmdRelay(rest, values, { stdout, stderr });
+    if (['origin', 'target-port', 'tls-cert', 'tls-key', 'listen-ip'].some((key) => values[key] !== undefined)) throw new UsageError('Relay options are only valid for relay');
     if (values['single-hive'] && (values.data || values.project || values.chat)) throw new UsageError('--single-hive conflicts with registry options');
     const registryRun = !values['single-hive'] && command === 'run' && Boolean(values.data || env.SCRANTON_DATA);
     if (command === 'run' && !registryRun && (values.project || values.chat)) {
@@ -819,6 +829,35 @@ async function cmdDashboard(values, config, { stdout, stderr }) {
   const mod = await loadUiModule('src/dashboard/index.js', 'terminal dashboard', stderr);
   if (!mod) return 1;
   await mod.runDashboard({ hiveDir: config.hiveDir, once: Boolean(values.once), ascii: Boolean(values.ascii), stdout });
+  return 0;
+}
+
+async function cmdRelay(rest, values, { stdout, stderr }) {
+  if (rest.length || Object.keys(values).some((key) => !['origin', 'port', 'target-port', 'tls-cert', 'tls-key', 'listen-ip'].includes(key))) {
+    throw new UsageError('Use scranton relay --origin HTTPS_URL [--target-port N] [--port N] [--tls-cert PEM --tls-key PEM [--listen-ip IP]]');
+  }
+  const mod = await loadUiModule('src/server/relay.js', 'phone relay', stderr);
+  if (!mod) return 1;
+  let relay;
+  try {
+    relay = await mod.startRelay({ origin: values.origin, port: values.port, targetPort: values['target-port'], certFile: values['tls-cert'], keyFile: values['tls-key'], listenIp: values['listen-ip'] });
+  } catch (err) {
+    if (err instanceof TypeError) throw new UsageError(err.message);
+    if (err.name !== 'RelayStartError') throw err;
+    stderr.write(`scranton: ${err.message}\n`);
+    return 1;
+  }
+  await new Promise((resolve) => {
+    const done = () => {
+      process.off('SIGINT', done);
+      process.off('SIGTERM', done);
+      resolve();
+    };
+    process.once('SIGINT', done);
+    process.once('SIGTERM', done);
+    stdout.write(`Relay listening on ${relay.url}\nOpen ${relay.origin} on your phone.\nPairing code: ${relay.code}\nPress Ctrl+C to disconnect the relay.\n`);
+  });
+  await relay.close();
   return 0;
 }
 

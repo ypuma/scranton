@@ -3,6 +3,7 @@
 import { store } from './control-panel.js';
 import { WORKFLOW_KEY, parseStoredWorkflow } from './control.js';
 import { PREFS_KEY, RUN_DEFAULTS_KEY, parsePrefs, applyPrefs, parseParallel, parseRunDefaults } from './prefs.js';
+import { relayTarget, relayCommands, mayBeRelay, relayPaired } from './phone-relay.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,6 +24,31 @@ export function createSettings() {
     accounts: $('prefs-accounts'), agents: $('prefs-agents'), linksNote: $('prefs-links-note'),
     accountsOpen: $('accounts-open'), agentsOpen: $('agents-open'), runActions: $('run-actions'),
   };
+  const relay = { box: $('prefs-relay'), local: $('prefs-relay-local'), control: $('prefs-relay-control'), phone: $('prefs-relay-phone') };
+  const target = relayTarget(location);
+  if (target) {
+    const commands = relayCommands(target.port);
+    $('prefs-relay-port').textContent = target.port;
+    $('prefs-relay-checkout').textContent = commands.checkout;
+    $('prefs-relay-windows').textContent = commands.windows;
+    $('prefs-relay-commands').hidden = !target.attached;
+    $('prefs-relay-loopback').hidden = target.attached;
+    relay.local.hidden = false;
+    relay.box.hidden = false;
+  }
+  // asked when Settings opens, until a paired relay session is proven
+  let paired = false;
+  let asking = null;
+  function checkPaired() {
+    if (paired || asking || !mayBeRelay(location)) return;
+    asking = relayPaired().then((yes) => {
+      asking = null;
+      if (!yes) return;
+      paired = true;
+      relay.phone.hidden = false;
+      relay.box.hidden = false;
+    });
+  }
   let prefs = loadPrefs();
   const PARALLEL_HINT = e.parallelHint.textContent;
 
@@ -61,6 +87,7 @@ export function createSettings() {
     e.accounts.hidden = !controls || e.accountsOpen.hidden;
     e.agents.hidden = !controls || e.agentsOpen.hidden;
     e.linksNote.hidden = !(e.accounts.hidden && e.agents.hidden);
+    relay.control.hidden = controls || !target?.attached;
   }
 
   function saveRun(change) {
@@ -110,6 +137,7 @@ export function createSettings() {
   e.open.addEventListener('click', () => {
     if (e.dialog.open) return;
     fill();
+    checkPaired();
     e.dialog.showModal();
     e.dialog.querySelector('[data-close]').focus();
   });

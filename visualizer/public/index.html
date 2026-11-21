@@ -559,6 +559,28 @@
             <button type="button" class="btn btn-small prefs-inline" id="prefs-workflow-reset">Forget the remembered stages</button>
           </div>
         </fieldset>
+        <fieldset class="exec" id="prefs-relay" hidden>
+          <legend>Phone relay</legend>
+          <div class="field" id="prefs-relay-local" hidden>
+            <p class="hint prefs-note">To use this dashboard from your phone, start the relay in a terminal on this computer. This dashboard listens on port <span id="prefs-relay-port"></span>.</p>
+            <div class="field" id="prefs-relay-commands">
+              <span class="field-label">From a Scranton checkout</span>
+              <code class="relay-cmd" id="prefs-relay-checkout"></code>
+              <span class="field-label">Windows desktop app, in PowerShell from its install folder <span class="hint">by default <code>$env:LOCALAPPDATA\Scranton</code></span></span>
+              <code class="relay-cmd" id="prefs-relay-windows"></code>
+              <p class="hint prefs-note">Replace YOUR-PRIVATE-HOST with this computer's private HTTPS address, for example from Tailscale Serve. Then open that address on the phone and enter the pairing code the relay prints. Setup: docs/RELAY.md.</p>
+            </div>
+            <p class="hint prefs-note" id="prefs-relay-control" hidden>The relay needs a dashboard that controls runs: the desktop app or <code>scranton visualize --control</code>.</p>
+            <p class="hint prefs-note" id="prefs-relay-loopback" hidden>The relay reaches the dashboard at 127.0.0.1 only. Start this dashboard on 127.0.0.1, the default, and open it there to attach a relay.</p>
+          </div>
+          <div class="field" id="prefs-relay-phone" hidden>
+            <p class="hint prefs-note">This browser is a phone paired through the relay. It operates the dashboard on your computer.</p>
+            <form class="relay-logout" method="post" action="/_relay/logout">
+              <button type="submit" class="btn" aria-describedby="prefs-relay-logout-hint">Disconnect this phone</button>
+            </form>
+            <span class="hint" id="prefs-relay-logout-hint">Signs this browser out of the relay. Connecting again needs the pairing code from the relay terminal.</span>
+          </div>
+        </fieldset>
         <fieldset class="exec">
           <legend>Accounts and agents</legend>
           <div class="prefs-links">

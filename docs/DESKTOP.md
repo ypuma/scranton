@@ -26,8 +26,25 @@ npm.cmd run app:build
 ```
 
 Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Der NSIS-Installer liegt anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.4.0_x64-setup.exe`.
+`src-tauri\target\release\bundle\nsis\Scranton_0.5.0_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
+
+## Smartphone-Steuerung ohne Checkout (Windows)
+
+Dieser Workflow benötigt **Scranton Desktop für Windows 0.5.0 oder neuer**. Der Installer **0.4.0** enthält den Phone Relay nicht.
+
+Der Relay startet **nur auf ausdrücklichen Wunsch** in einem eigenen Terminal. Die Desktop-App öffnet nicht automatisch einen LAN-Port. Starte die App und lies **Settings → Phone relay** für den aktuellen Dashboard-Port; nach einem App-Neustart kann er anders sein.
+
+Finde den tatsächlichen Installationsordner über die Scranton-Verknüpfung im Startmenü: Rechtsklick → **Dateispeicherort öffnen / Open file location**. Liegt dort nur eine Verknüpfung, öffne deren **Eigenschaften → Ziel** bzw. erneut **Dateispeicherort öffnen**, bis du beim Ziel `scranton-desktop.exe` bist. Öffne PowerShell in **diesem** Ordner (z. B. `powershell` in die Explorer-Adressleiste eingeben). Dort liegen `scranton-node.exe` und `app\bin\scranton.js`; nicht vom Repository oder einem angenommenen Standardpfad ausgehen.
+
+Mit privatem Tailscale **Serve** auf dem Relay-Port 1726, wie in der [Relay-Anleitung](RELAY.md#connect-through-tailscale-serve) beschrieben:
+
+```powershell
+$dashboardPort = Read-Host 'Current dashboard port from Settings > Phone relay'
+.\scranton-node.exe .\app\bin\scranton.js relay --origin https://your-computer.your-tailnet.ts.net --target-port $dashboardPort
+```
+
+Die URL durch die eigene private Serve-URL ersetzen; das Telefon und der PC müssen im selben Tailnet sein. Kein zusätzliches Node/npm, Checkout oder globaler `scranton`-Befehl nötig. Tailscale selbst ist separat einzurichten. Die vollständige Anleitung enthält auch **direktes privates WLAN-HTTPS mit eigenem Zertifikat und Schlüssel**, Checkout-Befehle und TLS-/Firewall-Voraussetzungen. Kein Funnel und keine öffentliche Portweiterleitung verwenden. Auf dem Telefon trennt **Settings → Phone relay → Disconnect** nur diese Sitzung; **Ctrl+C** im Relay-Terminal trennt alle. Zugangsdaten/Agentendefinitionen bleiben lokal zu verwalten, und eine PC-Loopback-Vorschau ist auf dem Telefon nicht erreichbar.
 
 ## Daten und Konfiguration
 

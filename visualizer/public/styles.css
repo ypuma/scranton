@@ -2177,6 +2177,9 @@ body[data-side] .rail { display: none; }
 .prefs-note { margin: 0; }
 .prefs-inline { justify-self: start; }
 .prefs-links { display: flex; flex-wrap: wrap; gap: var(--s2); }
+/* a whole command is one selection, wrapped rather than scrolled */
+.relay-cmd { display: block; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+.relay-logout { margin: 0; }
 
 /* ------------------------------------------------------------ live activity: the run rail, lanes, usage */
 /* The rail of the Chat view: a third column beside the transcript, with a scroll of its own. Where it is comes

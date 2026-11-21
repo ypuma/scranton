@@ -287,6 +287,15 @@ node bin/scranton.js visualize --control --workspace workspace
 
 Die Dashboards sind dunkel und strikt monochrom. Im Single-Modus ist der HTTP-Server ohne `--control` schreibgeschützt; `--data` aktiviert dagegen Registry und Steuerung. Steuerung benötigt eine echte Loopback-Verbindung, lokalen Host-Header, bei POST JSON und `X-Scranton-Client: 1`; keine CORS-Freigabe. Nicht ungeschützt ins Netz stellen. [EVENTS.md](docs/EVENTS.md) beschreibt Ereignisse, [CONTROL.md](docs/CONTROL.md) Run-/Chat-/HITL-Steuerung und Wiederherstellungsblockaden.
 
+Für die Steuerung vom Smartphone verbindet der **ausdrücklich gestartete** Phone Relay das Dashboard über privates WLAN-HTTPS oder Tailscale **Serve** mit deinem Handy; die App öffnet nicht automatisch einen LAN-Port. Dieser Workflow benötigt **Scranton Desktop für Windows 0.5.0 oder neuer**; der Installer **0.4.0** enthält den Phone Relay nicht. **Ohne Checkout und ohne separates Node/npm:** Den tatsächlichen Installationsordner über die Scranton-Verknüpfung → **Dateispeicherort öffnen** finden (ggf. über deren Eigenschaften zum EXE-Ziel weitergehen), PowerShell neben `scranton-desktop.exe` und `scranton-node.exe` öffnen und nach dem Einrichten von privatem Serve ausführen:
+
+```powershell
+$dashboardPort = Read-Host 'Current dashboard port from Settings > Phone relay'
+.\scranton-node.exe .\app\bin\scranton.js relay --origin https://your-computer.your-tailnet.ts.net --target-port $dashboardPort
+```
+
+Die Beispiel-URL durch die eigene Serve-URL ersetzen und den aktuell in **Settings → Phone relay** angezeigten Port eingeben; nach App-Neustart neu prüfen. **Kein Funnel, keine öffentliche Portweiterleitung.** Die [Einrichtung der Smartphone-Steuerung](docs/RELAY.md) erklärt beide privaten Modi einschließlich Zertifikat/Schlüssel und OpenSSL-Voraussetzung unter Windows sowie die weiterhin gültigen Checkout-Befehle. **Settings → Phone relay → Disconnect** trennt nur das aktuelle Telefon, **Ctrl+C** im Relay-Terminal alle Sitzungen. Zugangsdaten und Agentendefinitionen lassen sich nur lokal verwalten; PC-Loopback-Vorschauen sind vom Telefon nicht erreichbar. [Desktop-Details](docs/DESKTOP.md#smartphone-steuerung-ohne-checkout-windows)
+
 Mit `--on-breaker hive` veröffentlicht Scranton während des Wartens `<hive>/human/request.json` mit `v`, `runId`, `requestSeq`, `milestoneId`, `title`, `reason`, `options`, `ts`. Daraus **runId und requestSeq unverändert übernehmen** und eine Entscheidung aus `options` wählen; kein Lesen von `events.jsonl` nötig. Beispiel für die vom Nutzer atomar (temporäre Datei, dann Umbenennen) geschriebene `<hive>/human/response.json`:
 
 ```json
