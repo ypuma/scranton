@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { WorktreeManager } from '../../src/core/worktree.js';
 import { listRestorePoints, undoRun, workspaceState, prepareRestorePoint, MAX_PREIMAGE_BYTES } from '../../src/core/restore-points.js';
 
-const scratch = path.resolve('.scratch/usability/fix6/restore');
+const scratch = path.resolve('.scratch/usability/fix7/restore');
 fs.mkdirSync(scratch, { recursive: true });
 const write = (dir, name, data) => { const file = path.join(dir, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); };
 const read = (dir, name) => fs.readFileSync(path.join(dir, name), 'utf8');
@@ -649,4 +649,18 @@ test('fix6 B: default undo reports and settles a point with no backups', async (
   const f = fixture(t); record(f, 'run', 'large', { ...entry(''), data: Buffer.alloc(MAX_PREIMAGE_BYTES + 1) });
   assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).conflicts, [{ path: 'large', reason: 'Pre-image exceeds 16777216 bytes', code: 'unrestorable' }]);
   assert.ok(manifest(f).undoneAt);
+});
+
+test('fix7: a changed child must be resolved before undo can restore the file above its directory', async (t) => {
+  const f = fixture(t), initial = new Map([['a', entry('original')]]), after = new Map([['a/b', entry('created')]]);
+  prepareRestorePoint({ ...f, runId: 'run', changes: ['a', 'a/b'], before: initial, initial, after }).commit();
+  write(f.workspace, 'a/b', 'human');
+  const result = await undoRun({ hiveDir: f.hiveDir });
+  assert.equal(result.conflicts.find((c) => c.path === 'a/b').code, 'changed');
+  const blocked = result.conflicts.find((c) => c.path === 'a');
+  assert.equal(blocked.code, 'blocked');
+  assert.equal(blocked.reason, 'Could not restore the file; resolve the changed conflict below this directory first');
+  assert.doesNotMatch(blocked.reason, /undo again/);
+  assert.equal(read(f.workspace, 'a/b'), 'human');
+  assert.equal(listRestorePoints(f.hiveDir)[0].remaining, 2);
 });

@@ -9,7 +9,7 @@ import { createProjectRegistry } from '../../src/core/projects.js';
 import { prepareRestorePoint } from '../../src/core/restore-points.js';
 import { formatRunSummary, quotePathArgument } from '../../src/core/run-summary.js';
 
-const root = path.resolve('.scratch/usability/fix6/cli-undo');
+const root = path.resolve('.scratch/usability/fix7/cli-undo');
 fs.mkdirSync(root, { recursive: true });
 const previous = process.env.SCRANTON_ISOLATION_ROOT;
 process.env.SCRANTON_ISOLATION_ROOT = path.join(root, 'isolation');
@@ -225,7 +225,7 @@ test('fix6 B: list never calls files without backups undone and describes partia
   await f.undo('--list'); assert.match(f.io.out, /2 remaining \| files still to undo; no backup for 1 file/); assert.doesNotMatch(f.io.out, /partly undone/);
   fs.writeFileSync(path.join(f.ws, 'small-1'), 'human'); await f.undo();
   await f.undo('--list'); assert.match(f.io.out, /1 remaining \| partly undone \(1 of 3\); no backup for 1 file/);
-  await f.undo('--force'); await f.undo('--list'); assert.match(f.io.out, /0 remaining \| partly undone \(2 of 3\); no backup for 1 file/);
+  await f.undo('--force'); await f.undo('--list'); assert.match(f.io.out, /0 remaining \| undone; no backup for 1 file/);
   const only = fixture(t); backupLimitedPoint(only);
   await only.undo('--list'); assert.match(only.io.out, /0 remaining \| nothing can be undone \(no backup for 1 file\)/); assert.doesNotMatch(only.io.out, /\| undone/);
   assert.equal(await only.undo(), 1); assert.match(only.io.out, /Nothing could be undone: no backup for 1 file\./); assert.match(only.io.err, /Pre-image exceeds 16777216 bytes/);
@@ -237,5 +237,28 @@ test('fix6 B: summary offers undo only for open files and warns about absent bac
     const summary = formatRunSummary({ runId: 'limited', config: { hiveDir: f.hive }, rec: { state: {} }, worktrees }, { status: 'success' }, 0);
     assert.match(summary, /Not restorable: 1 file has no backup\./);
     if (count) assert.match(summary, /Undo: scranton undo/); else assert.doesNotMatch(summary, /Undo:/);
+  }
+});
+
+for (const [remaining, undone, unrestorable, state] of [
+  [3, 0, 0, 'files still to undo'],
+  [2, 0, 1, 'files still to undo; no backup for 1 file'],
+  [2, 1, 0, 'partly undone (1 of 3)'],
+  [1, 1, 1, 'partly undone (1 of 3); no backup for 1 file'],
+  [0, 3, 0, 'undone'],
+  [0, 2, 1, 'undone; no backup for 1 file'],
+  [0, 0, 3, 'nothing can be undone (no backup for 3 files)']
+]) test(`fix7: list describes ${state} independently of the point timestamp`, async (t) => {
+  const f = fixture(t); point(f);
+  const file = path.join(f.hive, 'restore-points/fixture-run/manifest.json'), p = JSON.parse(fs.readFileSync(file));
+  const timestamp = '2026-01-01T00:00:00Z';
+  for (let i = 0; i < p.files.length; i++) {
+    if (i < undone) p.files[i].undoneAt = timestamp;
+    else if (i < undone + unrestorable) p.files[i].undoUnrestorable = 'Invalid pre-image';
+  }
+  for (const undoneAt of [null, timestamp]) {
+    p.undoneAt = undoneAt; fs.writeFileSync(file, JSON.stringify(p));
+    assert.equal(await f.undo('--list'), 0, f.io.err);
+    assert.equal(f.io.out.trim(), `fixture-run | ${p.createdAt} | 3 files | ${remaining} remaining | ${state}`);
   }
 });

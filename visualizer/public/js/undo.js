@@ -100,9 +100,10 @@ export function buildUndo(runId, force = false) {
 }
 
 // A server that counts says what was undone; one that does not leaves remaining to tell, where files without a
-// backup look undone. Without counts, nothing left to undo is undone, also when undoneAt was not set then.
+// backup look undone. Without counts, nothing left to undo is undone, also when undoneAt was not set then. With
+// them, undoneAt only dates an undo: settling a point without a single backup sets it too.
 const counted = (p) => Number.isInteger(p.undone) && Number.isInteger(p.unrestorable);
-const undone = (p) => (counted(p) ? p.remaining === 0 && (p.undone > 0 || Boolean(p.undoneAt)) : Boolean(p.undoneAt) || (p.remaining === 0 && p.files !== 0));
+const undone = (p) => (counted(p) ? p.remaining === 0 && p.undone > 0 : Boolean(p.undoneAt) || (p.remaining === 0 && p.files !== 0));
 const open = (p) => (counted(p) ? p.remaining > 0 : !undone(p));
 const partly = (p) => (counted(p) ? p.undone > 0 && p.remaining > 0
   : !p.unreadable && !undone(p) && p.files !== null && p.remaining !== null && p.remaining < p.files);

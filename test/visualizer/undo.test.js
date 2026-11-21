@@ -824,6 +824,25 @@ test('a counting server: undone with the time, and how many files had no backup'
   assert.deepEqual(undoTexts(timeless.$), ['These changes were undone.']);
 });
 
+test('a counting server: undoneAt on a point nothing could be undone from is no undo; it only dates a real one', async () => {
+  const run = { runId: 'r1', over: true, team: true };
+  const settled = { ...COUNTED, files: 1, undoneAt: UNDONE_AT, remaining: 0, undone: 0, unrestorable: 1 };
+  const h = await harness({ points: [settled] });
+  const text = 'These changes cannot be undone: no backup exists for the file.';
+  assert.deepEqual(undoTexts(h.$), [text]);
+  assert.equal(shown(h.$('rail-undo-run')), false);
+  assert.equal(h.$('rail-outcome-files-text').textContent, `1 file changed in ${FOLDER} · cannot be undone`);
+  assert.equal(changesText(h), text);
+  assert.equal(undoState(run, [{ ...settled, unreadable: false }]), 'unrestorable');
+  const real = await harness({ points: [{ ...settled, files: 3, undone: 2 }] });
+  const done = `These changes were undone at ${formatWhen(UNDONE_AT)}. 1 file had no backup and stayed as the run left it.`;
+  assert.deepEqual(undoTexts(real.$), [done]);
+  assert.equal(real.$('rail-outcome-files-text').textContent, `3 files changed in ${FOLDER} · undone`);
+  assert.equal(changesText(real), `${done} ${AS_DONE}`);
+  const old = await harness({ points: [{ ...POINT, undoneAt: UNDONE_AT, remaining: 0 }] });
+  assert.deepEqual(undoTexts(old.$), [`These changes were undone at ${formatWhen(UNDONE_AT)}.`], 'an older server: undoneAt still decides');
+});
+
 test('an older server without the two counts, or with only one of them: remaining alone decides, as before', async () => {
   const doc = parseRestorePoints({ points: [{ ...POINT, remaining: 1 }, { ...POINT, runId: 'r0', remaining: 2, undone: 0 }] });
   assert.deepEqual(doc.points.map(Object.keys), [Object.keys({ ...POINT, unreadable: false }), Object.keys({ ...POINT, unreadable: false })]);

@@ -6,7 +6,7 @@ import { startPi } from '../../src/core/pi-runner.js';
 import { fakeConfig } from './helpers.js';
 
 function fixture(t) {
-  const root = path.resolve('.scratch/usability/fix6/transport');
+  const root = path.resolve('.scratch/usability/fix7/transport');
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'transport-'));
   const script = path.join(dir, 'pi.mjs'), runners = [];
@@ -220,7 +220,7 @@ test('fix3 item6: multi-megabyte spaces and key repetitions have bounded redacti
     import { piErrorText, piErrorTail } from ${JSON.stringify(new URL('../../src/core/pi-rpc-session.js', import.meta.url).href)};
     const inputs = [('api_key' + ' '.repeat(1024) + '!\\n').repeat(4096), 'key='.repeat(1024 * 1024)];
     const start = performance.now();
-    const results = inputs.map(text => [piErrorText(text + '\\n401 end', {}), piErrorTail(text + '\\n401 end', {})]);
+    const results = inputs.map(text => [piErrorText(text + '\\nprovider detail\\n401 end', {}), piErrorTail(text + '\\nprovider detail\\n401 end', {})]);
     console.log(JSON.stringify({ ms: performance.now() - start, lengths: results.flat().map(s => s.length), end: results.flat().every(s => s.endsWith('401 end')) }));`;
   const result = spawnSync(process.execPath, ['--input-type=module'], { input: source, encoding: 'utf8', timeout: 60000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr || String(result.error));
@@ -290,5 +290,48 @@ test('fix6 C: original credential labels with long spacing still mask the next-l
     assert.equal(tail.length, 8177);
     const input = label + ' '.repeat(400) + ':' + tail + ' '.repeat(8192 - tail.length);
     for (const redact of [piErrorText, piErrorTail]) assert.ok(!redact(input, {}).includes('Q7mR'), label);
+  }
+});
+
+for (const label of ['api_key:', 'OPENAI_API_KEY:', 'GITHUB_TOKEN=', 'private_key:', 'Authorization:', '"client_secret" :', 'arbitrary label =\t"\'']) test(`fix7: every window alignment across ${label} hides the next-line secret`, async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const secret = 'Q7mR2vX9pL4zT6kN'.repeat(8);
+  const fragments = new Set(Array.from({ length: secret.length - 7 }, (_, i) => secret.slice(i, i + 8)));
+  for (const eol of ['\n', '\r\n']) {
+    const segment = label + eol + secret, suffix = eol + '401 end' + eol;
+    for (let offset = 0; offset < segment.length; offset++) {
+      const padding = '\r'.repeat(8192 - (segment.length - offset + suffix.length));
+      const input = 'old banner\n' + segment + suffix + padding;
+      assert.equal(input.length - 8192, 'old banner\n'.length + offset);
+      for (const redact of [piErrorText, piErrorTail]) {
+        const result = redact(input, {});
+        for (const fragment of fragments) assert.ok(!result.includes(fragment), `cut ${offset}: ${redact.name} leaked a secret fragment`);
+        assert.match(result, /401 end$/);
+      }
+    }
+  }
+});
+
+test('fix7: a secret ending a single 20000-character line leaves no fragment', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const secret = 'Q7mR2vX9pL4zT6kN'.repeat(1250);
+  assert.equal(secret.length, 20000);
+  for (const redact of [piErrorText, piErrorTail]) {
+    const result = redact(secret, {});
+    assert.equal(result, '[cut] [redacted]');
+    for (let i = 0; i <= secret.length - 8; i++) assert.ok(!result.includes(secret.slice(i, i + 8)));
+  }
+});
+
+test('fix7: ordinary multiline errors and complete lines after an ordinary cut line stay verbatim', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const ordinary = 'Connection failed\nRetry exhausted\n401 end';
+  for (const redact of [piErrorText, piErrorTail]) {
+    assert.equal(redact(ordinary, {}), ordinary);
+    for (const offset of [3, 13, 14]) {
+      const segment = 'ordinary line\n' + ordinary;
+      const input = 'old banner\n' + segment + '\n' + '\r'.repeat(8192 - (segment.length - offset + 1));
+      assert.equal(redact(input, {}), ordinary);
+    }
   }
 });

@@ -383,7 +383,7 @@ async function cmdUndo(args, values, io) {
       io.stdout.write(terminalText(points.length ? points.map((p) => {
         if (p.unreadable) return `${p.runId} | unreadable`;
         const missing = `no backup for ${p.unrestorable} file${p.unrestorable === 1 ? '' : 's'}`;
-        const state = p.undone === p.files ? 'undone' : p.undone ? `partly undone (${p.undone} of ${p.files})` : p.remaining ? 'files still to undo' : `nothing can be undone (${missing})`;
+        const state = p.remaining ? p.undone ? `partly undone (${p.undone} of ${p.files})` : 'files still to undo' : p.undone ? 'undone' : `nothing can be undone (${missing})`;
         const backup = p.unrestorable && (p.remaining || p.undone) ? `; ${missing}` : '';
         return `${p.runId} | ${p.createdAt} | ${p.files} files | ${p.remaining} remaining | ${state}${backup}`;
       }).join('\n') + '\n' : 'No restore points available.\n'));

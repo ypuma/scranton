@@ -260,7 +260,7 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
               e.undoneAt = new Date().toISOString(); delete e.undoPending; save(hive, point);
             } catch (error) {
               const code = error.message === 'Invalid pre-image' ? 'unrestorable' : error.message === 'Restore target changed' ? 'changed' : 'blocked';
-              const reason = code === 'blocked' ? blockedReason(error) : error.message;
+              const reason = code === 'blocked' ? error.message === 'Restore path is not a regular file' && result.conflicts.some((c) => c.code === 'changed' && c.path.startsWith(e.path + '/')) ? 'Could not restore the file; resolve the changed conflict below this directory first' : blockedReason(error) : error.message;
               if (e.undoneAt) { e.undoneAt = null; e.undoPending = true; }
               if (code === 'unrestorable') e.undoUnrestorable = reason;
               result.conflicts.push({ path: e.path, reason, code });
