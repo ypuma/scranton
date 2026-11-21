@@ -14,12 +14,24 @@ export const RPC_STARTUP_TIMEOUT_MS = 60000;
 const extension = fileURLToPath(new URL('../../tools/pi-agent-chat.js', import.meta.url));
 const RECORD_CAP = 16 * 1024 * 1024;
 
-export function piErrorText(value, env) {
+export function piErrorText(value, env, cut = false) {
   let text = String(value ?? '');
-  // Drop a partial first line so the window cannot expose an unlabelled secret.
-  if (text.length > 8192) {
-    text = text.slice(-8192);
-    text = text.includes('\n') ? text.slice(text.indexOf('\n') + 1) : '';
+  cut ||= text.length > 8192;
+  text = text.slice(-8192);
+  let marked = false;
+  if (cut) {
+    text = text.replace(/[\r\n]+$/, '');
+    const newline = text.indexOf('\n');
+    if (newline !== -1) {
+      // A cut label can put its credential value on the next line.
+      const label = /^[A-Za-z_-]{0,32}["']?[ \t]*[:=][ \t\r]*$/.test(text.slice(0, newline));
+      text = text.slice(newline + 1);
+      if (label) text = text.replace(/^[^\n]*(?:\n|$)/, '[redacted]\n');
+    } else {
+      // Without a line boundary, suppress the unlabelled token fragment, not the cause after it.
+      text = text.replace(/^[^"']*["']|^\S+/, '[redacted]');
+      marked = true;
+    }
   }
   for (const [key, secret] of Object.entries(env)) {
     if (/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key) && typeof secret === 'string' && secret.length >= 4) text = text.split(secret).join('[redacted]');
@@ -30,13 +42,11 @@ export function piErrorText(value, env) {
     .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/\b(api[_-]?key|(?:access[_-]?|refresh[_-]?|id[_-]?)?token|(?:client[_-]?)?secret|password|authorization)\s*(?:["']\s*)?[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=[redacted]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]');
-  return cleanActivity(text).slice(-2048);
+  return (marked ? '[cut] ' : '') + cleanActivity(text).slice(marked ? -2042 : -2048);
 }
 
 export function piErrorTail(value, env, cut = false) {
-  // A truncated first line may have lost the label identifying a credential.
-  if (cut) value = value.includes('\n') ? value.slice(value.indexOf('\n') + 1) : '';
-  return tailLines(piErrorText(value, env), 8).slice(-2048);
+  return tailLines(piErrorText(value, env, cut), 8).slice(-2048);
 }
 
 export function startPiRpc(options, { describeTool }) {

@@ -320,8 +320,9 @@ test('a chat switch while the POST is in flight: the late answer paints nothing 
   let answer;
   const h = await harness({
     undo: () => new Promise((r) => { answer = r; }),
-    get: (url) => ({ status: 200, body: { points: url.includes('/chats/b/') ? [{ ...POINT, runId: 'r9' }] : h.server.points } }),
+    get: (url) => ({ status: 200, body: { points: url.includes('/chats/b/') ? [{ ...POINT, runId: 'r9' }] : [POINT] } }),
   });
+  assert.deepEqual(undoTexts(h.$), ['Undo these changes']);
   await h.$('rail-undo-run').click();
   const sent = h.$('confirm-ok').click();
   await tick();
@@ -647,6 +648,91 @@ test('the undo in flight says so; two minutes without an answer abandon it once,
   t.mock.timers.tick(600_000);
   await flush();
   assert.equal(h.posts().length, 1, 'never a second POST');
+});
+
+test('the unknown result of an abandoned undo stays with its run when another run is picked, until the points are read again', async (t) => {
+  const h = await harness({ undo: () => new Promise(() => {}) });
+  const served = globalThis.fetch;
+  globalThis.fetch = (url, opts = {}) => {
+    const answer = served(url, opts);
+    if (opts.method !== 'POST') return answer;
+    return new Promise((resolve, reject) => {
+      answer.then(resolve, reject);
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const flush = () => new Promise((r) => setImmediate(r));
+  await h.$('rail-undo-run').click();
+  const sent = h.$('confirm-ok').click();
+  await flush();
+  t.mock.timers.tick(120_000);
+  await sent;
+  await h.$('confirm-cancel').click();
+  const unknown = 'The undo did not answer within 2 minutes, so its result is unknown. Check the folder and reload the page before you try again.';
+  h.draw({ view: railRun({ runId: 'r0' }) });
+  h.draw({ view: railRun({ runId: 'r1' }) });
+  assert.deepEqual(undoTexts(h.$), [unknown], 'the run on screen again: still unknown, no control');
+  await h.$('rail-undo-run').click();
+  await h.$('confirm-ok').click();
+  await flush();
+  assert.equal(h.posts().length, 1, 'never a second POST');
+  t.mock.timers.reset();
+  await h.undo.refresh();
+  assert.deepEqual(undoTexts(h.$), ['Undo these changes'], 'a newer list: what it says now');
+});
+
+test('the force dialog checks again on OK: a reading while it was open that takes force away sends nothing', async () => {
+  const kept = { ...POINT, remaining: 2 };
+  const r2 = { ...POINT, runId: 'r2', createdAt: '2026-11-21T11:00:00.000Z' };
+  const asked = async () => {
+    const h = await harness({ undo: () => { h.server.points = [kept]; return { status: 200, body: CONFLICTED }; } });
+    await h.$('rail-undo-run').click();
+    await h.$('confirm-ok').click();
+    await h.$('rail-undo-force').click();
+    assert.equal(h.$('confirm-title').textContent, 'Overwrite the later changes?');
+    return h;
+  };
+  // a later run finished meanwhile: undo works backwards
+  const later = await asked();
+  later.server.points = [r2, kept];
+  await later.undo.refresh();
+  await later.$('confirm-ok').click();
+  assert.deepEqual(later.posts().map((r) => r.body), [{ runId: 'r1' }], 'no force: true');
+  assert.equal(later.$('confirm-dialog').open, false);
+  assert.deepEqual(undoTexts(later.$), [OLDER]);
+  // undone meanwhile
+  const undone = await asked();
+  undone.server.points = [{ ...kept, undoneAt: UNDONE_AT, remaining: 0 }];
+  await undone.undo.refresh();
+  await undone.$('confirm-ok').click();
+  assert.equal(undone.posts().length, 1);
+  assert.equal(undone.$('confirm-dialog').open, false);
+  assert.deepEqual(undoTexts(undone.$), [`These changes were undone at ${formatWhen(UNDONE_AT)}.`]);
+  // the same points read again: the result with the changed files is gone
+  const reread = await asked();
+  await reread.undo.refresh();
+  await reread.$('confirm-ok').click();
+  assert.equal(reread.posts().length, 1);
+  assert.equal(reread.$('confirm-dialog').open, false);
+  assert.deepEqual(undoTexts(reread.$), ['Partly undone: 2 of 3 files kept as they are.', 'Continue the undo']);
+});
+
+test('the confirmation checks again on OK: another run on screen, or a point that can no longer be undone, sends nothing', async () => {
+  const moved = await harness();
+  await moved.$('rail-undo-run').click();
+  moved.draw({ view: railRun({ runId: 'r0' }) });
+  await moved.$('confirm-ok').click();
+  assert.equal(moved.posts().length, 0, 'not the run the dialog was opened for');
+  assert.equal(moved.$('confirm-dialog').open, false);
+  const older = await harness();
+  await older.$('rail-undo-run').click();
+  older.server.points = [{ ...POINT, runId: 'r2', createdAt: '2026-11-21T11:00:00.000Z' }, POINT];
+  await older.undo.refresh();
+  await older.$('confirm-ok').click();
+  assert.equal(older.posts().length, 0);
+  assert.equal(older.$('confirm-dialog').open, false);
+  assert.deepEqual(undoTexts(older.$), [OLDER]);
 });
 
 test('warnings of an undo are listed after its result as text; the newer 409 sentences are shown as the server wrote them', async () => {

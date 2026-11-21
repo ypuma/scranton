@@ -175,8 +175,14 @@ export function createUndo({ getProjects = () => null, confirm, active = () => f
     confirm({
       ...q,
       scoped: pinned,
-      action: () => (pinned.at !== gen ? { error: MOVED } : send(runId, force)),
+      action: () => (pinned.at !== gen ? { error: MOVED } : still(runId, force) ? send(runId, force) : {}),
     });
+  }
+
+  // the points may have been read again, or another run picked, while the dialog was open
+  function still(runId, force) {
+    const { s, state, mine } = view();
+    return s?.runId === runId && (state === 'offer' || state === 'partial') && (!force || changedOf(mine?.conflicts ?? []).length > 0);
   }
 
   e.run.addEventListener('click', () => ask(false));
@@ -239,8 +245,8 @@ export function createUndo({ getProjects = () => null, confirm, active = () => f
   // run whose changes are kept elsewhere).
   function render(next) {
     shown = next?.runId ? { runId: next.runId, over: Boolean(next.over), folder: next.folder || null } : null;
-    // another run on screen: the result was about the one before
-    if (result && result.runId !== shown?.runId) result = null;
+    // another run on screen: the result was about the one before; an unknown one stays until the points are read again
+    if (result && result.runId !== shown?.runId && !result.unknown) result = null;
     draw();
   }
 

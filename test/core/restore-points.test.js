@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { WorktreeManager } from '../../src/core/worktree.js';
 import { listRestorePoints, undoRun, workspaceState, prepareRestorePoint, MAX_PREIMAGE_BYTES } from '../../src/core/restore-points.js';
 
-const scratch = path.resolve('.scratch/usability/fix4/restore');
+const scratch = path.resolve('.scratch/usability/fix5/restore');
 fs.mkdirSync(scratch, { recursive: true });
 const write = (dir, name, data) => { const file = path.join(dir, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); };
 const read = (dir, name) => fs.readFileSync(path.join(dir, name), 'utf8');
@@ -88,7 +88,7 @@ test('pre-image above the cap is explicitly not restorable, even with force', as
   const integrated = await integrate(m, 'm1', (dir) => write(dir, 'large', 'small'));
   assert.deepEqual(integrated.notRestorable, [{ path: 'large', reason: 'Pre-image exceeds 16777216 bytes' }]);
   const e = manifest(f).files[0]; assert.equal(e.restorable, false); assert.equal(e.reason, 'Pre-image exceeds 16777216 bytes'); assert.equal(e.preimage, null);
-  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir, force: true })).conflicts, [{ path: 'large', reason: e.reason, code: 'unrestorable' }]);
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir, runId: 'run', force: true })).conflicts, [{ path: 'large', reason: e.reason, code: 'unrestorable' }]);
   assert.equal(read(f.workspace, 'large'), 'small');
 });
 
@@ -349,7 +349,7 @@ test('fix3 item2: unrestorable files settle a point, remain reported, and do not
     for (const [id, date] of [['older', '2026-01-01'], ['newer', '2026-01-02']]) { const p = manifest(f, id); p.createdAt = date; fs.writeFileSync(manifestPath(f, id), JSON.stringify(p)); }
     if (!large) { const p = manifest(f, 'newer'); fs.unlinkSync(path.join(path.dirname(manifestPath(f, 'newer')), p.files[0].preimage)); }
     write(f.workspace, 'file', 'after'); write(f.workspace, 'older', 'after');
-    const result = await undoRun({ hiveDir: f.hiveDir });
+    const result = await undoRun({ hiveDir: f.hiveDir, runId: 'newer' });
     assert.equal(result.conflicts[0].code, 'unrestorable');
     const p = listRestorePoints(f.hiveDir).find((p) => p.runId === 'newer');
     assert.ok(p.undoneAt); assert.equal(p.remaining, 0);
@@ -462,7 +462,7 @@ test('fix4: a repaired unsafe path is retried without force or leaking exception
   const f = fixture(t), outside = path.join(f.root, 'outside'); fs.mkdirSync(outside); write(outside, 'file', 'outside');
   record(f, 'run', 'nested/file'); fs.symlinkSync(outside, path.join(f.workspace, 'nested'), 'junction');
   const result = await undoRun({ hiveDir: f.hiveDir });
-  assert.deepEqual(result.conflicts, [{ path: 'nested/file', reason: 'Could not restore the file; check the path and permissions, close programs using it and undo again', code: 'blocked' }]);
+  assert.deepEqual(result.conflicts, [{ path: 'nested/file', reason: 'Could not restore the file: Link/reparse path rejected; check the path and permissions, close programs using it and undo again', code: 'blocked' }]);
   assert.equal(read(outside, 'file'), 'outside'); assert.equal(listRestorePoints(f.hiveDir)[0].undoneAt, null); assert.equal(listRestorePoints(f.hiveDir)[0].remaining, 1);
   fs.unlinkSync(path.join(f.workspace, 'nested')); write(f.workspace, 'nested/file', 'after');
   assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).restored, ['nested/file']); assert.equal(read(f.workspace, 'nested/file'), 'before');
@@ -476,4 +476,122 @@ test('fix4: a blocked pending integration accepts its recorded pending state on 
   const mock = t.mock.method(fs, 'renameSync', (from, to) => { if (to === path.join(f.workspace, 'file')) throw Object.assign(Error('locked'), { code: 'EBUSY' }); return rename(from, to); });
   assert.equal((await undoRun({ hiveDir: f.hiveDir })).conflicts[0].code, 'blocked'); mock.mock.restore();
   assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).restored, ['file']); assert.equal(read(f.workspace, 'file'), 'before');
+});
+
+// Release-blocking regressions.
+for (const fault of ['EBUSY', 'EACCES', 'EPERM', 'EMFILE', 'Restore artifact changed']) test(`fix5: backup read ${fault} stays blocked and retries original bytes`, async (t) => {
+  const f = fixture(t), original = Buffer.from([0, 255, 13, 10, 128, 65]);
+  record(f, 'run', 'file', { ...entry(''), data: original }); write(f.workspace, 'file', 'after');
+  const blob = path.join(path.dirname(manifestPath(f)), manifest(f).files[0].preimage), open = fs.openSync;
+  let once = true;
+  const mock = t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (file === blob && once) { once = false; throw Object.assign(Error(fault), fault.startsWith('E') ? { code: fault } : {}); }
+    return open(file, ...args);
+  });
+  const result = await undoRun({ hiveDir: f.hiveDir });
+  assert.equal(result.conflicts[0].code, 'blocked');
+  assert.equal(manifest(f).files[0].undoUnrestorable, undefined); assert.equal(manifest(f).undoneAt, null);
+  assert.equal(listRestorePoints(f.hiveDir)[0].remaining, 1);
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).restored, ['file']); mock.mock.restore();
+  assert.deepEqual(fs.readFileSync(path.join(f.workspace, 'file')), original); assert.ok(manifest(f).undoneAt);
+});
+
+for (const damage of ['missing', 'hash', 'directory', 'oversized']) test(`fix5: ${damage} backup remains unrestorable`, async (t) => {
+  const f = fixture(t); record(f, 'run'); write(f.workspace, 'file', 'after');
+  const blob = path.join(path.dirname(manifestPath(f)), manifest(f).files[0].preimage);
+  if (damage === 'missing' || damage === 'directory') fs.unlinkSync(blob);
+  if (damage === 'directory') fs.mkdirSync(blob);
+  if (damage === 'hash') fs.writeFileSync(blob, 'BEFORE');
+  if (damage === 'oversized') fs.truncateSync(blob, MAX_PREIMAGE_BYTES + 1);
+  assert.equal((await undoRun({ hiveDir: f.hiveDir })).conflicts[0].code, 'unrestorable');
+  assert.ok(manifest(f).undoneAt); assert.equal(read(f.workspace, 'file'), 'after');
+});
+
+test('fix5: 300-file undo keeps the 50 ms timer responsive and restores every byte', async (t) => {
+  const f = fixture(t), before = new Map(), after = new Map();
+  for (let i = 0; i < 300; i++) { const name = `file-${i}`; before.set(name, entry(`original-${i}`)); after.set(name, entry(`written-${i}`)); write(f.workspace, name, `written-${i}`); }
+  prepareRestorePoint({ ...f, runId: 'run', changes: [...before.keys()], before, initial: before, after }).commit();
+  const gaps = []; let last = performance.now();
+  const timer = setInterval(() => { const now = performance.now(); gaps.push(now - last); last = now; }, 50);
+  let result;
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    result = await undoRun({ hiveDir: f.hiveDir });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  } finally { clearInterval(timer); }
+  const gap = Math.max(...gaps); t.diagnostic(`300-file undo maximum timer gap: ${gap.toFixed(2)} ms`);
+  assert.equal(result.restored.length, 300); assert.deepEqual(result.conflicts, []); assert.ok(manifest(f).undoneAt);
+  for (const [name, e] of before) assert.deepEqual(fs.readFileSync(path.join(f.workspace, name)), e.data);
+  assert.ok(gap < 500, `timer gap ${gap.toFixed(2)} ms must stay below 500 ms`);
+});
+
+test('fix5: remaining excludes never-restorable files before undo', async (t) => {
+  const f = fixture(t); record(f, 'run', 'large', { ...entry(''), data: Buffer.alloc(MAX_PREIMAGE_BYTES + 1) });
+  assert.equal(listRestorePoints(f.hiveDir)[0].remaining, 0);
+  assert.equal(manifest(f).undoneAt, null);
+  await undoRun({ hiveDir: f.hiveDir, runId: 'run' }); assert.ok(manifest(f).undoneAt);
+});
+
+for (const selection of ['default', 'older', 'explicit']) test(`fix5: ${selection} treats missing final timestamp as settled`, async (t) => {
+  const f = fixture(t); record(f, 'old', 'older'); record(f, 'new');
+  const old = manifest(f, 'old'); old.createdAt = '2000-01-01'; fs.writeFileSync(manifestPath(f, 'old'), JSON.stringify(old));
+  const p = manifest(f, 'new'); p.files[0].undoUnrestorable = 'Invalid pre-image'; fs.writeFileSync(manifestPath(f, 'new'), JSON.stringify(p));
+  write(f.workspace, 'older', 'after');
+  assert.equal(listRestorePoints(f.hiveDir)[0].remaining, 0);
+  const result = await undoRun({ hiveDir: f.hiveDir, ...(selection === 'default' ? {} : { runId: selection === 'older' ? 'old' : 'new' }) });
+  assert.equal(result.runId, selection === 'explicit' ? 'new' : 'old');
+  if (selection === 'explicit') assert.ok(manifest(f, 'new').undoneAt);
+  else assert.equal(read(f.workspace, 'older'), 'before');
+});
+
+for (const cause of ['hardlink', 'directory', 'parent', 'manifest']) test(`fix5: blocked ${cause} names a safe cause and retry action`, async (t) => {
+  const f = fixture(t); record(f, 'run', 'nested/file'); write(f.workspace, 'nested/file', 'after');
+  if (cause === 'hardlink') fs.linkSync(path.join(f.workspace, 'nested/file'), path.join(f.root, 'alias'));
+  if (cause === 'directory') { fs.unlinkSync(path.join(f.workspace, 'nested/file')); fs.mkdirSync(path.join(f.workspace, 'nested/file')); }
+  if (cause === 'parent') { fs.rmSync(path.join(f.workspace, 'nested'), { recursive: true }); write(f.workspace, 'nested', 'parent file'); }
+  if (cause === 'manifest') {
+    const rename = fs.renameSync; let once = true;
+    t.mock.method(fs, 'renameSync', (from, to) => { if (to === manifestPath(f) && once) { once = false; throw Error('Restore manifest limit exceeded'); } return rename(from, to); });
+  }
+  const c = (await undoRun({ hiveDir: f.hiveDir, force: true })).conflicts[0];
+  assert.equal(c.code, 'blocked'); assert.match(c.reason, /undo again/);
+  assert.match(c.reason, { hardlink: /hardlink/i, directory: /not a regular file|directory/i, parent: /parent|ENOTDIR/i, manifest: /manifest limit/i }[cause]);
+  assert.ok(!c.reason.includes(f.root)); assert.ok(!c.reason.includes('parent file'));
+});
+
+test('fix5: pruning enumeration failure cannot roll back a committed integration', async (t) => {
+  const f = fixture(t); write(f.workspace, 'file', 'base'); const m = await manager(t, f);
+  const readdir = fs.readdirSync;
+  const mock = t.mock.method(fs, 'readdirSync', (dir, ...args) => { if (dir === path.join(f.hiveDir, 'restore-points')) throw Object.assign(Error('scanner'), { code: 'EACCES' }); return readdir(dir, ...args); });
+  await integrate(m, 'm1', (dir) => write(dir, 'file', 'committed'));
+  mock.mock.restore(); assert.equal(read(f.workspace, 'file'), 'committed');
+  assert.equal(manifest(f).files[0].pending, undefined);
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).restored, ['file']); assert.equal(read(f.workspace, 'file'), 'base');
+});
+
+test('fix5: conflict continues and directory removals each yield an event-loop turn', async (t) => {
+  const f = fixture(t), before = new Map(), after = new Map();
+  for (let i = 0; i < 4; i++) { before.set(`conflict-${i}`, entry(`before-${i}`)); after.set(`conflict-${i}`, entry('after')); }
+  for (let i = 0; i < 4; i++) after.set(`dir-${i}/new`, entry('after'));
+  prepareRestorePoint({ ...f, runId: 'run', changes: [...after.keys()], before, initial: before, after }).commit();
+  for (const [name] of after) write(f.workspace, name, name.startsWith('conflict') ? 'human' : 'after');
+  const open = fs.openSync, remove = fs.rmdirSync; let reading = false, removing = false, reads = 0, removals = 0;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (String(file).includes(path.sep + 'preimages' + path.sep)) {
+      assert.equal(reading, false, 'conflict continue must yield before the next file'); reads++;
+      reading = true; setImmediate(() => { reading = false; });
+    }
+    return open(file, ...args);
+  });
+  t.mock.method(fs, 'rmdirSync', (file, ...args) => {
+    if (String(file).startsWith(f.workspace + path.sep)) {
+      assert.equal(removing, false, 'directory pass must yield before the next directory'); removals++;
+      removing = true; setImmediate(() => { removing = false; });
+    }
+    return remove(file, ...args);
+  });
+  const result = await undoRun({ hiveDir: f.hiveDir });
+  assert.equal(reads, 4); assert.equal(removals, 4);
+  assert.deepEqual(result.conflicts.map((c) => c.code), Array(4).fill('changed')); assert.deepEqual(result.warnings, []);
+  assert.equal(result.removed.length, 4);
 });

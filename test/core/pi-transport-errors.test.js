@@ -41,6 +41,9 @@ function fixture(t) {
       if (mode === 'bounded') {
         process.stderr.write('old-error\\n' + 'x'.repeat(20000) + '\\n' + Array.from({length:20}, (_, i) => 'diagnostic-' + i + '\\n').join('') + '401 last diagnostic token=sk-lastfixture12345\\n', () => process.exit(1)); return;
       }
+      if (mode === 'single-line') {
+        process.stderr.write('x'.repeat(20000) + ' 401 provider connection failed\\n', () => process.exit(1)); return;
+      }
       if (mode === 'cut-secret') {
         process.stderr.write('token=' + 'private'.repeat(4000) + '\\n401 after long credential\\n', () => process.exit(1)); return;
       }
@@ -101,6 +104,12 @@ for (const transport of ['json', 'rpc']) {
       if (mode === 'mid-answer') assert.equal(result.text, 'Completed earlier turn');
     });
   }
+
+  test(`${transport}: fix5 single long stderr line keeps a marked cause`, async t => {
+    const result = await fixture(t)(transport, 'single-line').done;
+    assert.match(result.failure.message, /401 provider connection failed/);
+    assert.match(result.stderrTail, /\[cut\]/); assert.ok(result.stderrTail.length <= 2048);
+  });
 
   test(`${transport}: stderr tail is bounded and retains the end`, async t => {
     const result = await fixture(t)(transport, 'bounded').done;
@@ -225,5 +234,30 @@ test('fix3 item6: internal window cuts discard the credential fragment at the fi
   const text = 'token="' + 'private'.repeat(1000000) + '"\n401 safe diagnostic';
   for (const redact of [piErrorText, piErrorTail]) {
     const result = redact(text, {}); assert.equal(result, '401 safe diagnostic');
+  }
+});
+
+test('fix5: a cut single-line diagnostic keeps its marked, bounded error tail', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const input = 'x'.repeat(20000) + ' 401 provider connection failed';
+  for (const redact of [piErrorText, piErrorTail]) {
+    const result = redact(input, {}); assert.match(result, /401 provider connection failed$/); assert.match(result, /\[cut\]/); assert.ok(result.length <= 2048);
+  }
+});
+
+test('fix5: a credential label split off by the window cannot expose its next-line value', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const secret = 'PRIVATE_VALUE_' + 's'.repeat(8166), input = 'x'.repeat(12000) + '\napi_key:\n' + secret + '\n401 end';
+  for (const redact of [piErrorText, piErrorTail]) {
+    const result = redact(input, {}); assert.doesNotMatch(result, /PRIVATE_VALUE|s{20}/); assert.match(result, /401 end$/);
+  }
+});
+
+test('fix5: single-line credentials straddling either cut retain no token fragment', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  for (const input of ['token=' + 'private'.repeat(4000) + ' 401 end', 'Authorization: Bearer ' + 'private'.repeat(4000) + ' 401 end', 'token="' + 'private '.repeat(4000) + 'private tail" 401 end']) {
+    for (const redact of [piErrorText, piErrorTail]) {
+      const result = redact(input, {}); assert.doesNotMatch(result, /private|rivate|ivate/); assert.match(result, /401 end$/);
+    }
   }
 });

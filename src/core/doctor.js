@@ -111,7 +111,7 @@ export async function runDoctor({ config, env = process.env, stdout = process.st
     else report('fail', `${id}: credentials for ${a.model} are ${status ?? 'unknown'} (sign in or check provider configuration)`);
   }
   try { validateDockerModels(config, config.workflowWarning ? [] : activeRoles(config)); }
-  catch (err) { report('fail', err.message); }
+  catch (err) { report('fail', `${err.message}; a run with the configured workflow would be refused`); }
   const defaults = (config.workflowWarning ? [] : activeRoles(config)).filter((id) => !config.agents[id]?.model);
   if (defaults.length) {
     // Pi 1.5.2 keeps findInitialModel private; do not duplicate its selection rule.

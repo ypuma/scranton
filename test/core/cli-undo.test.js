@@ -9,7 +9,7 @@ import { createProjectRegistry } from '../../src/core/projects.js';
 import { prepareRestorePoint } from '../../src/core/restore-points.js';
 import { formatRunSummary, quotePathArgument } from '../../src/core/run-summary.js';
 
-const root = path.resolve('.scratch/usability/fix4/cli-undo');
+const root = path.resolve('.scratch/usability/fix5/cli-undo');
 fs.mkdirSync(root, { recursive: true });
 const previous = process.env.SCRANTON_ISOLATION_ROOT;
 process.env.SCRANTON_ISOLATION_ROOT = path.join(root, 'isolation');
@@ -187,4 +187,26 @@ test('fix4: undo prints blocked files separately without suggesting force and re
   assert.equal(fs.readFileSync(path.join(f.ws, 'new.txt'), 'utf8'), 'new');
   mock.mock.restore();
   assert.equal(await f.undo(), 0, f.io.err); assert.match(f.io.out, /Removed: new.txt/);
+});
+
+test('fix5: a live undo hint waits and makes recovery conditional on the process being gone', async (t) => {
+  const f = fixture(t); point(f);
+  const lease = acquireRunLease(f.hive, { runId: 'undo-live', mode: 'undo' });
+  fs.writeFileSync(path.join(f.hive, 'control/heartbeat.json'), JSON.stringify({ v: 1, runId: lease.runId, pid: process.pid, at: new Date().toISOString() }));
+  try {
+    assert.equal(await f.undo(), 1);
+    assert.ok(f.io.err.includes(`wait for the undo to finish; only if its process is gone: scranton recover --hive ${quotePathArgument(f.hive)}`), f.io.err);
+    assert.doesNotMatch(f.io.err, /inspect with/);
+  } finally { releaseRunLease(f.hive, lease.token); }
+});
+
+test('fix5: a sibling run hint names the other run rather than this chat list', async (t) => {
+  const f = fixture(t), data = path.join(f.dir, 'data'), registry = createProjectRegistry({ dataDir: data });
+  const p = registry.addProject({ name: 'Siblings', workspace: f.ws }), chat = registry.createChat(p.id), sibling = registry.createChat(p.id);
+  point({ ...f, hive: chat.hiveDir }); const lease = acquireRunLease(sibling.hiveDir, { runId: 'other' });
+  try {
+    assert.equal(await runCli(['undo', '--data', data, '--project', p.id, '--chat', chat.id], f.io), 1);
+    assert.match(f.io.err, /wait for or stop the run in the other chat; recover that chat only if its process is gone/);
+    assert.doesNotMatch(f.io.err, /--list|inspect with/);
+  } finally { releaseRunLease(sibling.hiveDir, lease.token); }
 });

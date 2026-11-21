@@ -380,7 +380,7 @@ async function cmdUndo(args, values, io) {
   try {
     if (values.list) {
       const points = listRestorePoints(hiveDir);
-      io.stdout.write(terminalText(points.length ? points.map((p) => p.unreadable ? `${p.runId} | unreadable` : `${p.runId} | ${p.createdAt} | ${p.files} files | ${p.remaining} remaining | ${p.undoneAt ? 'undone' : 'not undone'}`).join('\n') + '\n' : 'No restore points available.\n'));
+      io.stdout.write(terminalText(points.length ? points.map((p) => p.unreadable ? `${p.runId} | unreadable` : `${p.runId} | ${p.createdAt} | ${p.files} files | ${p.remaining} remaining | ${p.undoneAt || p.remaining === 0 ? 'undone' : 'not undone'}`).join('\n') + '\n' : 'No restore points available.\n'));
       return 0;
     }
     const result = await undoRun({ hiveDir, runId: values.run, force: values.force ?? false, siblings });
@@ -389,8 +389,10 @@ async function cmdUndo(args, values, io) {
     for (const c of result.conflicts) io.stderr.write(terminalText(`${c.code === 'blocked' ? 'Blocked' : 'Conflict'}: ${c.path}: ${c.reason}${c.code === 'changed' ? `; to overwrite later edits: scranton undo ${scope} --run ${result.runId} --force` : c.code === 'blocked' ? '' : '; --force cannot bypass safety or backup limits'}.\n`));
     return result.conflicts.length ? 1 : 0;
   } catch (err) {
-    const next = /this chat|needs recovery/i.test(err.message) ? `scranton recover ${scope}` : `scranton undo ${scope} --list`;
-    io.stderr.write(`scranton: ${terminalText(err.message).replace(/[\r\n]+/g, ' ')}; inspect with ${next}.\n`);
+    const next = /another chat of this project/i.test(err.message) ? 'wait for or stop the run in the other chat; recover that chat only if its process is gone'
+      : /An undo is already running/i.test(err.message) ? `wait for the undo to finish; only if its process is gone: scranton recover ${scope}`
+      : `inspect with ${/this chat|needs recovery/i.test(err.message) ? `scranton recover ${scope}` : `scranton undo ${scope} --list`}`;
+    io.stderr.write(`scranton: ${terminalText(err.message).replace(/[\r\n]+/g, ' ')}; ${next}.\n`);
     return 1;
   }
 }

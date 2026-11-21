@@ -136,6 +136,6 @@ test('fix3 item5: missing Docker models are failures even with a ready sandbox',
   const code = await runDoctor({ config, platform: 'linux', env: { PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_PIPELINE_COMMAND: JSON.stringify([path.join(dir, 'missing-engine')]) }, auth: { async listAccounts() { return []; } }, stdout: { write(s) { output += s; } } });
   assert.match(output, /\[ ok \] Sandbox image ready/);
   assert.equal(code, 1);
-  assert.match(output, /\[FAIL\] Docker requires an explicit provider and model for michael, dwight, hank/);
+  assert.match(output, /\[FAIL\] Docker requires an explicit provider and model for michael, dwight, hank[^\n]*; a run with the configured workflow would be refused/);
   assert.doesNotMatch(output, /the run can start|All good/);
 });
