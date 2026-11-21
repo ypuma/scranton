@@ -51,6 +51,19 @@ by: "core"
 ---
 
 ---
+file: "src/core/pi-rpc-session.js"
+symbol: "piErrorText"
+ordinal: 0
+kind: "how"
+text: "Redacted error text shown when an agent process fails; both transports use it (pi-runner.js has no copy). Callers keep the last 16,384 chars of stderr (`stderrCut`) and call `piErrorTail` (last 8 lines); messages go through `clip(piErrorText(msg, env), 2048)`. Steps: cut to the last 8,192 chars (the window), treat the cut boundary, mask env values whose names look like secrets, apply the general rules (cookies, URL credentials, Bearer, `label[:=]value` for a fixed `\\b` label list, JWT), `cleanActivity`, return the LAST 2,048 chars. So the window start is visible only when what follows shrinks below 2,048 chars (whitespace, escape sequences, a long masked value): tests probing the boundary need shrinking filler. Boundary, several lines: a partial first line is dropped (a complete one is kept unless it ends like a label); if the last NON-BLANK original line before the kept text ends with `:` or `=` (after spaces, tabs, quotes), everything through the first non-blank line is masked, whatever the label - the general rule can no longer see it. Boundary, one long line: marked `[cut]`, and the longer of two prefixes is masked: up to the first quote (a quoted value may straddle the cut; this also eats the text left of an apostrophe) or 256 chars plus the rest of that token (a label may sit just before the cut). A change here must never mask less than before."
+see_also: "test/core/pi-transport-errors.test.js (sweeps over every cut alignment; the legacy quoted-space case); src/core/pi-runner.js STDERR_CAP; findings of 2026-11-21 (three review rounds each found a leak at another alignment)"
+hash: "span:19fa2b27fda22ec4"
+written: "2026-11-21"
+commit: "64f1dee"
+by: "core"
+---
+
+---
 file: "src/core/pipeline-activity.js"
 symbol: "pipelineSteps"
 ordinal: 0
