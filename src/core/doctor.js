@@ -8,6 +8,8 @@ import { activeRoles } from './workflow.js';
 import { isFile } from './util.js';
 import { createAuthService } from './auth.js';
 import { probePipeline } from './pipeline-command.js';
+import { quotePathArgument } from './run-summary.js';
+import { validateDockerModels } from './sandbox.js';
 
 /** `a.b.c >= x.y.z` for ranges of the form ">=x.y.z" (the only form our package.json files use). */
 export function satisfiesMin(version, range) {
@@ -31,8 +33,10 @@ function writable(dir) {
 export async function runDoctor({ config, env = process.env, stdout = process.stdout, platform = process.platform, auth = createAuthService({ env }) }) {
   const c = styler(stdout, env);
   let failures = 0;
+  let warnings = 0;
   const report = (level, text) => {
     if (level === 'fail') failures += 1;
+    if (level === 'warn') warnings += 1;
     const tag = { ok: c.green('[ ok ]'), warn: c.yellow('[warn]'), fail: c.red('[FAIL]'), info: c.dim('[info]') }[level];
     stdout.write(`${tag} ${text}\n`);
   };
@@ -88,7 +92,7 @@ export async function runDoctor({ config, env = process.env, stdout = process.st
   const checked = new Map();
   for (const id of AGENT_IDS) {
     const a = config.agents[id];
-    const model = a.model ? `${a.provider ? `${a.provider}/` : ''}${a.model}${a.thinking ? `:${a.thinking}` : ''}` : "(pi's default)";
+    const model = a.model ? `${a.provider ? `${a.provider}/` : ''}${a.model}${a.thinking ? `:${a.thinking}` : ''}` : "(pi's default; provider/model undetermined offline)";
     report(isFile(a.skill) ? 'info' : 'fail', `${id}: model ${model}, tools ${a.tools.join(',')}, skill ${a.skill}${isFile(a.skill) ? '' : ' (MISSING)'}`);
     if (!a.model || !spec) continue;
     const key = `${a.provider ?? ''}\n${a.model}`;
@@ -106,11 +110,13 @@ export async function runDoctor({ config, env = process.env, stdout = process.st
     if (status === 'ready') report('ok', `${id}: credentials ready for ${a.model}`);
     else report('fail', `${id}: credentials for ${a.model} are ${status ?? 'unknown'} (sign in or check provider configuration)`);
   }
-  const missing = (config.workflowWarning ? [] : activeRoles(config)).filter((id) => !config.agents[id]?.provider || !config.agents[id]?.model);
-  if (config.execution?.sandbox?.mode === 'docker' && missing.length) {
-    report('warn', `Docker requires an explicit provider and model for ${missing.join(', ')}; set the agent default for each role in Agents (pi default cannot be used in the Docker sandbox), or set SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL`);
-  } else if (!AGENT_IDS.some((id) => config.agents[id].model)) {
-    report('warn', 'No model configured: pi will use its own default and credentials were not verified. Set SCRANTON_<AGENT>_MODEL to check them.');
+  try { validateDockerModels(config, config.workflowWarning ? [] : activeRoles(config)); }
+  catch (err) { report('fail', err.message); }
+  const defaults = (config.workflowWarning ? [] : activeRoles(config)).filter((id) => !config.agents[id]?.model);
+  if (defaults.length) {
+    // Pi 1.5.2 keeps findInitialModel private; do not duplicate its selection rule.
+    report('info', 'Default provider/model cannot be determined offline: pi 1.5.2 does not export findInitialModel through its public API. All agents without an explicit model choice share one pi default model. Credentials for pi default were not verified.');
+    report('warn', `No model configured for ${defaults.join(', ')}. Choose per agent: scranton agents; scranton agent set-model <id> --provider P --model M [--thinking T] ${config.dataDir ? '--data ' + quotePathArgument(config.dataDir) : '--hive ' + quotePathArgument(config.hiveDir)}. Also available: the dashboard Agents view, scranton.config.json (agents.<id>.provider/model), or SCRANTON_<AGENT>_PROVIDER and SCRANTON_<AGENT>_MODEL. In a source checkout, replace scranton with node bin/scranton.js.`);
   }
 
   for (const [label, dir] of [['hive', config.hiveDir], ['workspace', config.workspace]]) {
@@ -122,6 +128,8 @@ export async function runDoctor({ config, env = process.env, stdout = process.st
     }
   }
 
-  stdout.write(failures ? `\n${c.red(`${failures} problem${failures === 1 ? '' : 's'} found.`)}\n` : `\n${c.green('All good.')}\n`);
+  const verdict = failures ? c.red(`${failures} problem${failures === 1 ? '' : 's'} found.`)
+    : warnings ? c.yellow(`${warnings} warning${warnings === 1 ? '' : 's'} found; the run can start.`) : c.green('All good.');
+  stdout.write(`\n${verdict}\n`);
   return failures ? 1 : 0;
 }

@@ -134,11 +134,12 @@ test('unknown standalone agent is a usage error before Docker model selection', 
   assert.equal(fs.existsSync(path.join(dir, 'hive')), false);
 });
 
-test('doctor warns for any partial Docker model configuration and names missing roles neutrally', async (t) => {
+test('doctor fails for any partial Docker model configuration and names missing roles neutrally', async (t) => {
   const dir = fixture(t); let output = '';
   const config = loadConfig({ cwd: dir, env: {}, fileConfig: { execution: { sandbox: { mode: 'docker' } }, pi: { command: [process.execPath, path.join(PACKAGE_ROOT, 'tools/fake-pi.js')] },
     agents: { dwight: { provider: 'anthropic', model: 'fake-catalog' }, angela: { provider: 'google', model: 'fake-catalog' } } } });
   await runDoctor({ config, env: { PATH: '' }, auth: { listAccounts: () => [] }, stdout: { write: (s) => output += s } });
-  assert.match(output, /\[warn\] Docker requires an explicit provider and model for michael;/);
+  // run refuses this configuration (validateDockerModels), so doctor reports it as a failure, not a warning
+  assert.match(output, /\[FAIL\] Docker requires an explicit provider and model for michael;/);
   assert.doesNotMatch(output, /choose a ChatGPT model|for michael, dwight/);
 });

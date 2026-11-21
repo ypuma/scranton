@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { mkdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, openSync, closeSync, lstatSync, fstatSync, readSync, constants } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, parseEnv, stripVTControlCharacters } from 'node:util';
@@ -13,7 +13,10 @@ import { Hive } from './hive.js';
 import { Orchestrator } from './orchestrator.js';
 import { PiNotFoundError, resolvePiCommand } from './pi-command.js';
 import { startPi, writeSystemPrompt } from './pi-runner.js';
-import { acquireRunLease, readRunLease, releaseRunLease, startRunHeartbeat, guardParent, registerParentStartup } from './run-lease.js';
+import { acquireRunLease, readRunLease, releaseRunLease, startRunHeartbeat, guardParent, registerParentStartup, cliRecoveryStatus } from './run-lease.js';
+import { orphanSnapshot, recoverOrphan } from './run-recovery.js';
+import { formatRunSummary, quotePathArgument } from './run-summary.js';
+import { listRestorePoints, undoRun, workspaceState } from './restore-points.js';
 import { randomUUID } from 'node:crypto';
 import { AGENT_IDS } from './state.js';
 import { isLoopbackAddress } from './network.js';
@@ -29,7 +32,8 @@ import { LIMITS } from './context/limits.js';
 import { pct } from './context/tokens.js';
 import { createModelWindows } from './model-windows.js';
 import { boundedRead } from './thread.js';
-import { canonicalDirectory } from './context/paths.js';
+import { canonicalDirectory, checkScopedPath } from './context/paths.js';
+import { sameFileIdentity } from './context/file-identity.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
@@ -42,6 +46,10 @@ Usage:
   scranton run "<request>" [options]       Plan, build and test a request (Michael, Dwight, Angela)
   scranton agent <michael|dwight|oscar|hank|angela> "<task>" [--workspace DIR]
                                            Run one audited, isolated agent; private changes are not integrated
+  scranton recover [--hive DIR | --data DIR --project ID --chat ID] [--confirm-stopped]
+                                           Inspect ownership; recover gone runs (confirm stopped for unknown/cleanup warnings)
+  scranton undo [--hive DIR | --data DIR --project ID --chat ID] [--run ID] [--force] [--list]
+                                           Restore pre-run files; --force overwrites later edits; --list inspects points
   scranton demo [--scenario S] [--delay MS] [options]
                                            Full run with the fake pi (S: happy|flaky|breaker|blocked, default flaky)
   scranton dashboard [--once] [--ascii]    Live terminal dashboard (second terminal)
@@ -85,7 +93,8 @@ Options:
   --data DIR           Project registry directory (or SCRANTON_DATA)
   --project ID         run: registered project; --chat ID continues a thread
   --thread-context FILE Internal bounded earlier-thread context
-  --request-file FILE  run: read a bounded request instead of a positional
+  --request-file FILE  run: UTF-8 (optional BOM) or BOM-marked UTF-16; leading { requires strict v1 envelope
+                       Otherwise literal text, minus one final LF/CRLF/CR; nonblank, max 32768 chars / 262144 bytes
   --config FILE        Config file (default ./scranton.config.json)
   --no-plan            run: skip Michael's planning, use one milestone for the whole request
   --max-cycles N       Failed test cycles before the circuit breaker trips (default 3)
@@ -95,11 +104,16 @@ Options:
   --timeout-min N      Per-agent timeout in minutes (default 20)
 
 Exit codes: 0 success, 1 partial/failed/aborted, 2 usage error, 130 interrupted with Ctrl+C.
+Undo: 0 restored/listed, 1 conflicts or operational failure, 2 usage error.
 Environment and .env: see .env.example. Precedence: flags > env > scranton.config.json > defaults.
 `;
 
 const OPTIONS = {
   json: { type: 'boolean' },
+  'confirm-stopped': { type: 'boolean' },
+  run: { type: 'string' },
+  force: { type: 'boolean' },
+  list: { type: 'boolean' },
   percent: { type: 'string' },
   tokens: { type: 'string' },
   default: { type: 'boolean' },
@@ -193,9 +207,13 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
     if (values['single-hive'] && (values.data || values.project || values.chat)) throw new UsageError('--single-hive conflicts with registry options');
     const registryRun = !values['single-hive'] && command === 'run' && Boolean(values.data || env.SCRANTON_DATA);
     if (command === 'run' && !registryRun && (values.project || values.chat)) {
-      throw new UsageError('--project and --chat require --data or inherited SCRANTON_DATA');
+      throw new UsageError(`--project and --chat require --data or inherited SCRANTON_DATA. Use: scranton run "<request>" --data ${quotePathArgument(terminalText(defaultDataDir(env)))} --project ${terminalText(values.project || '<id>')}${values.chat ? ` --chat ${terminalText(values.chat)}` : ''}`);
     }
+    if (values['confirm-stopped'] && command !== 'recover') throw new UsageError('--confirm-stopped is only valid for recover');
     if (values['request-file'] !== undefined && command !== 'run') throw new UsageError('--request-file is only valid for run');
+    if (['run', 'force', 'list'].some((key) => values[key] !== undefined) && command !== 'undo') throw new UsageError('--run, --force and --list are only valid for undo');
+    if (command === 'recover') return await cmdRecover(rest, values, { stdout, stderr, env, cwd });
+    if (command === 'undo') return await cmdUndo(rest, values, { stdout, stderr, env, cwd });
     if (command === 'run' && values['request-file'] !== undefined && rest.length) throw new UsageError('Use either a positional request or --request-file, not both');
     if (command === 'run') {
       // Keep workspace dotenv values out of the inherited environment used by later runs.
@@ -258,11 +276,11 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
   }
 }
 
-/** Ctrl+C: first press aborts gracefully, second one exits at once. */
-function onInterrupt(handler) {
+/** Runs must finish child cleanup before returning, even after repeated Ctrl+C. */
+function onInterrupt(handler, repeated = () => process.exit(130)) {
   let pressed = false;
   const listener = () => {
-    if (pressed) process.exit(130);
+    if (pressed) return repeated();
     pressed = true;
     handler();
   };
@@ -278,13 +296,27 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
   let stopHeartbeat;
   let cleanupReason = 'Run ended without verified cleanup';
   try {
-    if (env.SCRANTON_PARENT_GUARD !== '1') lease = acquire(hiveDir, { runId: orchestrator.runId, startedAt: new Date().toISOString(), request, workspace: orchestrator.config.workspace });
+    if (env.SCRANTON_PARENT_GUARD !== '1') {
+      const info = { runId: orchestrator.runId, startedAt: new Date().toISOString(), request, workspace: orchestrator.config.workspace };
+      try { lease = acquire(hiveDir, info); }
+      catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        const orphan = orphanSnapshot(hiveDir), undo = readRunLease(hiveDir)?.mode === 'undo';
+        if (!cliRecoveryStatus(hiveDir).automatic) throw err;
+        try { await recoverOrphan(hiveDir, orphan.runId, "Interrupted: the run's process ended without finishing", undefined, { automatic: true, local: true }); }
+        catch (recovery) { err.recoveryError = recovery.message; throw err; }
+        stderr.write(undo ? 'Released interrupted undo; starting a new run.\n' : `Recovered interrupted run ${terminalText(orphan.runId)}; starting a new run.\n`);
+        lease = acquire(hiveDir, info);
+      }
+    }
     stopHeartbeat = startRunHeartbeat(hiveDir, lease?.token ?? env.SCRANTON_RUN_LEASE);
   } catch (err) {
     dispose();
     if (lease) releaseRunLease(hiveDir, lease.token);
     if (err.code === 'EEXIST') {
-      stderr.write('scranton: Hive is already owned by another run or recovery is required. Verify prior processes/containers have stopped before explicit recovery; ownership was not changed.\n');
+      const orphan = orphanSnapshot(hiveDir, err.recoveryError);
+      if (readRunLease(hiveDir)?.mode === 'undo') { stderr.write(`scranton: An undo is running in this chat; wait for it to finish or recover it before starting a run.\n${recoveryObservation(hiveDir)}\n`); return 1; }
+      stderr.write(`scranton: Hive is already owned by another run or recovery is required. Owner state: ${orphan?.owner ?? 'unknown'}; run: ${terminalText(orphan?.runId ?? 'unverifiable')}. Ownership was not changed.\n${recoveryObservation(hiveDir)}\n${orphan?.recoveryError ? terminalText(orphan.recoveryError) + '\n' : ''}Inspect/recover: scranton recover --hive ${quotePathArgument(hiveDir)}\n`);
       return 1;
     }
     throw err;
@@ -292,8 +324,18 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
   const off = onInterrupt(() => {
     stderr.write('\nInterrupting - stopping the active agent...\n');
     orchestrator.abort();
-  });
+  }, () => stderr.write('Still stopping - waiting for agent process-tree cleanup before exiting.\n'));
+  const started = Date.now();
   try {
+    if (env.SCRANTON_PARENT_GUARD !== '1') {
+      const shared = orchestrator.config.execution?.isolation !== 'worktree';
+      if (shared) stderr.write('This mode writes directly into the workspace; no restore point is kept.\n');
+      else if (!orchestrator.standaloneAgent) {
+        const state = await workspaceState(orchestrator.config.workspace);
+        stderr.write(state.git ? 'Workspace is inside a Git repository; existing files are the starting point (Git status is not inspected).\n' : 'No Git repository detected; existing files are the starting point.\n');
+        stderr.write('A restore point is kept for integrated changes; scranton undo restores the affected pre-run files (limits apply).\n');
+      }
+    }
     const result = await orchestrator.run(request);
     clean = result.cleanupComplete !== false && orchestrator.cleanupComplete !== false;
     cleanupReason = result.summary || cleanupReason;
@@ -301,6 +343,7 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
       orchestrator.stdout.write(`${result.text ?? ''}\nkeyword: ${result.keyword ? `[${result.keyword}]` : '(none)'}\n`);
       if (result.status === 'failed') stderr.write(`scranton: ${result.summary}\n`);
     }
+    if (env.SCRANTON_PARENT_GUARD !== '1') stderr.write(terminalText(formatRunSummary(orchestrator, result, Date.now() - started)));
     if (result.status === 'success') return 0;
     return result.status === 'aborted' && result.signaled ? 130 : 1;
   } finally {
@@ -308,6 +351,78 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
     stopHeartbeat(clean ? undefined : orchestrator.cleanupReason ?? cleanupReason);
     dispose({ clean });
     if (clean && lease) releaseRunLease(hiveDir, lease.token);
+  }
+}
+
+function maintenanceHive(command, values, { env, cwd }, siblings = []) {
+  const registryMode = Boolean(values.project || values.chat || values.data || env.SCRANTON_DATA) && !values.hive;
+  let hiveDir;
+  if (registryMode) {
+    if (!values.project || !values.chat) throw new UsageError(`Registry ${command} requires --project ID --chat ID`);
+    const registry = createProjectRegistry({ dataDir: path.resolve(cwd, values.data || env.SCRANTON_DATA || defaultDataDir(env)) });
+    const chat = registry.getChat(values.project, values.chat);
+    if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
+    hiveDir = chat.hiveDir;
+    siblings.push(...registry.listChats(values.project).filter((c) => c.id !== chat.id).map((c) => c.hiveDir));
+  } else {
+    if (values.hive && (values.data || values.project || values.chat)) throw new UsageError(`Use --hive or registry ${command} options, not both`);
+    hiveDir = loadConfig({ cwd, env, flags: { ...toFlags(values), singleHive: true }, validateWorkflow: false }).hiveDir;
+  }
+  return hiveDir;
+}
+
+async function cmdUndo(args, values, io) {
+  if (args.length) throw new UsageError('undo takes no positional arguments');
+  if (values.list && (values.run !== undefined || values.force)) throw new UsageError('--list cannot be combined with --run or --force');
+  if (values.run !== undefined && !/^[a-zA-Z0-9_-]{1,128}$/.test(values.run)) throw new UsageError('Invalid restore point identifier');
+  const siblings = [];
+  const hiveDir = maintenanceHive('undo', values, io, siblings), scope = `--hive ${quotePathArgument(hiveDir)}`;
+  try {
+    if (values.list) {
+      const points = listRestorePoints(hiveDir);
+      io.stdout.write(terminalText(points.length ? points.map((p) => p.unreadable ? `${p.runId} | unreadable` : `${p.runId} | ${p.createdAt} | ${p.files} files | ${p.remaining} remaining | ${p.undoneAt ? 'undone' : 'not undone'}`).join('\n') + '\n' : 'No restore points available.\n'));
+      return 0;
+    }
+    const result = await undoRun({ hiveDir, runId: values.run, force: values.force ?? false, siblings });
+    io.stdout.write(terminalText(`Undo run: ${result.runId}\n${result.restored.map((p) => `Restored: ${p}\n`).join('')}${result.removed.map((p) => `Removed: ${p}\n`).join('')}`));
+    for (const warning of result.warnings) io.stderr.write(terminalText(`Warning: ${warning}\n`));
+    for (const c of result.conflicts) io.stderr.write(terminalText(`${c.code === 'blocked' ? 'Blocked' : 'Conflict'}: ${c.path}: ${c.reason}${c.code === 'changed' ? `; to overwrite later edits: scranton undo ${scope} --run ${result.runId} --force` : c.code === 'blocked' ? '' : '; --force cannot bypass safety or backup limits'}.\n`));
+    return result.conflicts.length ? 1 : 0;
+  } catch (err) {
+    const next = /this chat|needs recovery/i.test(err.message) ? `scranton recover ${scope}` : `scranton undo ${scope} --list`;
+    io.stderr.write(`scranton: ${terminalText(err.message).replace(/[\r\n]+/g, ' ')}; inspect with ${next}.\n`);
+    return 1;
+  }
+}
+
+function recoveryObservation(hiveDir) {
+  const s = cliRecoveryStatus(hiveDir);
+  return `Owner check: ${s.owner === 'gone' ? 'process not found here' : `owner ${s.owner}`}; heartbeat ${s.seconds === null ? 'age unknown' : `${s.seconds} seconds old`}; host: ${terminalText(s.host ?? 'not recorded')}. Please wait and retry, or use scranton recover --hive ${quotePathArgument(hiveDir)} --confirm-stopped after making sure nothing of that run is still running.`;
+}
+
+async function cmdRecover(args, values, { stdout, stderr, env, cwd }) {
+  if (args.length) throw new UsageError('recover takes no positional arguments');
+  const hiveDir = maintenanceHive('recover', values, { env, cwd });
+  const orphan = orphanSnapshot(hiveDir);
+  if (!orphan) { stdout.write('No run owns this Hive; no recovery needed.\n'); return 0; }
+  const lease = readRunLease(hiveDir);
+  if (!orphan.runId) { stderr.write('scranton: The owner record is unreadable; follow the manual procedure in docs/CONTROL.md, section 6 (Unreadable owner record).\n'); return 1; }
+  stdout.write(terminalText(`Run: ${orphan.runId ?? 'unverifiable'}; Owner state: ${orphan.owner}; last heartbeat: ${orphan.heartbeatAt ?? 'none'}; stop requested: ${orphan.stopRequestedAt ?? 'none'}\n`));
+  if (orphan.recoveryError) stderr.write(terminalText(orphan.recoveryError) + '\n');
+  if (orphan.owner === 'alive') { stderr.write('The run is still running. Request a stop instead.\n'); return 1; }
+  if (!values['confirm-stopped'] && !cliRecoveryStatus(hiveDir).automatic) {
+    stderr.write(recoveryObservation(hiveDir) + '\n');
+    return 1;
+  }
+  try {
+    const manual = Boolean(values['confirm-stopped']);
+    const warnings = await recoverOrphan(hiveDir, orphan.runId, manual ? 'Released by the user' : "Interrupted: the run's process ended without finishing", undefined, { automatic: !manual, local: true });
+    for (const warning of warnings) stderr.write(`Warning: ${terminalText(warning)}\n`);
+    stdout.write(lease?.mode === 'undo' ? 'Released interrupted undo; run history was not changed.\n' : `Recovered run ${terminalText(orphan.runId)}; recorded as aborted.\n`);
+    return 0;
+  } catch (err) {
+    stderr.write(`scranton: ${terminalText(err.message)}\nOwnership was retained. Inspect with scranton recover --hive ${quotePathArgument(hiveDir)}; use --confirm-stopped only after independently confirming all prior processes/containers have stopped.\n`);
+    return 1;
   }
 }
 
@@ -516,30 +631,64 @@ async function cmdContext(args, values, { stdout, env, cwd }) {
   return 0;
 }
 
-function cmdProjects(command, args, values, config, { stdout }) {
-  const registry = createProjectRegistry({ dataDir: config.dataDir ?? path.join(process.env.APPDATA ?? path.join(os.homedir(), '.local', 'share'), 'dev.scranton.desktop') });
+const defaultDataDir = (env) => path.join(env.APPDATA ?? path.join(os.homedir(), '.local', 'share'), 'dev.scranton.desktop');
+
+function cmdProjects(command, args, values, config, { stdout, env }) {
+  const registry = createProjectRegistry({ dataDir: config.dataDir ?? defaultDataDir(env) });
   if (command === 'chats') {
     if (args.length !== 1) throw new UsageError('chats needs a project ID');
     stdout.write(JSON.stringify({ chats: registry.listChats(args[0]) }, null, 2) + '\n');
-  } else if (args[0] === 'list' && args.length === 1) stdout.write(JSON.stringify({ projects: registry.listProjects() }, null, 2) + '\n');
+  } else if (args[0] === 'list' && args.length === 1) stdout.write(JSON.stringify({ dataDir: registry.dataDir, projects: registry.listProjects() }, null, 2) + '\n');
   else if (args[0] === 'add' && args.length === 2) stdout.write(JSON.stringify({ project: registry.addProject({ name: args[1], workspace: values.workspace && path.resolve(config.cwd, values.workspace), create: values.create }) }, null, 2) + '\n');
   else if (args[0] === 'remove' && args.length === 2) { registry.removeProject(args[1], { deleteHistory: values['delete-history'] }); stdout.write('Project removed. Workspace files were not changed.\n'); }
   else throw new UsageError('projects needs list|add <name>|remove <id>');
   return 0;
 }
 
+function readRequestFile(file) {
+  const directory = canonicalDirectory(path.dirname(file)), target = path.join(directory, path.basename(file));
+  const before = lstatSync(target, { bigint: true });
+  if (before.isSymbolicLink()) throw new UsageError('a link');
+  if (!before.isFile()) throw new UsageError('not a regular file');
+  if (before.nlink !== 1n) throw new UsageError('a link');
+  if (before.size > 262144n) throw new UsageError('too large');
+  checkScopedPath(directory, target, false);
+  const fd = openSync(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    if (!sameFileIdentity(stat, before)) throw new UsageError('changed while reading');
+    const bytes = Buffer.alloc(Number(stat.size));
+    let size = 0, count;
+    while (size < bytes.length && (count = readSync(fd, bytes, size, bytes.length - size, null))) size += count;
+    checkScopedPath(directory, target, false);
+    if (size !== bytes.length || !sameFileIdentity(fstatSync(fd, { bigint: true }), stat) || !sameFileIdentity(lstatSync(target, { bigint: true }), stat)) throw new UsageError('changed while reading');
+    const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : 'utf-8';
+    try { return new TextDecoder(encoding, { fatal: true }).decode(bytes); }
+    catch { throw new UsageError('not valid text'); }
+  } finally { closeSync(fd); }
+}
+
 async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin }) {
   if (values['request-file'] !== undefined) {
     try {
       const file = path.resolve(cwd, values['request-file']);
-      const directory = canonicalDirectory(path.dirname(file));
-      const value = JSON.parse(boundedRead(path.join(directory, path.basename(file)), 262144, directory));
-      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 2 ||
-          value.v !== 1 || typeof value.request !== 'string' || !value.request.trim() || value.request.length > 32768) throw Error();
-      request = value.request;
-    } catch { throw new UsageError('Invalid request file'); }
+      const raw = readRequestFile(file);
+      if (raw.trimStart().startsWith('{')) {
+        let value;
+        try { value = JSON.parse(raw); }
+        catch { throw new UsageError('starts with { but is not a request envelope'); }
+        if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 2 || value.v !== 1 || typeof value.request !== 'string') throw new UsageError('starts with { but is not a request envelope');
+        request = value.request;
+      } else request = raw.replace(/\r?\n$|\r$/, '');
+      if (!request.trim()) throw new UsageError('empty');
+      if (request.length > 32768) throw new UsageError('longer than 32768 characters');
+    } catch (err) {
+      const reason = err instanceof UsageError ? err.message : err.code === 'ENOENT' ? 'not found' : err.code === 'ELOOP' ? 'a link' : ['EISDIR', 'ENOTDIR'].includes(err.code) ? 'not a regular file' : 'cannot read safely';
+      throw new UsageError(`Invalid request file: ${reason}`);
+    }
   }
   if (!request.trim()) throw new UsageError('run needs a request, e.g. scranton run "Build a todo CLI"');
+  if (request.length > 32768) throw new UsageError('Request exceeds 32768 characters');
   let acquire = acquireRunLease;
   if (!config.dataDir && (values.project || values.chat)) throw new UsageError('--project and --chat require --data');
   let threadContext = '', developerContext = '', contextVersion;
@@ -563,6 +712,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin
     const project = registry.getProject(values.project);
     const chat = values.chat ? registry.getChat(project.id, values.chat) : registry.createChat(project.id, { title: derivedChatTitle(request) });
     if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
+    stderr.write(`Project: ${project.id}; chat: ${chat.id}; continue: scranton run "<request>" --data ${quotePathArgument(config.dataDir)} --project ${project.id} --chat ${chat.id}\n`);
     config = loadConfig({ cwd: PACKAGE_ROOT, env, flags: { ...toFlags(values), config: undefined, workspace: project.workspace, hive: chat.hiveDir } });
     let memory = '';
     try {

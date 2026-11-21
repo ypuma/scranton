@@ -5,12 +5,39 @@ import { fileURLToPath } from 'node:url';
 import { AGENT_MESSAGE, buildPiArgs, spawnPi, killTree, piChildEnv } from './pi-command.js';
 import { JsonlSplitter, parseJsonLine } from './jsonl.js';
 import { extractKeyword, KEYWORDS } from './keywords.js';
-import { tailLines } from './util.js';
+import { clip, oneLine, tailLines } from './util.js';
+import { cleanActivity } from './live-activity.js';
 import { CHAT_TITLE, RPC_ACK_TIMEOUT_MS, CHAT_ACK_TIMEOUT_MS, validChat } from '../../tools/pi-agent-chat.js';
 
 export const RPC_STARTUP_TIMEOUT_MS = 60000;
 
 const extension = fileURLToPath(new URL('../../tools/pi-agent-chat.js', import.meta.url));
+const RECORD_CAP = 16 * 1024 * 1024;
+
+export function piErrorText(value, env) {
+  let text = String(value ?? '');
+  // Drop a partial first line so the window cannot expose an unlabelled secret.
+  if (text.length > 8192) {
+    text = text.slice(-8192);
+    text = text.includes('\n') ? text.slice(text.indexOf('\n') + 1) : '';
+  }
+  for (const [key, secret] of Object.entries(env)) {
+    if (/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key) && typeof secret === 'string' && secret.length >= 4) text = text.split(secret).join('[redacted]');
+  }
+  text = text.replace(/\b(?:set-cookie|cookie)\s*:[^\r\n]*/gi, (header) => header.slice(0, header.indexOf(':') + 1) + ' [redacted]')
+    .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[redacted]@')
+    .replace(/([?&](?:key|signature|credential)=)[^&#\s"']*/gi, '$1[redacted]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/\b(api[_-]?key|(?:access[_-]?|refresh[_-]?|id[_-]?)?token|(?:client[_-]?)?secret|password|authorization)\s*(?:["']\s*)?[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=[redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]');
+  return cleanActivity(text).slice(-2048);
+}
+
+export function piErrorTail(value, env, cut = false) {
+  // A truncated first line may have lost the label identifying a credential.
+  if (cut) value = value.includes('\n') ? value.slice(value.indexOf('\n') + 1) : '';
+  return tailLines(piErrorText(value, env), 8).slice(-2048);
+}
 
 export function startPiRpc(options, { describeTool }) {
   const { agentId, instanceId = agentId, hive, agentConfig, pi, onMessage, onSpawn, onTool, onToolEnd } = options;
@@ -28,7 +55,9 @@ export function startPiRpc(options, { describeTool }) {
   const replies = new Map();
   const timers = new Set();
   const splitter = new JsonlSplitter();
-  let child, failure, last, stderr = '', settled = false, closing = false, finished = false;
+  let child, failure, last, stderr = '', noise = '', recordBytes = 0, settled = false, closing = false, finished = false;
+  let stderrCut = false, noiseCut = false;
+  let diagnosticEnv = { ...process.env, ...options.extraEnv };
   let accepted = false, stopping = false;
   const usage = { input: 0, output: 0, cost: 0 };
   let resolveDone;
@@ -48,8 +77,8 @@ export function startPiRpc(options, { describeTool }) {
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     cancelPending('Pi session ended');
-    if (!failure && !settled) failure = { kind: 'exit', message: `Pi process exited before agent_settled (${code ?? signal})` };
-    if (!failure && code !== 0) failure = { kind: 'exit', message: `Pi exited with ${code ?? signal}` };
+    if (!failure && (code !== 0 || signal)) failure = { kind: 'exit', message: `pi exited with ${signal ? `signal ${signal}` : `code ${code}`}` };
+    if (!failure && !settled) failure = { kind: 'exit', message: 'pi exited before agent_settled (code 0)' };
     if (!failure && !last) failure = { kind: 'no_message', message: 'Pi settled without an assistant message' };
     if (!failure && ['error', 'aborted'].includes(last?.stopReason)) failure = { kind: 'stop_reason', message: last.errorMessage ?? last.stopReason };
     let cleanupComplete = false, cleanupFailure = null;
@@ -58,12 +87,16 @@ export function startPiRpc(options, { describeTool }) {
       cleanupFailure = { kind: 'cleanup', message: error?.message ?? String(error) };
       failure ??= cleanupFailure;
     }
+    const stderrTail = piErrorTail(stderr, diagnosticEnv, stderrCut), stdoutTail = piErrorTail(noise, diagnosticEnv, noiseCut);
+    if (cleanupFailure) cleanupFailure.message = clip(piErrorText(cleanupFailure.message, diagnosticEnv), 2048);
+    if (failure) failure = { ...failure, message: `${clip(piErrorText(failure.message, diagnosticEnv), 2048)}${stderrTail ? `; pi stderr: ${oneLine(stderrTail)}` : ''}${stdoutTail ? `; pi stdout (ignored): ${oneLine(stdoutTail)}` : ''}` };
     const text = typeof last?.content === 'string' ? last.content : (last?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     resolveDone({ ok: !failure, text, keyword: failure ? null : extractKeyword(text, agentConfig.keywords ?? KEYWORDS[agentId] ?? []), usage: last ? usage : null,
-      exitCode: code ?? -1, durationMs: Date.now() - started, failure: failure ?? null, cleanupComplete, cleanupFailure, stderrTail: tailLines(stderr, 8), sessionId });
+      exitCode: code ?? -1, durationMs: Date.now() - started, failure: failure ?? null, cleanupComplete, cleanupFailure, stderrTail, sessionId });
   };
   const fail = (kind, message) => {
     if (finished) return;
+    message = clip(piErrorText(message, diagnosticEnv), 2048);
     failure ??= { kind, message };
     closing = true;
     cancelPending(message);
@@ -105,7 +138,9 @@ export function startPiRpc(options, { describeTool }) {
   const handle = (line) => {
     if (finished || !line.trim()) return;
     const r = parseJsonLine(line);
-    if (!r || typeof r.type !== 'string') return fail('protocol', 'Invalid Pi RPC record');
+    if (!r || typeof r.type !== 'string') {
+      noise += line + '\n'; noiseCut ||= noise.length > 16384; noise = noise.slice(-16384); return;
+    }
     options.onLive?.(r);
     if (r.type === 'response') {
       const p = pending.get(r.id);
@@ -113,7 +148,7 @@ export function startPiRpc(options, { describeTool }) {
       if (r.command !== p.type || typeof r.success !== 'boolean') return fail('protocol', 'Mismatched Pi RPC ACK');
       clearTimeout(p.timer); timers.delete(p.timer); pending.delete(r.id);
       answered = true;
-      p.resolve({ ok: r.success, ...(r.data ?? {}), ...(r.success ? {} : { error: r.error ?? 'Pi rejected command' }) });
+      p.resolve({ ok: r.success, ...(r.data ?? {}), ...(r.success ? {} : { error: clip(piErrorText(r.error ?? 'Pi rejected command', diagnosticEnv), 2048) }) });
       shutdown();
     } else if (r.type === 'extension_ui_request') {
       if (r.method !== 'input' || r.title !== CHAT_TITLE) {
@@ -175,18 +210,34 @@ export function startPiRpc(options, { describeTool }) {
       systemPromptFile: execution.systemPromptFile ?? options.systemPromptFile,
       sessionDir: execution.sessionDir ?? hive.sessionDir(instanceId), extensionFile: execution.extensionFile ?? extension });
     spawnedAt = Date.now();
+    diagnosticEnv = { ...process.env, ...options.extraEnv, ...execution.env };
     child = spawnPi(execution.spec ?? options.spec, [...(execution.argsPrefix ?? []), ...args], {
-      cwd: execution.cwd ?? options.cwd, env: { ...process.env, ...options.extraEnv, ...execution.env }, stdin: 'pipe'
+      cwd: execution.cwd ?? options.cwd, env: diagnosticEnv, stdin: 'pipe'
     });
     child.stdin.on('error', (error) => fail('pipe', error.message));
     child.stdout.on('data', (chunk) => {
-      try { for (const line of splitter.push(chunk)) handle(line); }
+      try {
+        let start = 0, at;
+        while ((at = chunk.indexOf(10, start)) !== -1) {
+          recordBytes += at - start;
+          if (recordBytes > RECORD_CAP) throw new Error(`Pi RPC record exceeds ${RECORD_CAP} bytes`);
+          recordBytes = 0; start = at + 1;
+        }
+        recordBytes += chunk.length - start;
+        if (recordBytes > RECORD_CAP) throw new Error(`Pi RPC record exceeds ${RECORD_CAP} bytes`);
+        for (const line of splitter.push(chunk)) handle(line);
+      }
       catch (error) { fail('protocol', error.message); }
     });
-    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-16384); });
+    child.stderr.on('data', (chunk) => { stderr += chunk; stderrCut ||= stderr.length > 16384; stderr = stderr.slice(-16384); });
     child.on('error', (error) => { failure ??= { kind: 'spawn', message: error.message }; void finish(null); });
     child.on('close', (code, signal) => {
-      try { for (const line of splitter.end()) handle(line); }
+      try {
+        for (const line of splitter.end()) {
+          if (/^\s*\{/.test(line) && !parseJsonLine(line)) fail('protocol', 'Incomplete Pi RPC record at EOF');
+          else handle(line);
+        }
+      }
       catch (error) { failure ??= { kind: 'protocol', message: error.message }; }
       void finish(code, signal);
     });

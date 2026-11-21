@@ -152,6 +152,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
   async function start(body) {
     await recoverGone();
     if (active || closing || recovery) throw error(409, 'A run is already alive or the server is closing');
+    if (readRunLease(hive)?.mode === 'undo') throw error(409, 'An undo is running in this chat; wait for it to finish or recover it before starting a run.');
     const demo = body.demo;
     if (demo !== undefined && (!object(demo) || !SCENARIOS.includes(demo.scenario) ||
       (demo.delayMs !== undefined && (!Number.isInteger(demo.delayMs) || demo.delayMs < 0 || demo.delayMs > 5000)))) throw error(400, 'Invalid demo');
@@ -243,7 +244,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     if (active || closing) throw error(409, 'A run is already alive or the server is closing');
     let lease;
     try { lease = acquire(hive, info); }
-    catch (err) { if (err.code === 'EEXIST') throw error(409, 'Hive is owned by another run; stop it or recover ownership first'); throw err; }
+    catch (err) { if (err.code === 'EEXIST') throw error(409, readRunLease(hive)?.mode === 'undo' ? 'An undo is running in this chat; wait for it to finish or recover it before starting a run.' : 'Hive is owned by another run; stop it or recover ownership first'); throw err; }
     let child;
     const requestFile = path.join(hive, 'control', 'request.json');
     const removeRequest = () => withFsRetry(() => fs.rmSync(requestFile, { force: true }));

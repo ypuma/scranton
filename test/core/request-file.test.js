@@ -23,7 +23,7 @@ function fixture(t, mock = true) {
   return { dir, file, calls, invoke };
 }
 
-// Regression anchors: cmdRun's boundedRead, closed shape and request length validation.
+// Regression anchors: cmdRun's hardened reader, closed shape and request length validation.
 for (const [name, value] of [
   ['short', { v: 1, request: 'Short request' }],
   ['maximum escaped Unicode', { v: 1, request: ('\u754c"\\').repeat(10922) + 'xx' }],
@@ -34,13 +34,84 @@ for (const [name, value] of [
 });
 
 for (const [name, value] of [
-  ['null', null], ['array', []], ['string', 'request'], ['missing request', { v: 1 }], ['missing version', { request: 'x' }],
+  ['missing request', { v: 1 }], ['missing version', { request: 'x' }],
   ['wrong version', { v: 2, request: 'x' }], ['boolean version', { v: true, request: 'x' }], ['string version', { v: '1', request: 'x' }],
   ['extra key', { v: 1, request: 'x', extra: true }], ['non-string request', { v: 1, request: 1 }],
   ['blank', { v: 1, request: ' \n\t' }], ['empty', { v: 1, request: '' }], ['over chars', { v: 1, request: 'x'.repeat(32769) }]
 ]) test(`request-file rejects ${name} before orchestration`, async (t) => {
   const f = fixture(t), result = await f.invoke(JSON.stringify(value));
   assert.equal(result.code, 2); assert.match(result.output, /Invalid request file/); assert.deepEqual(f.calls, []);
+});
+
+// Reverting literal-text selection to JSON-only parsing rejects these exact scalar/array strings.
+for (const [name, value] of [['null', null], ['array', []], ['string', 'request']]) test(`request-file accepts ${name} as text`, async (t) => {
+  const f = fixture(t), raw = JSON.stringify(value), result = await f.invoke(raw);
+  assert.equal(result.code, 0, result.output); assert.deepEqual(f.calls, [raw]);
+  assert.equal(fs.readFileSync(f.file, 'utf8'), raw);
+});
+
+// Regression anchors: BOM encoding detection, fatal decoding and removal of only one final line break.
+for (const [name, raw, request] of [
+  ['UTF-8 BOM', '\ufeffBuild a CLI\n', 'Build a CLI'],
+  ['UTF-8 BOM envelope', '\ufeff{"v":1,"request":"Goal"}', 'Goal'],
+  ['UTF-16 LE BOM', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Build \u754c\r\n', 'utf16le')]), 'Build \u754c'],
+  ['UTF-16 BE BOM', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('Build \u754c\n', 'utf16le').swap16()]), 'Build \u754c'],
+  ['UTF-16 LE envelope', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"v":1,"request":"Goal"}', 'utf16le')]), 'Goal'],
+  ['CRLF trailing line break', '  Build a CLI  \r\n', '  Build a CLI  '],
+  ['CR trailing line break', 'Build a CLI\r', 'Build a CLI'],
+  ['multi-line prompt', 'First line\r\nSecond line\n', 'First line\r\nSecond line'],
+  ['braces later in text', 'Build {a CLI}\n', 'Build {a CLI}'],
+  ['one of two final line breaks', '  Goal\n\n', '  Goal\n'],
+  ['maximum text', 'x'.repeat(32768) + '\n', 'x'.repeat(32768)]
+]) test(`request-file accepts text: ${name}`, async (t) => {
+  const f = fixture(t), result = await f.invoke(raw);
+  assert.equal(result.code, 0, result.output); assert.deepEqual(f.calls, [request]);
+  assert.deepEqual(fs.readFileSync(f.file), Buffer.from(raw));
+});
+
+// Revert the startsWith('{') branch, fatal decoder or in-file validation to lose these reasons/refusals.
+for (const [name, raw, reason] of [
+  ['blank file', '', 'empty'], ['whitespace file', ' \r\n\t', 'empty'],
+  ['overlong text', 'x'.repeat(32769), 'longer than 32768 characters'],
+  ['malformed UTF-8', Buffer.from([0xc3, 0x28]), 'not valid text'],
+  ['odd UTF-16 LE', Buffer.from([0xff, 0xfe, 0x41]), 'not valid text'],
+  ['odd UTF-16 BE', Buffer.from([0xfe, 0xff, 0x00]), 'not valid text'],
+  ['unpaired UTF-16 surrogate', Buffer.from([0xff, 0xfe, 0x00, 0xd8]), 'not valid text'],
+  ['broken leading brace', ' \n{broken', 'starts with { but is not a request envelope'],
+  ['missing envelope key', '{"v":1}', 'starts with { but is not a request envelope'],
+  ['extra envelope key', '{"v":1,"request":"x","extra":true}', 'starts with { but is not a request envelope'],
+  ['wrong envelope version', '{"v":2,"request":"x"}', 'starts with { but is not a request envelope'],
+  ['empty envelope request', '{"v":1,"request":""}', 'empty'],
+  ['overlong envelope request', JSON.stringify({ v: 1, request: 'x'.repeat(32769) }), 'longer than 32768 characters']
+]) test(`request-file explains ${name}`, async (t) => {
+  const f = fixture(t), result = await f.invoke(raw);
+  assert.equal(result.code, 2); assert.ok(result.output.includes(`Invalid request file: ${reason}`), result.output);
+  assert.deepEqual(f.calls, []); assert.deepEqual(fs.readFileSync(f.file), Buffer.from(raw));
+});
+
+// Revert the reader's typed refusals or the catch reason mapping to lose these diagnostics.
+test('request-file explains missing, nonregular, linked and oversized files', async (t) => {
+  const f = fixture(t);
+  async function rejected(file, reason) {
+    const result = await f.invoke(undefined, ['run'], file);
+    assert.equal(result.code, 2); assert.ok(result.output.includes(`Invalid request file: ${reason}`), result.output);
+  }
+  await rejected(f.file, 'not found'); await rejected(path.join(f.dir, 'missing', 'file'), 'not found');
+  await rejected(f.dir, 'not a regular file');
+  fs.writeFileSync(f.file, 'x'.repeat(262145)); await rejected(f.file, 'too large');
+  fs.writeFileSync(f.file, 'Goal');
+  const hard = path.join(f.dir, 'hard'); fs.linkSync(f.file, hard);
+  await rejected(hard, 'a link'); fs.unlinkSync(hard);
+  const link = path.join(f.dir, 'link');
+  try { fs.symlinkSync(f.file, link); }
+  catch (error) {
+    if (error.code !== 'EPERM') throw error;
+    const target = path.join(f.dir, 'linked-directory'); fs.mkdirSync(target);
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    t.diagnostic('File symlink creation unavailable; checked junction refusal');
+  }
+  await rejected(link, 'a link');
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'Goal'); assert.deepEqual(f.calls, []);
 });
 
 test('request-file rejects missing, corrupt, directory, symlink and hardlink input', async (t) => {

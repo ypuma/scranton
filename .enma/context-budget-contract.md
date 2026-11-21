@@ -252,12 +252,18 @@ planner text 800000, developer brief 8000.
   directory as the thread-context file) and passes `--request-file <path>` instead of `'--', request`.
   The server deletes the file when the child exits or fails to spawn, and removes a stale one before a run whose
   request travels in argv.
-- CLI: `--request-file FILE` on `scranton run`. Positional and file together: usage error. The file must be a
-  regular file (no symlink) of at most 262144 bytes holding exactly `{ "v": 1, "request": string }` with a
-  non-blank request of at most 32768 chars; anything else: `Invalid request file`. The positional path is
-  unchanged. Both control files (request and thread context) are read with the bounded reader of `thread.js`
-  after canonicalising the file's DIRECTORY, so a data path through a junction, a symlinked directory or an 8.3
-  short name stays valid; only the file itself must be a regular file.
+- CLI: `--request-file FILE` on `scranton run`. Positional and file together: usage error. Every file must be
+  regular, neither a symlink nor a hardlink, and at most 262144 bytes. Decode UTF-8 (dropping an optional BOM),
+  or UTF-16 LE/BE when its BOM is present; invalid text in the detected encoding is rejected. If the first
+  non-whitespace character is `{`, require exactly `{ "v": 1, "request": string }` (closed shape, version 1);
+  malformed JSON is not literal text. Otherwise use the content as literal request text, dropping exactly one
+  trailing LF, CRLF or CR. Both file forms and positional requests must be non-blank and at most 32768 JS
+  string characters. Every file rejection exits 2 with `Invalid request file` and a short reason: `not found`,
+  `not a regular file`, `a link`, `too large`, `not valid text`, `starts with { but is not a request envelope`,
+  `empty` or `longer than 32768 characters` (unsafe/changed reads also fail closed). The CLI never deletes the
+  file. Both control files are read with bounded, identity-checked readers (`thread.js` for context, `cli.js`
+  for requests) after canonicalising the file's DIRECTORY, so a data path through a junction, a symlinked
+  directory or an 8.3 short name stays valid; only the file itself must be regular and nonlinked.
 - HTTP: the JSON body cap of `readBody` (`src/server/control.js`, also used by the registry routes) rises from
   65536 to 262144 bytes; a 32768-char request can be about 100 KB of UTF-8.
 - Proven carriers (probe experiment 2): pi `json` transport (`@<inbox file>`) and `rpc` transport (stdin) both

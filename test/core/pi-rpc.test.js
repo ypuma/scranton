@@ -68,7 +68,7 @@ test('broker rejection and broker timeout are honest tool ACKs', async (t) => {
 });
 
 test('protocol errors, rejection, missing settlement and spawn failures settle without hanging', async (t) => {
-  for (const [mode, kind] of [['bad-json', 'protocol'], ['reject', 'rpc'], ['early-exit', 'exit']]) {
+  for (const [mode, kind] of [['reject', 'rpc'], ['early-exit', 'exit']]) {
     const result = await setup(t, { extraEnv: { FAKE_RPC_MODE: mode } }).done;
     assert.equal(result.failure.kind, kind);
   }

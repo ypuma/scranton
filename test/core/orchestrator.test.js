@@ -418,3 +418,32 @@ test('JSON planner completion does not invent an RPC instance', async (t) => {
   assert.ok(completed);
   assert.equal(completed.instanceId, undefined);
 });
+
+test('hive human request is atomic, correlated and removed after response or abort', async (t) => {
+  const { fakeConfig } = await import('./helpers.js');
+  const { Orchestrator } = await import('../../src/core/orchestrator.js');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const scratch = path.resolve('.scratch/usability/safety'); fs.mkdirSync(scratch, { recursive: true });
+  for (const interrupt of [false, true]) {
+    const root = fs.mkdtempSync(path.join(scratch, 'human-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const config = fakeConfig(root), events = [];
+    const o = new Orchestrator({ config, noPlan: true, onBreaker: 'hive', listener: (e) => events.push(e), startRunner: () => ({ done: Promise.resolve({ ok: true, text: 'Need a decision [BLOCKED]', keyword: 'BLOCKED', exitCode: 0, durationMs: 1 }), kill: async () => {} }) });
+    const file = path.join(config.hiveDir, 'human/request.json');
+    const running = o.run('test');
+    try {
+      for (let i = 0; i < 200 && !fs.existsSync(file) && !events.some((e) => e.type === 'run_finished'); i++) await delay(10);
+      assert.ok(fs.existsSync(file), 'waiting human request is discoverable without parsing events');
+      const request = JSON.parse(fs.readFileSync(file, 'utf8')), event = events.find((e) => e.type === 'hitl_request');
+      assert.deepEqual(request, { v: 1, runId: event.runId, requestSeq: event.seq, milestoneId: event.milestoneId, title: 'Dwight needs a human on m1', reason: event.reason, options: event.options, ts: event.ts });
+      assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.endsWith('.tmp')), false);
+      if (interrupt) o.abort();
+      else {
+        const temp = path.join(path.dirname(file), 'answer.tmp');
+        fs.writeFileSync(temp, JSON.stringify({ v: 1, runId: request.runId, requestSeq: request.requestSeq, decision: 'skip', ts: new Date().toISOString() }));
+        fs.renameSync(temp, path.join(path.dirname(file), 'response.json'));
+      }
+      const result = await running; assert.equal(result.status, interrupt ? 'aborted' : 'partial');
+      assert.equal(fs.existsSync(file), false, 'ended wait leaves no open request');
+    } finally { o.abort(); await running; }
+  }
+});

@@ -12,7 +12,7 @@ import * as leases from '../../src/core/run-lease.js';
 import { EventRecorder } from '../../src/core/events.js';
 
 function fixture(t) {
-  const root = path.resolve('.scratch/orphan-recovery'); fs.mkdirSync(root, { recursive: true });
+  const root = path.resolve('.scratch/usability/fix3/orphan-recovery'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'r-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const hive = path.join(dir, 'h'), workspace = path.join(dir, 'w'); fs.mkdirSync(workspace);
@@ -186,7 +186,7 @@ for (const automatic of [false, true]) test(`pre-journal crash recovers and perm
 });
 
 function fixFixture(t) {
-  const root = path.resolve('.scratch/orphan-fix'); fs.mkdirSync(root, { recursive: true });
+  const root = path.resolve('.scratch/usability/fix3/orphan-fix'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'server-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const workspace = path.join(dir, 'w'); fs.mkdirSync(workspace);
@@ -293,4 +293,17 @@ test('mixed matching journals still fail closed without clearing ownership', asy
   assert.equal((await req(srv, '/api/runs/release', { runId })).status, 500);
   assert.ok(leases.readRunLease(f.hive));
   assert.equal(fs.readFileSync(recorder.eventsFile, 'utf8'), before);
+});
+
+test('fix3 item1: server automatic undo recovery preserves the real last run byte for byte', async (t) => {
+  const f = fixture(t), recorder = new EventRecorder({ hiveDir: f.hive, runId: 'real-last' }); recorder.start();
+  recorder.emit('run_started', { request: 'Real request', workspace: f.workspace, roles: [] });
+  recorder.emit('run_finished', { status: 'success', summary: 'Done' });
+  const saved = Object.fromEntries(['events.jsonl', 'state.json'].map((name) => [name, fs.readFileSync(path.join(f.hive, name))]));
+  const lease = leases.acquireRunLease(f.hive, { runId: 'undo-crashed', mode: 'undo' }); deadHeartbeat(f, lease.runId);
+  const srv = await server(t, f);
+  await until(() => req(srv, '/api/control').then((r) => r.value), (s) => !s.orphan);
+  for (const [name, bytes] of Object.entries(saved)) assert.deepEqual(fs.readFileSync(path.join(f.hive, name)), bytes, name);
+  assert.equal(fs.existsSync(path.join(f.hive, 'runs')), false);
+  assert.equal(leases.readRunLease(f.hive), null); assert.equal(leases.readRunHeartbeat(f.hive), null);
 });

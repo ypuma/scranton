@@ -14,10 +14,34 @@ Open-Source-Multi-Agenten-Harness rund um **[pi](https://www.npmjs.com/package/@
 
 Voraussetzungen für den Quellcode: Node.js >= 22.19, npm und Git. Standard ist **Trusted-Host ohne OS-Isolation**. Nur für ausdrücklich gewählte Docker-Läufe werden eine **Linux-Docker-Engine und ein lokal gebautes Sandbox-Image** benötigt. Scranton installiert oder startet keine Engine und baut/lädt Images nicht automatisch. Die Desktop-App liefert Node und Pi mit, aber **nicht Docker oder Git**.
 
+Alle folgenden Befehle im geklonten Scranton-Ordner ausführen; `node bin/scranton.js` funktioniert ohne globalen CLI-Eintrag. Optional macht `npm.cmd link` den in `package.json` deklarierten Befehl `scranton` verfügbar, sofern der globale npm-Binordner im PATH liegt.
+
 ```powershell
 npm.cmd ci
 node bin/scranton.js help
-node bin/scranton.js doctor
+
+# 1. Bei einem Anbieter anmelden (hier: ChatGPT-Abo), Status prüfen
+node bin/scranton.js login chatgpt
+node bin/scranton.js accounts
+
+# 2. Modelle bewusst je Agent wählen (Beispiel für die drei Standardrollen)
+node bin/scranton.js agents --hive .scranton-hive
+node bin/scranton.js agent set-model michael --provider openai --model gpt-6.1-sol --hive .scranton-hive
+node bin/scranton.js agent set-model dwight --provider openai --model gpt-6.1-sol --hive .scranton-hive
+node bin/scranton.js agent set-model angela --provider openai --model gpt-6.1-sol --hive .scranton-hive
+
+# 3. C:\Projekte\MeineApp durch einen eigenen Projektordner ersetzen
+node bin/scranton.js doctor --workspace "C:\Projekte\MeineApp" --hive .scranton-hive
+node bin/scranton.js run "Ergänze eine kleine Funktion mit Tests" --workspace "C:\Projekte\MeineApp" --hive .scranton-hive --trusted-host
+```
+
+Der echte Lauf nutzt Modellkontingent bzw. kostet Geld. Das Beispiel wählt `openai/gpt-6.1-sol` aus dem Pi-1.5.2-Katalog; andere Anbieter/Modelle lassen sich mit denselben Befehlen oder in **Agents** wählen. Für zusätzliche Gates auch Oscar/Hank konfigurieren. Ohne explizite Wahl teilen alle nicht konfigurierten Agenten **ein Pi-Standardmodell**; `doctor` kann dessen Provider/Modell mit Pis öffentlicher API nicht offline bestimmen und prüft dessen Zugang nicht. Warnungen ergeben Exit 0 mit Hinweis, Fehler Exit 1. Agent-Defaults bleiben im angegebenen Hive gespeichert; deshalb verwenden Modellwahl, Prüfung und Lauf denselben `--hive`.
+
+Im Standard-Worktree-Modus arbeiten Agenten in privaten Kopien. Nach bestandenen Gates schreibt Scranton fertige Meilensteine **in den gewählten Projektordner zurück** – nicht erst am Laufende. Vorhandene uncommittete Änderungen bilden die Ausgangsbasis und können dabei weiterbearbeitet werden; Git-Historie, Index und Branch des Benutzer-Repositories werden nicht verändert. Spätere überlappende Nutzeränderungen führen zum Integrationskonflikt. Vorher sichern; private Kopien und begrenzte Restore Points sind kein vollständiges Backup. Bei Fehlern zuerst Terminaldiagnose, `.scranton-hive/state.json`, `.scranton-hive/events.jsonl` und die Instanz-Outboxen unter `.scranton-hive/<instanz>/outbox.md` ansehen; frühere Läufe liegen unter `.scranton-hive/runs/`. Details: [Integration](#parallelität-prüfung-und-integration).
+
+Ohne Modellaufruf ausprobieren:
+
+```powershell
 node bin/scranton.js demo
 ```
 
@@ -47,21 +71,21 @@ node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --
 ## Anmelden
 
 ```powershell
-scranton login claude
-scranton login chatgpt
-scranton login antigravity
-scranton login gemini
-scranton login openrouter --api-key
-scranton accounts
-scranton logout claude
-# Alternativ: scranton logout chatgpt
+node bin/scranton.js login claude
+node bin/scranton.js login chatgpt
+node bin/scranton.js login antigravity
+node bin/scranton.js login gemini
+node bin/scranton.js login openrouter --api-key
+node bin/scranton.js accounts
+node bin/scranton.js logout claude
+# Alternativ: node bin/scranton.js logout chatgpt
 ```
 
-**Google Antigravity** bietet einen Google-Konto-Login über `scranton login antigravity` (Provider `google-antigravity`). Das ist eine **inoffizielle Drittclient-Anbindung** über Scrantons native Pi-1.5.2-Providererweiterung, kein eingebauter Google-OAuth-Provider von Pi. Bei manueller Anmeldung die **vollständige Redirect-URL einschließlich State** einfügen, keinen isolierten Code. Scranton ermittelt das zugewiesene Projekt über Googles Dienst; ohne zugewiesenes Projekt muss die Kontoeinrichtung in Antigravity abgeschlossen werden. Der begrenzte Gemini-Katalog garantiert weder Modellverfügbarkeit noch bestimmte Berechtigungen oder kostenlose Quotas. Team-Docker-Läufe nutzen dafür einen authentifizierten Inferenz-Broker auf dem Host: Google-Access- und Refreshcredentials bleiben auf dem Host, der Container erhält nur eine temporäre, auf Modellaufrufe beschränkte Broker-Berechtigung. Details und Quota-Risiko: [ISOLATION.md](docs/ISOLATION.md).
+**Google Antigravity** bietet einen Google-Konto-Login über `node bin/scranton.js login antigravity` (Provider `google-antigravity`). Das ist eine **inoffizielle Drittclient-Anbindung** über Scrantons native Pi-1.5.2-Providererweiterung, kein eingebauter Google-OAuth-Provider von Pi. Bei manueller Anmeldung die **vollständige Redirect-URL einschließlich State** einfügen, keinen isolierten Code. Scranton ermittelt das zugewiesene Projekt über Googles Dienst; ohne zugewiesenes Projekt muss die Kontoeinrichtung in Antigravity abgeschlossen werden. Der begrenzte Gemini-Katalog garantiert weder Modellverfügbarkeit noch bestimmte Berechtigungen oder kostenlose Quotas. Team-Docker-Läufe nutzen dafür einen authentifizierten Inferenz-Broker auf dem Host: Google-Access- und Refreshcredentials bleiben auf dem Host, der Container erhält nur eine temporäre, auf Modellaufrufe beschränkte Broker-Berechtigung. Details und Quota-Risiko: [ISOLATION.md](docs/ISOLATION.md).
 
-**Gemini** bleibt unabhängig davon als API-Key-Pfad aus [Google AI Studio](https://aistudio.google.com/apikey) erhalten. `scranton login gemini` (Provider `google`) und `scranton login <provider> --api-key` lesen den Schlüssel über eine verdeckte Eingabe oder stdin, **niemals als Kommandozeilenargument**. Nur literale Keys ohne eingebetteten Leerraum oder Steuerzeichen sind erlaubt; Präfixe `!` und `$` werden abgewiesen. Bei Claude/ChatGPT ersetzt ein gespeicherter API-Key den bisherigen Abo-Zugang dieses Providers.
+**Gemini** bleibt unabhängig davon als API-Key-Pfad aus [Google AI Studio](https://aistudio.google.com/apikey) erhalten. `node bin/scranton.js login gemini` (Provider `google`) und `node bin/scranton.js login <provider> --api-key` lesen den Schlüssel über eine verdeckte Eingabe oder stdin, **niemals als Kommandozeilenargument**. Nur literale Keys ohne eingebetteten Leerraum oder Steuerzeichen sind erlaubt; Präfixe `!` und `$` werden abgewiesen. Bei Claude/ChatGPT ersetzt ein gespeicherter API-Key den bisherigen Abo-Zugang dieses Providers.
 
-Im Quellcheckout statt `scranton` jeweils `node bin/scranton.js` verwenden. `login` öffnet den Systembrowser und zeigt die Anmeldeadresse auch im Terminal. Anmeldung dort abschließen; falls angefordert, den Autorisierungscode oder die vollständige Weiterleitungsadresse im Terminal einfügen. Pro Server/CLI-Prozess läuft höchstens eine Anmeldung; nach zehn Minuten wird sie abgebrochen. `accounts` zeigt den Status ohne Token-Refresh, `logout` entfernt nur den gespeicherten Zugang des gewählten Anbieters.
+`login` öffnet den Systembrowser und zeigt die Anmeldeadresse auch im Terminal. Anmeldung dort abschließen; falls angefordert, den Autorisierungscode oder die vollständige Weiterleitungsadresse im Terminal einfügen. Pro Server/CLI-Prozess läuft höchstens eine Anmeldung; nach zehn Minuten wird sie abgebrochen. `accounts` zeigt den Status ohne Token-Refresh, `logout` entfernt nur den gespeicherten Zugang des gewählten Anbieters.
 
 Im Web-Dashboard mit `--control` und in der Desktop-App öffnet **Accounts** die Konto-Seitenleiste: **Sign in**, bei Bedarf Code einfügen, **Cancel** oder **Sign out**; außerdem **Add API key**, **Replace key** und **Remove key** sowie ein Formular für eigene Provider. **Google Antigravity** hat eine eigene Zeile ausschließlich mit **Sign in / Sign out**; **Gemini** bleibt die separate API-Key-Zeile. Beide Zugänge werden getrennt gespeichert; Anmeldung oder Abmeldung bei Antigravity entfernt keinen Gemini-Key. In **New run** lässt sich für Michael, Dwight und Angela jeweils ein Modell aus dem Pi-Katalog der angemeldeten Konten bzw. konfigurierten API-Keys wählen. Die Auswahl bleibt lokal im Browser gespeichert; **pi default** übernimmt die Agentenkonfiguration. Alternativ `agents.<rolle>.provider/model` in `scranton.config.json` oder `SCRANTON_<ROLE>_PROVIDER=<Provider-ID>` zusammen mit `SCRANTON_<ROLE>_MODEL=<Modell-ID>` setzen (`ROLE`: `MICHAEL`, `DWIGHT`, `ANGELA`). Die UI-Auswahl gilt nur für den gestarteten Lauf und schreibt keine Konfigurationsdatei.
 
@@ -76,11 +100,11 @@ Zugangsdaten liegen in Pis eigener `%USERPROFILE%\.pi\agent\auth.json`, gemeinsa
 Beispiel für **abliteration.ai** (Key ebenfalls nur über verdeckte Eingabe oder stdin):
 
 ```powershell
-scranton provider add abliteration --base-url https://api.abliteration.ai/v1 --api openai-completions --discover --label abliteration.ai
-scranton provider remove abliteration
+node bin/scranton.js provider add abliteration --base-url https://api.abliteration.ai/v1 --api openai-completions --discover --label abliteration.ai
+node bin/scranton.js provider remove abliteration
 ```
 
-`--discover` fragt hier `https://api.abliteration.ai/v1/models` ab; alternativ Modell-IDs mit `--models a,b` deklarieren. Unterstützte API-Typen: `openai-completions`, `openai-responses`, `anthropic-messages`. Die Basis-URL verlangt HTTPS (HTTP nur auf Loopback), ohne URL-Zugangsdaten, Query oder Fragment. Discovery folgt nur Weiterleitungen desselben Ursprungs und speichert allein noch keinen Provider. Im **Accounts**-Formular Basis-URL, API-Typ und Key eingeben, Modelle ermitteln/auswählen oder IDs manuell eintragen und den Provider speichern; für abliteration.ai gibt es eine Vorlage. Danach stehen seine Modelle unter **New run** zur Wahl. **Remove provider** bzw. `scranton provider remove <id>` entfernt Definition und gespeicherten Key.
+`--discover` fragt hier `https://api.abliteration.ai/v1/models` ab; alternativ Modell-IDs mit `--models a,b` deklarieren. Unterstützte API-Typen: `openai-completions`, `openai-responses`, `anthropic-messages`. Die Basis-URL verlangt HTTPS (HTTP nur auf Loopback), ohne URL-Zugangsdaten, Query oder Fragment. Discovery folgt nur Weiterleitungen desselben Ursprungs und speichert allein noch keinen Provider. Im **Accounts**-Formular Basis-URL, API-Typ und Key eingeben, Modelle ermitteln/auswählen oder IDs manuell eintragen und den Provider speichern; für abliteration.ai gibt es eine Vorlage. Danach stehen seine Modelle unter **New run** zur Wahl. **Remove provider** bzw. `node bin/scranton.js provider remove <id>` entfernt Definition und gespeicherten Key.
 
 Scranton ergänzt die echte `%USERPROFILE%\.pi\agent\models.json` (bzw. das Profil aus `PI_CODING_AGENT_DIR`) nur um selbst angelegte Provider und entfernt nur unverändert verwaltete Einträge. Vor dem ersten Überschreiben einer vorhandenen Datei entsteht einmalig `models.json.scranton-bak`; `scranton-providers.json` registriert die verwalteten Definitionen. **Keys stehen niemals in diesen Definitionen**, sondern in Pis `auth.json`. Bestehende fremde Provider werden nicht überschrieben; ungültiges JSON/JSON mit Kommentaren und extern geänderte verwaltete Definitionen werden nicht still repariert oder entfernt.
 
@@ -104,7 +128,7 @@ node bin/scranton.js projects remove PROJEKT-ID --data .scranton-data
 
 IDs aus den Listen übernehmen. Ohne `--chat` legt `run` einen neuen Thread an; mit `--chat` folgt ein weiterer Run im vorhandenen Thread. Im Registry-Modus bestimmt das Projekt den Workspace und der Chat den Hive; `run` akzeptiert dort keine zusätzlichen `--workspace`/`--hive`. Für einen fehlenden Projektordner `projects add ... --create` verwenden; ohne `--workspace` entsteht er unter `Documents\Scranton\projects\<id>`. Derselbe reale Ordner kann nicht doppelt registriert werden. Entfernen verändert niemals Workspace-Dateien; `--delete-history` löscht zusätzlich die zugehörigen Scranton-Daten unter dem Datenverzeichnis.
 
-`--data DIR` (alternativ `SCRANTON_DATA`, Konfiguration `dataDir`) aktiviert die Registry. `run --project` verlangt aus Sicherheitsgründen `--data` oder `SCRANTON_DATA`; `.env` und `scranton.config.json` im Projektordner werden für Registry-Runs nicht ausgewertet. `visualize --data` aktiviert auch die Steuerung und ist nur lokal zu verwenden. `projects`/`chats` verwenden ohne Datenpfad standardmäßig das Desktop-Datenverzeichnis. Der bisherige **Single-Modus mit `--hive`/`--workspace` ohne Registry bleibt erhalten**; die Oberfläche zeigt ein implizites Projekt und einen Chat `default`, ohne Projekt-/Chat-Verwaltung. Das Terminal-Dashboard bleibt an einen Hive gebunden. API und Speicherlayout: [CONTROL.md](docs/CONTROL.md).
+`--data DIR` (alternativ `SCRANTON_DATA`, für andere Befehle auch Konfiguration `dataDir`) aktiviert die Registry. `run --project`/`--chat` verlangt ausdrücklich `--data` oder ein geerbtes `SCRANTON_DATA`; ohne diese Angabe wird kein Standardregister gelesen, sondern ein vollständiger Befehl mit dem Desktop-Datenverzeichnis vorgeschlagen. `.env` und `scranton.config.json` im Projektordner können keine Registry für einen Run auswählen und werden für explizite Registry-Runs nicht ausgewertet. Ein gestarteter Registry-Run nennt Projekt-/Chat-ID samt Fortsetzungsbefehl. `visualize --data` aktiviert auch die Steuerung und ist nur lokal zu verwenden. `projects`/`chats` verwenden ohne Datenpfad standardmäßig das Desktop-Datenverzeichnis; `projects list` nennt das gelesene Verzeichnis als `dataDir` in der JSON-Ausgabe. Der bisherige **Single-Modus mit `--hive`/`--workspace` ohne Registry bleibt erhalten**; die Oberfläche zeigt ein implizites Projekt und einen Chat `default`, ohne Projekt-/Chat-Verwaltung. Das Terminal-Dashboard bleibt an einen Hive gebunden. API und Speicherlayout: [CONTROL.md](docs/CONTROL.md).
 
 ### Kontextsystem
 
@@ -132,12 +156,12 @@ Eingabe-Zeichengrenzen zählen JS-Stringlänge; beim Kürzen bleiben Codepoints 
 Die **Context**-Zeile bei **Follow up** zeigt bei belegtem Kontext **`≈` Tokens und den Prozentanteil am Modellfenster** und öffnet die Seitenleiste mit Budget, Verbrauchsmeter, Modell-ID und Fenstergröße, aufklappbaren Schichten und bei Team dem Entwicklerbrief. Die Seitenleiste nennt Verbrauch in Tokens, Prozent des Budgets und Prozent des Fensters sowie eine etwaige Begrenzung. Prozentwerte lauten `0` bei leerem Verbrauch, `<0.1` unter 0,1 Prozent, sonst mit einer Nachkommastelle, solange der auf eine Nachkommastelle gerundete Wert unter 10 liegt, darüber als gerundete ganze Zahl (9,96 Prozent erscheint als `10`, nicht `10.0`). Dort lassen sich Prozent-/Tokenmodus, Wert und `Only for <model id>` setzen; **Reset to default** entfernt den wirksamen Modell-Override, sonst die Projektregel. Vor dem Schließen fragt die Seitenleiste nach, ob ungespeicherte Notiz- oder Budgetänderungen verworfen werden sollen. Im Pipeline-Chat bleibt die Budgetvorschau innerhalb von **4000–18750 Tokens**; eine geänderte Plannermodellwahl lädt das Chatdokument neu. Team-Schichten zeigen den eingespeisten Text, Pipeline-Schichten eine lesbare Projektion, nicht den wörtlichen Prompt. **Share context between the chats of this project** ist pro Projekt standardmäßig an; aus bedeutet weder Empfang noch Weitergabe der Schicht „andere Chats“. Projektnotizen lassen sich dort bearbeiten und speichern; leerer Text löscht ihren Inhalt. **Start fresh from here** setzt einen Chatmarker: Turns, die zu diesem Zeitpunkt oder früher begannen, werden aus allen Paketen ausgeblendet, auch aus der Sicht anderer Chats. Die Historie bleibt erhalten, **Restore earlier turns** entfernt den Marker. Projektnotizen und Dreaming bleiben vom Reset unberührt; Kontextänderungen gelten für nächste Turns, nicht rückwirkend für laufende Prompts.
 
 ```text
-scranton context show    --data DIR --project ID [--chat ID] [--model PROVIDER/MODEL] [--json]
-scranton context budget  --data DIR --project ID (--percent N | --tokens N | --default) [--model PROVIDER/MODEL]
-scranton context notes   --data DIR --project ID (--file FILE | --clear)
-scranton context share   --data DIR --project ID on|off
-scranton context reset   --data DIR --project ID --chat ID
-scranton context restore --data DIR --project ID --chat ID
+node bin/scranton.js context show    --data DIR --project ID [--chat ID] [--model PROVIDER/MODEL] [--json]
+node bin/scranton.js context budget  --data DIR --project ID (--percent N | --tokens N | --default) [--model PROVIDER/MODEL]
+node bin/scranton.js context notes   --data DIR --project ID (--file FILE | --clear)
+node bin/scranton.js context share   --data DIR --project ID on|off
+node bin/scranton.js context reset   --data DIR --project ID --chat ID
+node bin/scranton.js context restore --data DIR --project ID --chat ID
 ```
 
 `context budget` setzt ohne `--model` die Projektregel, mit `--model` deren Override; `--default` entfernt die jeweilige Regel. `context show --chat` nennt `Budget: ≈<used>/<tokens> tokens` mit Prozent des Budgets, Prozent des Modellfensters, Fenstergröße und Modell-ID; ein unbekanntes Fenster wird mit `[window assumed]`, eine Begrenzung mit `[capped: ...]` markiert. Der Entwicklerbrief erhält eine eigene Budgetzeile, Notizen einen Zeichenstand gegen 16000. `--model` wählt beim Anzeigen eines Pipeline-Chats das Plannermodell; Team verwendet die Agentenkonfiguration. `--json` liefert die v2-Dokumente, Notizdateien dürfen höchstens 65536 Bytes haben.
@@ -205,6 +229,21 @@ Scranton erstellt ein **privates Schatten-Repository** unter `hive/isolation/`, 
 
 Nach `[TASK_COMPLETE]` erhält Angela einen eigenen Worktree aus genau diesem Entwickler-Snapshot. Nur der geprüfte Entwicklerstand darf ins Ziel zurückfließen. Integration ist serialisiert und prüft Änderungen gegen die Ausgangsbasis; überlappende Nutzeränderungen werden als Konflikt gemeldet, nicht überschrieben. Diagnose-Worktrees bleiben erhalten. Vor echten Aufträgen trotzdem sichern; ein Worktree ist kein Backup.
 
+### Restore Points und Undo
+
+Für Team-Worktree-Integration (Trusted Host oder Docker) speichert Scranton die ursprünglichen Bytes der betroffenen Dateien vor dem Zurückschreiben unter `<hive>/restore-points/<runId>/`. Auch uncommittete Ausgangsdateien werden so erhalten. Der Start nennt in zwei Zeilen nur, ob im Ordner oder einem Elternordner `.git` gefunden wurde, sowie die Restore-Point-Grenzen. Er führt dafür kein Git aus, liest keine Git-Konfiguration und zählt keine uncommitteten/ungetrackten Dateien. Die Abschlussübersicht nennt bei tatsächlichen Änderungen den exakten Undo-Befehl.
+
+```powershell
+node bin/scranton.js undo --hive .scranton-hive --list
+node bin/scranton.js undo --hive .scranton-hive
+node bin/scranton.js undo --hive .scranton-hive --run RUN-ID
+node bin/scranton.js undo --data .scranton-data --project PROJEKT-ID --chat CHAT-ID
+```
+
+Undo arbeitet innerhalb eines Hives rückwärts: Ohne `--run` gilt der neueste noch nicht vollständig rückgängig gemachte Punkt. Ein älterer Punkt wird auch mit `--force` abgewiesen, solange neuere Punkte noch offen sind; die Meldung nennt deren Run-IDs und den Ausweg: spätere Änderungen mit `--force` überschreiben oder beide Stände belassen. Behaltene `changed`-Dateien und vorübergehend blockierte `blocked`-Dateien halten einen Punkt offen; `--list` zeigt die verbleibenden Dateien (`remaining`). Sobald jede Datei rückgängig gemacht oder `unrestorable` ist, gilt der Punkt als erledigt (`undoneAt` gesetzt, `remaining:0`); nicht restaurierbare Dateien werden auch bei erneutem explizitem Undo weiter gemeldet. Nicht entfernbare angelegte Verzeichnisse liefern Warnungen, halten den Punkt aber nicht offen. Unlesbare Einträge erscheinen als `unreadable`, werden nie ausgewählt und beim Pruning ausgelassen. Normales Undo bleibt daneben möglich; `--force` wird jedoch abgewiesen, wenn der Verzeichniszeitstempel eines unlesbaren Eintrags neuer als der gewählte Punkt ist. Die Meldung nennt diesen Eintrag. Ein vollständig zurückgerollter erster Integrationsversuch hinterlässt keinen Punkt. Undo stellt betroffene Dateien auf den Vorlaufstand zurück und entfernt vom Run angelegte Dateien; gemeldet werden nur tatsächlich geänderte Pfade. Konflikte enthalten Pfad, Grund und Code: `changed` bedeutet, dass der aktuelle Inhalt nicht mehr dem vom Run geschriebenen Stand entspricht, egal ob durch Menschen oder einen anderen Chat; nur dann kann `--force` helfen. `unrestorable` bedeutet fehlendes/defektes Backup oder Größenlimit, was Force nicht behebt. `blocked` bedeutet einen behebbaren Zugriffs-/Schreibfehler oder unsicheren Pfadzustand; die CLI meldet ihn als `Blocked` mit Fehlercode, falls vorhanden, ohne Force-Empfehlung: Ursache beheben und Undo erneut ausführen; `--force` hilft hier nicht. Ein aktiver Run in diesem Chat, notwendige Recovery oder ein aktiver/ungeklärter Run eines anderen Projektchats blockiert Undo auch mit Force. Undo hält während der ganzen Operation dieselbe Hive-Lease wie ein Run und wird bei einem konkurrierenden Undo oder Run ausdrücklich als Undo benannt. Nach einem Undo-Absturz gibt Recovery unter denselben Besitznachweisregeln nur Lease und Heartbeat frei: Laufhistorie, Events und Restore-Point-Buchführung bleiben unverändert; ein erneutes Undo setzt die Dateiarbeit fort. Andere Chats werden geprüft, nicht projektweit gesperrt: Ein Geschwister-Run kann während Undo neu starten; die Integration ist weiterhin über den Workspace-Lock serialisiert. Exit 0: erledigt/Liste, 1: Konflikte oder Betriebsfehler, 2: Aufruffehler.
+
+**Grenzen:** Die neuesten **10** Punkte bleiben erhalten; Vorlaufdateien über **16 MiB** werden nicht gesichert und sind auch mit Force nicht restaurierbar. Gesichert sind nur tatsächlich integrierte Dateien, nicht der ganze Ordner. **Nicht abgedeckt:** Shared-/direkte Workspace-Ausführung, der einzelne `agent`-Befehl und Python-Pipeline-Chats. Shared schreibt direkt in den Ordner; ein privater Einzelagent behält seine Ergebnisse dagegen im am Ende genannten Worktree, ohne Integration. Git-Index und Historie werden nicht zurückgesetzt. Restore Points enthalten möglicherweise sensible ursprüngliche Dateiinhalte und gehören nicht ins öffentliche Repository.
+
 Bei Integrationskonflikten ist **Retry kein Rebase**: Der Entwickler-Worktree behält seine unveränderliche Ausgangsbasis. Ohne Änderung der Konfliktursache kann derselbe Konflikt erneut auftreten. Du kannst abbrechen, den Konflikt bewusst außerhalb des Laufs auflösen und einen frischen Lauf starten oder den Meilenstein überspringen; Nutzerarbeit und Diagnoseartefakte nicht automatisch löschen.
 
 ## Optionen
@@ -218,9 +257,12 @@ Bei Integrationskonflikten ist **Retry kein Rebase**: Der Entwickler-Worktree be
 | `--sandbox-network bridge\|none` | `bridge` erlaubt Netzwerkzugang; `none` sperrt Container-Netz |
 | `--trusted-host` | Explizit auf dem Host ausführen, Worktrees bleiben getrennt |
 | `--no-plan` | Eine Aufgabe ohne Modellplanung |
+| `--request-file FILE` | `run`: UTF-8 (BOM optional) oder UTF-16 mit BOM; erstes Nicht-Leerzeichen `{` verlangt das strikte Envelope `{"v":1,"request":"..."}`, sonst wörtlicher Text; höchstens 32768 Zeichen / 262144 Bytes |
 | `--max-cycles N` | Fehlgeschlagene QA-Zyklen bis zum Circuit Breaker (Standard 3) |
 | `--on-breaker ask\|abort\|skip\|hive` | Menschliche Entscheidung im Terminal, automatisch oder dateibasiert |
 | `--timeout-min N` | Zeitlimit pro Agent (Standard 20 Minuten) |
+
+Eine Anfrage kann statt als Argument mit `node bin/scranton.js run --request-file auftrag.txt --workspace "C:\Projekte\MeineApp" --hive .scranton-hive` aus UTF-8-Text (optionale BOM wird entfernt) oder UTF-16 mit LE-/BE-BOM gelesen werden; ungültige Kodierung wird abgewiesen. Ist das erste Nicht-Leerzeichen `{`, muss der Inhalt das strikte v1-Envelope sein (nur `v` und `request`); auch kaputtes JSON wird dann abgewiesen. Sonst bleibt der Inhalt wörtlicher Text, wobei genau ein abschließendes LF/CRLF/CR entfernt wird; Arrays und Skalare bleiben Text. Die Anfrage darf nicht leer oder nur Leerraum sein und höchstens 32768 JS-Zeichen enthalten. Fehlende Dateien, Verzeichnisse, Symlinks, Hardlinks, mehr als 262144 Bytes und ungültige Inhalte liefern Exit 2 mit `Invalid request file` plus kurzem Grund. Die CLI löscht die Datei nie; ein gleichzeitiges Positionsargument ist unzulässig.
 
 `agent <michael|dwight|oscar|hank|angela> "Aufgabe"` startet genau eine auditierte Instanz mit derselben Run-Lease und Isolation wie ein Lauf. Es startet keine zusätzliche QA-Pipeline und integriert private Änderungen im Standard-Worktree-Modus nicht ins Ziel. Im expliziten Shared-Host-Modus arbeitet es dagegen direkt im Workspace. Die vollständige lokale CLI-Hilfe ist maßgeblich. Exit-Codes: 0 Erfolg, 1 teilweise/fehlgeschlagen/abgebrochen, 2 Aufruffehler, 130 Strg+C.
 
@@ -245,13 +287,24 @@ node bin/scranton.js visualize --control --workspace workspace
 
 Die Dashboards sind dunkel und strikt monochrom. Im Single-Modus ist der HTTP-Server ohne `--control` schreibgeschützt; `--data` aktiviert dagegen Registry und Steuerung. Steuerung benötigt eine echte Loopback-Verbindung, lokalen Host-Header, bei POST JSON und `X-Scranton-Client: 1`; keine CORS-Freigabe. Nicht ungeschützt ins Netz stellen. [EVENTS.md](docs/EVENTS.md) beschreibt Ereignisse, [CONTROL.md](docs/CONTROL.md) Run-/Chat-/HITL-Steuerung und Wiederherstellungsblockaden.
 
-Mit `--on-breaker hive` wartet Scranton auf atomar geschriebenes `hive/human/response.json`:
+Mit `--on-breaker hive` veröffentlicht Scranton während des Wartens `<hive>/human/request.json` mit `v`, `runId`, `requestSeq`, `milestoneId`, `title`, `reason`, `options`, `ts`. Daraus **runId und requestSeq unverändert übernehmen** und eine Entscheidung aus `options` wählen; kein Lesen von `events.jsonl` nötig. Beispiel für die vom Nutzer atomar (temporäre Datei, dann Umbenennen) geschriebene `<hive>/human/response.json`:
 
 ```json
 { "v": 1, "runId": "run-id", "requestSeq": 42, "decision": "feedback", "feedback": "Bitte das fehlende Kriterium testen.", "ts": "2026-11-08T12:00:00.000Z" }
 ```
 
-Run-ID und Sequenz müssen zur aktuell offenen Rückfrage passen. Feedback: 1–8000 Zeichen; andere Entscheidungen: `retry`, `skip`, `abort`. Eine dauerhafte Run-Lease verhindert einen zweiten Schreiber auf denselben Hive. Bei unklarer Bereinigung bleibt sie absichtlich gesperrt: nicht blind löschen oder gespeicherte PIDs beenden.
+`v:1`, passende Run-ID/Sequenz und ein ISO-Zeitstempel sind erforderlich; bei `feedback` zusätzlich nichtleerer Text (höchstens **16000 Zeichen**). Andere Entscheidungen: `retry`, `skip`, `abort`, sofern in `options`. Scranton archiviert die Antwort und entfernt die Anfrage beim Ende des Wartens. Nach hartem Absturz kann die Anfrage stehenbleiben; erfolgreiche Recovery entfernt sie.
+
+Eine dauerhafte Run-Lease verhindert einen zweiten Schreiber auf denselben Hive. Nach einer Unterbrechung wird ein Besitzer beim nächsten CLI-Run nur automatisch als abgebrochen abgeschlossen und archiviert, wenn sein Prozess hier nachweislich fehlt, der in der Lease gespeicherte Host fehlt (Legacy) oder diesem Host entspricht, sein passender Heartbeat älter als 30 Sekunden ist und die Bereinigung verifiziert ist. Sonst nennt die Meldung Prozessbefund, Heartbeat-Alter und Host: warten und erneut versuchen oder nach eigener Prüfung aller alten Prozesse/Container `scranton recover ... --confirm-stopped` verwenden. Derselbe strengere Schutz gilt für CLI-Recovery ohne Bestätigung; die bestehende automatische Server-Recovery bleibt unverändert. Dies setzt keine alten Agentenprozesse fort. Zur Prüfung und manuellen Recovery:
+
+```powershell
+node bin/scranton.js recover --hive .scranton-hive
+node bin/scranton.js recover --data .scranton-data --project PROJEKT-ID --chat CHAT-ID
+# Nur nach eigener Prüfung, dass alle früheren Prozesse/Container beendet sind:
+node bin/scranton.js recover --hive .scranton-hive --confirm-stopped
+```
+
+Ein lebender Besitzer wird nie freigegeben. Bei unbekanntem Besitzer oder ungeklärter Containerbereinigung bleibt die Sperre ohne `--confirm-stopped` erhalten; die Bestätigung kann Bereinigungswarnungen liefern. Nicht blind Lease-Dateien löschen oder gespeicherte PIDs beenden.
 
 ## Modelle und Konfiguration
 
@@ -296,8 +349,8 @@ Struktur: `src/core/` Orchestrierung/Isolation/RPC, `src/server/` Control/SSE, `
 Michael plant, Dwight entwickelt, Oscar prüft den Code, Hank untersucht Sicherheitsrisiken und Angela testet die Akzeptanzkriterien. Alle Prüfer arbeiten ohne Dateiänderungen; ihre privaten Checkouts werden niemals integriert. Der Engine-Standard bleibt aus Kompatibilitätsgründen nur Angela. Für Review und Sicherheit vor QA:
 
 ```powershell
-scranton run "Prüfe und implementiere die Änderung" --gates "oscar+hank,angela"
-scranton demo --scenario changes_once --gates "oscar,hank,angela" --delay 0
+node bin/scranton.js run "Prüfe und implementiere die Änderung" --gates "oscar+hank,angela"
+node bin/scranton.js demo --scenario changes_once --gates "oscar,hank,angela" --delay 0
 ```
 
 Konfiguration: `"workflow": {"gates": [["oscar", "hank"], ["angela"]]}`. Komma trennt sequenzielle Stufen, Plus verbindet parallele Prüfer. Jede Gate-Rolle darf nur einmal vorkommen; leere Stufen sind ungültig. Parallelresultate werden stets in Listenreihenfolge bewertet. Eine fehlgeschlagene Stufe liefert Dwight einen gemeinsamen Bericht und zählt als ein Fehlzyklus. BLOCKED/Infrastrukturfehler pausieren nach Abschluss aller Gates der Stufe; Retry wiederholt nur diese Stufe. Integration erfolgt erst nach allen bestandenen Gates. Docker braucht explizite Modelle für alle aktiven Rollen; Oscar/Hank unterstützen ebenfalls `SCRANTON_OSCAR_PROVIDER/MODEL/THINKING` bzw. `SCRANTON_HANK_PROVIDER/MODEL/THINKING`.
@@ -321,7 +374,7 @@ node bin/scranton.js run "Änderungen prüfen" --gates "oscar+seclint,angela" --
 
 ### Gesprächsmodus (Team)
 
-Mit `scranton run "Wie ist diese Codebasis aufgebaut?" --conversation` zeigt die CLI die Nachrichten jeder Rolle und am Ende einen eigenen Antwortblock. Fragen kann Michael direkt beantworten, ohne Plan oder Meilensteine. Nach einer Aufgabe schreibt er einen Abschlussbericht; bei Fehler oder Zeitüberschreitung erscheint stattdessen eine deterministische Zusammenfassung. `scranton demo --scenario question --conversation` demonstriert den Fragepfad ohne Modellaufruf.
+Mit `node bin/scranton.js run "Wie ist diese Codebasis aufgebaut?" --conversation` zeigt die CLI die Nachrichten jeder Rolle und am Ende einen eigenen Antwortblock. Fragen kann Michael direkt beantworten, ohne Plan oder Meilensteine. Nach einer Aufgabe schreibt er einen Abschlussbericht; bei Fehler oder Zeitüberschreitung erscheint stattdessen eine deterministische Zusammenfassung. `node bin/scranton.js demo --scenario question --conversation` demonstriert den Fragepfad ohne Modellaufruf.
 
 Engine und CLI lassen den Modus standardmäßig aus (`--no-conversation`); alternativ `execution.conversation:true` in der Konfiguration oder `SCRANTON_CONVERSATION=1`. Die Weboberfläche fordert ihn mit `conversation:true` an. Im Registry-Modus fließen frühere Antworten als Teil des oben beschriebenen Kontextsystems in Folgefragen ein, nicht als vollständiges Transkript. Antworten werden als untrusted Text behandelt; der Modus verleiht Agenten keine zusätzlichen Werkzeuge oder Rechte.
 Michael erhält nur bei aktivem Gesprächsmodus einen zusätzlichen Systemprompt-Abschnitt für Plan, direkte Antwort oder Bericht; gespeicherte Prompts bleiben unverändert. Fehlgeschlagene Berichtstexte bleiben als Agentennachricht sichtbar. CLI und Terminal-Dashboard entfernen Steuer-/Bidi-Zeichen aus Nachrichtentexten; große, im Terminal unterdrückte Agentennachrichten verdrängen keine sichtbaren Ereignisse.

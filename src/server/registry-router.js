@@ -5,6 +5,7 @@ import { readThoughts } from '../core/live-activity.js';
 import { acquireRunLease, readRunLease } from '../core/run-lease.js';
 import { orphanSnapshot } from '../core/run-recovery.js';
 import { listRuns } from '../core/thread.js';
+import { listRestorePoints, undoRun } from '../core/restore-points.js';
 import { readRunDiff } from '../core/worktree.js';
 import { isLoopbackAddress } from '../core/network.js';
 import { createControl, readBody, json } from './control.js';
@@ -84,7 +85,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
           return registry.locked(() => {
             if (closing) throw fail(409, 'Server is closing');
             registry.getChat(project.id, chat.id);
-            if (readRunLease(hive)) throw fail(409, 'Chat is running or requires recovery');
+            if (readRunLease(hive)) throw fail(409, readRunLease(hive)?.mode === 'undo' ? 'An undo is running in this chat; wait for it to finish or recover it before starting a run.' : 'Chat is running or requires recovery');
             if (running() >= maxConcurrentRuns) throw fail(429, 'too_many_runs');
             return acquireRunLease(hive, info);
           });
@@ -182,6 +183,25 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     return chatContext.inspect(project.id, chat.id, { activeRunId, memory, recipients });
   }
   async function scoped(req, res, project, chat, suffix) {
+    if (suffix === '/restore-points' || suffix === '/undo') {
+      if (!registry) throw fail(404, 'Not found');
+      if (suffix === '/restore-points' && req.method === 'GET') return json(res, 200, { points: chat.engine === 'pipeline' ? [] : listRestorePoints(chat.hiveDir).map(({ workspace, ...point }) => point) });
+      if (suffix === '/undo' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (Object.keys(body).some((key) => !['runId', 'force'].includes(key)) || body.runId !== undefined && (typeof body.runId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.runId)) || body.force !== undefined && typeof body.force !== 'boolean') throw fail(400, 'Expected only optional runId (restore point ID) and force (boolean)');
+        if (snapshot(chat).run) throw fail(409, 'A run is active in this chat; stop it before undo.');
+        const siblings = registry.listChats(project.id).filter((c) => c.id !== chat.id);
+        if (siblings.some((c) => snapshot(c).run)) throw fail(409, 'A run is active in another chat of this project; stop or recover it before undo.');
+        if (chat.engine === 'pipeline') throw fail(404, 'No restore point available');
+        try { return json(res, 200, await undoRun({ hiveDir: chat.hiveDir, siblings: siblings.map((c) => c.hiveDir), ...body })); }
+        catch (err) {
+          if (err.message === 'No restore point available') throw fail(404, err.message);
+          if (err.status === 409 && err.message.startsWith('Newer runs must be undone first:')) throw fail(409, err.message.replace('undo it with --force or leave both.', 'force its undo or leave both.'));
+          throw err;
+        }
+      }
+      throw fail(404, 'Not found');
+    }
     if (suffix === '/context' || suffix.startsWith('/context/')) {
       if (!chatContext) throw fail(404, 'Not found');
       if (suffix === '/context' && req.method === 'GET') return json(res, 200, await inspectContext(project, chat, req));
@@ -314,7 +334,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       }
       if (pathname === '/api/projects' && req.method === 'GET') {
         const projects = registry ? registry.listProjects() : [defaultProject()];
-        json(res, 200, { mode: registry ? 'registry' : 'single', maxConcurrentRuns, running: registry ? running() : Number(Boolean(single.controller?.snapshot().run)), projects: projects.map((p) => ({ ...p, chats: (registry ? registry.listChats(p.id) : [defaultChat()]).map(chatSummary) })) }); return true;
+        json(res, 200, { mode: registry ? 'registry' : 'single', ...(registry ? { projectsRoot: registry.projectsRoot } : {}), maxConcurrentRuns, running: registry ? running() : Number(Boolean(single.controller?.snapshot().run)), projects: projects.map((p) => ({ ...p, chats: (registry ? registry.listChats(p.id) : [defaultChat()]).map(chatSummary) })) }); return true;
       }
       if (alias && pathname === '/api/control' && req.method === 'GET') {
         const chats = allChats(), snapshots = chats.map((c) => ({ projectId: c.projectId, chatId: c.id, ...snapshot(c) }));

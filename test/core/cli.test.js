@@ -99,7 +99,7 @@ test('agent: isolated single run writes an audited inbox and prints text + keywo
 test('agent: an infrastructure failure is reported on stderr with exit 1', async (t) => {
   const r = await cli(t, ['agent', 'angela', 'check it'], fakePiEnv({ FAKE_PI_FAIL: 'exit1' }));
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /Pi process exited before agent_settled/);
+  assert.match(r.stderr, /pi exited with code 1; pi stderr: fake-pi: No API key found/);
 });
 
 test('dashboard / visualize report a missing module instead of crashing', async (t) => {
@@ -138,14 +138,15 @@ test('doctor: fake pi with a configured model passes; a missing pi fails with ex
   const stdout = capture();
   const config = fakeConfig(dir);
   config.agents.dwight.model = 'fake/model';
-  assert.equal(await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: stdout.stream }), 0, stdout.out.text);
+  assert.equal(await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: stdout.stream, auth: { async listAccounts() { return []; } } }), 0, stdout.out.text);
   assert.match(stdout.out.text, /pi --version: fake-pi 0\.0\.0/);
   assert.match(stdout.out.text, /dwight: credentials ready for fake\/model/);
-  assert.match(stdout.out.text, /All good\./);
+  assert.match(stdout.out.text, /warnings found; the run can start\./);
+  assert.doesNotMatch(stdout.out.text, /All good\./);
 
   const bad = capture();
   const badConfig = fakeConfig(dir, { command: ['scranton-no-such-pi'] });
-  assert.equal(await runDoctor({ config: badConfig, env: { PATH: process.env.PATH }, stdout: bad.stream }), 1);
+  assert.equal(await runDoctor({ config: badConfig, env: { PATH: process.env.PATH }, stdout: bad.stream, auth: { async listAccounts() { return []; } } }), 1);
   assert.match(bad.out.text, /\[FAIL\] pi --version failed/);
 });
 
@@ -155,7 +156,7 @@ test('doctor: an unwritable workspace is a failure', async (t) => {
   fs.writeFileSync(blocker, 'x');
   const config = loadConfig({ cwd: dir, env: {}, hasBash: true, fileConfig: { workspace: path.join(blocker, 'sub'), hiveDir: path.join(dir, 'hive'), pi: { command: [process.execPath, FAKE_PI] } } });
   const out = capture();
-  assert.equal(await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: out.stream }), 1);
+  assert.equal(await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: out.stream, auth: { async listAccounts() { return []; } } }), 1);
   assert.match(out.out.text, /\[FAIL\] workspace not writable/);
 });
 

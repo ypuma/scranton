@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import { readRunLease } from './run-lease.js';
+import { prepareRestorePoint } from './restore-points.js';
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 
 const locks = new Map();
@@ -86,6 +87,17 @@ async function lockWorkspace(root) {
       try { fs.rmdirSync(file); } catch (err) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(err.code)) throw err; }
     };
   }
+}
+
+export async function withWorkspaceLock(root, operation) {
+  const previous = locks.get(root) ?? Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    const release = await lockWorkspace(root);
+    try { return await operation(); }
+    finally { release(); }
+  });
+  locks.set(root, task);
+  try { return await task; } finally { if (locks.get(root) === task) locks.delete(root); }
 }
 
 export function safePath(root, relative = '', { platform = process.platform, fs: hostFs = fs, path: hostPath = path } = {}) {
@@ -494,15 +506,9 @@ export class WorktreeManager {
     this.assertReady();
     const root = path.resolve(workspace);
     if (root !== this.workspace) throw new Error('Integration target must be the original workspace');
-    const previous = locks.get(root) ?? Promise.resolve();
-    const task = previous.catch(() => {}).then(async () => {
-      const release = await lockWorkspace(root);
-      try { return await this.integrate(milestoneId, root); }
-      finally { release(); }
-    });
-    locks.set(root, task);
+    const task = withWorkspaceLock(root, () => this.integrate(milestoneId, root));
     this.queue = task.catch(() => {});
-    try { return await task; } finally { if (locks.get(root) === task) locks.delete(root); }
+    return task;
   }
 
   async integrate(milestoneId, root) {
@@ -519,8 +525,10 @@ export class WorktreeManager {
     const merged = new Map(this.integrated);
     for (const name of changes) { const entry = snapshot.entries.get(name); if (entry) merged.set(name, entry); else merged.delete(name); }
     const ref = await this.commit(merged, this.integratedRef);
+    const restore = prepareRestorePoint({ hiveDir: this.hiveDir, runId: this.runId, workspace: root, changes, before, initial: this.initial, after: snapshot.entries });
     const applied = [];
     const createdDirs = [];
+    let refUpdated = false;
     const write = (name, entry) => {
       const file = safePath(root, name);
       if (!entry) { fs.unlinkSync(file); return; }
@@ -541,6 +549,8 @@ export class WorktreeManager {
         applied.push(name);
       }
       await this.git(['update-ref', 'refs/heads/integrated', ref]);
+      refUpdated = true;
+      restore.commit();
     } catch (err) {
       const failures = [];
       for (const name of applied.reverse()) {
@@ -551,12 +561,14 @@ export class WorktreeManager {
         } catch (rollback) { failures.push(rollback.message); }
       }
       for (const dir of createdDirs.reverse()) { try { fs.rmdirSync(dir); } catch {} }
+      if (refUpdated) { try { await this.git(['update-ref', 'refs/heads/integrated', this.integratedRef, ref]); } catch { failures.push('Private integration ref rollback failed'); } }
+      if (!failures.length) { try { restore.rollback(); } catch { failures.push('Restore point rollback could not be persisted'); } }
       if (failures.length) throw new AggregateError([err, ...failures.map((message) => new Error(message))], 'Integration failed; rollback incomplete, preserve artifacts for recovery');
       throw err;
     }
     this.integrated = merged;
     this.integratedRef = ref;
-    return { ref, files: changes };
+    return { ref, files: changes, ...(restore.notRestorable.length ? { notRestorable: restore.notRestorable } : {}) };
   }
 
   async close() { await this.gateQueue; await this.queue; this.closed = true; activeStorage.delete(this.storage); }

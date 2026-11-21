@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import { messageUsage } from './usage.js';
-import { startPiRpc } from './pi-rpc-session.js';
+import { startPiRpc, piErrorText, piErrorTail } from './pi-rpc-session.js';
 import path from 'node:path';
 import { ConfigError } from './config.js';
 import { JsonlSplitter, parseJsonLine } from './jsonl.js';
 import { KEYWORDS, extractKeyword } from './keywords.js';
 import { buildPiArgs, killTree, spawnPi } from './pi-command.js';
-import { clip, oneLine, tailLines, writeFileAtomicSync } from './util.js';
+import { clip, oneLine, writeFileAtomicSync } from './util.js';
 
 const STDERR_CAP = 16 * 1024;
 
@@ -106,7 +106,7 @@ function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milesto
   const done = new Promise((resolve) => {
     const rec = { sessionId: null, last: null, usage: { input: 0, output: 0, cost: 0 }, settledAborted: false, retryError: null };
     const splitter = new JsonlSplitter();
-    let stderr = '';
+    let stderr = '', stderrCut = false;
     let spawnError = null;
     let finished = false;
     let timer = null;
@@ -156,11 +156,11 @@ function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milesto
       clearTimeout(timer);
       clearTimeout(fallback);
       for (const line of splitter.end()) handle(line);
-      const stderrTail = tailLines(stderr, 8);
+      const stderrTail = piErrorTail(stderr, env, stderrCut);
       const text = assistantText(rec.last);
       let failure = null;
       const fail = (kind, message) => {
-        failure = { kind, message: stderrTail ? `${message}\npi stderr:\n${stderrTail}` : message };
+        failure = { kind, message: `${clip(piErrorText(message, env), 2048)}${stderrTail ? `; pi stderr: ${oneLine(stderrTail)}` : ''}` };
       };
       if (spawnError) fail('spawn', `could not start pi: ${spawnError.message}`);
       else if (killedBy === 'timeout') fail('timeout', `${agentId} timed out after ${Math.round(timeoutMs / 1000)}s and was killed`);
@@ -195,7 +195,7 @@ function startPiJson({ spec, agentId, agentConfig, pi, cwd, hive, runId, milesto
       for (const line of splitter.push(chunk)) handle(line);
     });
     child.stderr.on('data', (chunk) => {
-      stderr = (stderr + chunk).slice(-STDERR_CAP);
+      stderr += chunk; stderrCut ||= stderr.length > STDERR_CAP; stderr = stderr.slice(-STDERR_CAP);
     });
     child.on('error', (err) => {
       spawnError = err;

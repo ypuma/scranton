@@ -210,5 +210,5 @@ export function createProjectRegistry({ dataDir, projectsRoot = path.join(os.hom
     return createDreaming({ dataDir: data, projectId, collect: source.collect, collectReflection: reflection.collectReflection,
       completeReflection: options.completeReflection ?? ((request) => completeDreaming({ ...request, dataDir: data })), isBusy: () => source.isBusy() || Boolean(options.isBusy?.()), ...(options.now ? { now: options.now } : {}) });
   }
-  return { dreaming, dataDir: data, locked, listProjects, getProject, addProject, renameProject, removeProject, listChats, getChat, createChat, updateChat, removeChat, importLegacy };
+  return { dreaming, get projectsRoot() { return path.resolve(projectsRoot); }, dataDir: data, locked, listProjects, getProject, addProject, renameProject, removeProject, listChats, getChat, createChat, updateChat, removeChat, importLegacy };
 }

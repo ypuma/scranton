@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { readRunLease, readRunHeartbeat, runOwnerStatus, releaseRunLease } from './run-lease.js';
+import { readRunLease, readRunHeartbeat, runOwnerStatus, releaseRunLease, cliRecoveryStatus } from './run-lease.js';
 import { EventRecorder } from './events.js';
 import { cleanupRunContainers } from './sandbox.js';
 import { rejectResponse } from './file-control.js';
@@ -21,18 +21,21 @@ export function orphanSnapshot(hive, recoveryError = null) {
   return { runId: lease.runId ?? null, startedAt: lease.startedAt ?? null, owner: runOwnerStatus(hive, lease), heartbeatAt: beat?.runId === lease.runId && typeof beat?.at === 'string' ? beat.at : null, stopRequestedAt, recoveryError: beat?.runId === lease.runId && beat?.cleanup === 'unresolved' ? `Cleanup of this run could not be verified: ${beat.reason}` : recoveryError };
 }
 
-export function recoverOrphan(hive, runId, summary, dockerDependencies, { automatic = false } = {}) {
+export function recoverOrphan(hive, runId, summary, dockerDependencies, { automatic = false, local = false } = {}) {
   hive = path.resolve(hive);
   if (recovering.has(hive)) return Promise.reject(conflict('Recovery is already in progress. Try again in a moment.'));
-  const task = recover(hive, runId, summary, dockerDependencies, automatic);
+  const task = recover(hive, runId, summary, dockerDependencies, automatic, local);
   recovering.set(hive, task);
   return task.finally(() => recovering.delete(hive));
 }
 
-async function recover(hive, runId, summary, dockerDependencies, automatic) {
+async function recover(hive, runId, summary, dockerDependencies, automatic, local) {
   const lease = readRunLease(hive);
   if (!lease?.token || lease.runId !== runId || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(runId)) throw conflict('No matching orphan exists');
-  if (runOwnerStatus(hive, lease) === 'alive') throw conflict('The run is still running. Request a stop instead.');
+  const owner = runOwnerStatus(hive, lease);
+  if (owner === 'alive') throw conflict('The run is still running. Request a stop instead.');
+  if (automatic && owner !== 'gone') throw conflict('Automatic recovery requires a gone owner');
+  if (automatic && local && !cliRecoveryStatus(hive, lease).automatic) throw conflict('Automatic CLI recovery requires a stale heartbeat from this host or a legacy lease');
   const lock = path.join(hive, 'control', 'recovery.lock');
   try {
     const text = fs.readFileSync(lock, 'utf8');
@@ -51,6 +54,12 @@ async function recover(hive, runId, summary, dockerDependencies, automatic) {
   catch (err) { if (err.code === 'EEXIST') throw conflict('Recovery is already in progress. Try again in a moment.'); throw err; }
   try {
     fs.writeFileSync(fd, JSON.stringify({ pid: process.pid }));
+    if (lease.mode === 'undo') {
+      const currentOwner = runOwnerStatus(hive, lease);
+      if (readRunLease(hive)?.token !== lease.token || currentOwner === 'alive' || automatic && (currentOwner !== 'gone' || local && !cliRecoveryStatus(hive, lease).automatic)) throw conflict('Run ownership changed during recovery');
+      releaseRunLease(hive, lease.token);
+      return [];
+    }
     const recorder = new EventRecorder({ hiveDir: hive, runId }).resume();
     const state = recorder.state;
     const docker = state.execution?.sandbox?.mode === 'docker' || Object.values(state.instances ?? {}).some((i) => i.sandbox === 'docker');
@@ -61,7 +70,8 @@ async function recover(hive, runId, summary, dockerDependencies, automatic) {
       catch (err) { if (automatic) throw err; warnings.push(err.message); }
     }
     if (automatic && warnings.length) throw Error(warnings.join('\n'));
-    if (readRunLease(hive)?.token !== lease.token || runOwnerStatus(hive, lease) === 'alive') throw conflict('Run ownership changed during recovery');
+    const currentOwner = runOwnerStatus(hive, lease);
+    if (readRunLease(hive)?.token !== lease.token || currentOwner === 'alive' || automatic && (currentOwner !== 'gone' || local && !cliRecoveryStatus(hive, readRunLease(hive)).automatic)) throw conflict('Run ownership changed during recovery');
     rejectResponse(hive, () => {});
     if (!recorder.seq) recorder.emit('run_started', { request: lease.request ?? '', workspace: lease.workspace ?? null, maxFailedCycles: 3, roles: [] });
     if (!['finished', 'aborted', 'failed'].includes(recorder.state.status)) {
@@ -75,6 +85,7 @@ async function recover(hive, runId, summary, dockerDependencies, automatic) {
     }
     recorder.persist();
     withFsRetry(() => fs.rmSync(path.join(hive, 'control', 'stop.json'), { force: true }));
+    withFsRetry(() => fs.rmSync(path.join(hive, 'human', 'request.json'), { force: true }));
     releaseRunLease(hive, lease.token);
     return warnings;
   } finally {

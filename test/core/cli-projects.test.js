@@ -23,10 +23,26 @@ test('projects CLI adds/lists/removes and chats lists using the explicit data di
   assert.equal(await runCli(['projects', 'add', 'One', '--data', data, '--workspace', ws, '--create'], output), 0);
   const p = JSON.parse(output.text).project;
   output = io(dir); assert.equal(await runCli(['projects', 'list', '--data', data], output), 0); assert.equal(JSON.parse(output.text).projects[0].id, p.id);
+  assert.equal(JSON.parse(output.text).dataDir, data);
   output = io(dir); assert.equal(await runCli(['chats', p.id, '--data', data], output), 0); assert.deepEqual(JSON.parse(output.text).chats, []);
   output = io(dir); assert.equal(await runCli(['projects', 'remove', p.id, '--data', data, '--delete-history'], output), 0);
   assert.ok(fs.statSync(ws).isDirectory());
 });
+// Restoring runCli's project/chat fallback reaches the invalid config/registry instead of this refusal.
+test('run CLI refuses implicit data before reading workspace settings or the default registry', async (t) => {
+  const dir = fixture(t), appdata = path.join(dir, 'appdata'), data = path.join(appdata, 'dev.scranton.desktop');
+  fs.writeFileSync(path.join(dir, 'scranton.config.json'), '{broken');
+  fs.writeFileSync(path.join(dir, '.env'), 'SCRANTON_DATA=workspace-data\n');
+  for (const selection of [['--project', 'project-id'], ['--chat', 'chat-id']]) {
+    const output = io(dir); output.env.APPDATA = appdata;
+    assert.equal(await runCli(['run', 'goal', ...selection], output), 2);
+    assert.match(output.text, /--project and --chat require --data or inherited SCRANTON_DATA/);
+    assert.ok(output.text.includes(`scranton run "<request>" --data "${data}" --project ${selection[0] === '--project' ? 'project-id' : '<id>'}`), output.text);
+    if (selection[0] === '--chat') assert.ok(output.text.includes('--chat chat-id'));
+    assert.equal(fs.existsSync(data), false);
+  }
+});
+
 test('run CLI selects project/chat and passes bounded context string to orchestrator', async (t) => {
   const dir = fixture(t), data = path.join(dir, 'data'), ws = path.join(dir, 'ws'); fs.mkdirSync(ws);
   const r = createProjectRegistry({ dataDir: data }), p = r.addProject({ name: 'Project', workspace: ws }), c = r.createChat(p.id);

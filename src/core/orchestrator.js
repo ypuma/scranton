@@ -17,6 +17,7 @@ import { resolvePiCommand } from './pi-command.js';
 import { startPi } from './pi-runner.js';
 import { fallbackPlan, parsePlan, planToMarkdown } from './plan.js';
 import { clip, excerpt, oneLine } from './util.js';
+import { safePath } from './worktree.js';
 
 /** Thrown to unwind the run on a human abort or Ctrl+C. */
 class RunAborted extends Error {
@@ -458,6 +459,7 @@ export class Orchestrator {
               try {
                 const integration = await this.worktrees.integrateToTarget({ milestoneId: m.id });
                 if (integration?.ok === false || integration?.conflicts?.length) throw new Error(integration.reason ?? 'Integration conflict');
+                for (const file of integration?.notRestorable ?? []) this.log('warn', `Not restorable: ${file.path} (${file.reason})`);
                 this.emit('milestone_integrated', { milestoneId: m.id });
               } catch (error) {
                 stage -= 1;
@@ -483,6 +485,7 @@ export class Orchestrator {
               try {
                 const integration = await this.worktrees.integrateToTarget({ milestoneId: m.id });
                 if (integration?.ok === false || integration?.conflicts?.length) throw new Error(integration.reason ?? 'Integration conflict');
+                for (const file of integration?.notRestorable ?? []) this.log('warn', `Not restorable: ${file.path} (${file.reason})`);
                 this.emit('milestone_integrated', { milestoneId: m.id });
               } catch (err) {
                 const choice = await this.#askHuman({ milestoneId: m.id, title: 'Integration failed', reason: err.message });
@@ -640,7 +643,22 @@ export class Orchestrator {
       choice = { decision: this.onBreaker };
       this.log('warn', `--on-breaker ${this.onBreaker}: deciding automatically`);
     } else if (this.onBreaker === 'hive') {
-      choice = await waitForResponse(this.hive.dir, request, { signal: this.abortController.signal, log: (level, message) => this.log(level, message) });
+      const file = safePath(this.hive.dir, 'human/request.json');
+      const temp = safePath(this.hive.dir, `human/.request-${randomUUID()}.tmp`);
+      let fd;
+      try {
+        try { const stat = fs.lstatSync(file); if (!stat.isFile() || stat.nlink !== 1) throw Error('Unsafe human request file'); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+        fs.writeFileSync(fd, JSON.stringify({ v: 1, runId: request.runId, requestSeq: request.seq, milestoneId, title, reason, options: request.options, ts: request.ts }) + '\n');
+        fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+        safePath(this.hive.dir, 'human/request.json'); fs.renameSync(temp, file);
+        choice = await waitForResponse(this.hive.dir, request, { signal: this.abortController.signal, log: (level, message) => this.log(level, message) });
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        fs.rmSync(safePath(this.hive.dir, `human/${path.basename(temp)}`), { force: true });
+        fs.rmSync(safePath(this.hive.dir, 'human/request.json'), { force: true });
+      }
     } else if (this.hitl) {
       choice = await this.hitl({ title, reason, excerpt: shown, excerptLabel, feedbackTarget, skipLabel, milestoneId }, { signal: this.abortController.signal });
     } else if (isInteractive(this.stdin, this.stdout)) {

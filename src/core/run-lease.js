@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { writeFileAtomicSync, withFsRetry } from './util.js';
+
+export const RUN_STALE_MS = 30000;
 
 const leaseFile = (hiveDir) => path.join(hiveDir, 'control', 'owner.json');
 
@@ -20,7 +23,7 @@ export function readRunLease(hiveDir) {
 export function acquireRunLease(hiveDir, info) {
   const file = leaseFile(hiveDir);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lease = { v: 1, ...info, token: randomUUID() };
+  const lease = { v: 1, ...info, host: os.hostname(), token: randomUUID() };
   // Exclusive creation also blocks concurrent servers and an incomplete crash-time record.
   const fd = fs.openSync(file, 'wx');
   try { fs.writeFileSync(fd, JSON.stringify(lease)); fs.fsyncSync(fd); }
@@ -40,7 +43,14 @@ export function runOwnerStatus(hiveDir, lease = readRunLease(hiveDir)) {
   try { process.kill(beat.pid, 0); }
   catch (err) { if (err.code === 'ESRCH') return 'gone'; if (err.code !== 'EPERM') return 'unknown'; }
   const age = Date.now() - Date.parse(beat.at);
-  return age >= 0 && age <= 30000 ? 'alive' : 'unknown';
+  return age >= 0 && age <= RUN_STALE_MS ? 'alive' : 'unknown';
+}
+
+export function cliRecoveryStatus(hiveDir, lease = readRunLease(hiveDir)) {
+  const beat = readRunHeartbeat(hiveDir), owner = runOwnerStatus(hiveDir, lease);
+  const age = beat?.runId === lease?.runId ? Date.now() - Date.parse(beat?.at) : NaN;
+  return { owner, host: lease?.host ?? null, seconds: Number.isFinite(age) ? Math.max(0, Math.floor(age / 1000)) : null,
+    automatic: owner === 'gone' && (lease?.host === undefined || lease.host === os.hostname()) && age > RUN_STALE_MS };
 }
 
 export function startRunHeartbeat(hiveDir, token) {
