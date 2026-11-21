@@ -320,9 +320,11 @@ test('Pipeline sandbox failed builds retain final diagnostics and permit retry',
 });
 
 test('Pipeline server close kills the sandbox build child', async (t) => {
-  const f = await setup(t, { env: { FAKE_PIPELINE_BUILD_SLOW_MS: '60000', FAKE_PIPELINE_BUILD_PID_FILE: path.resolve('.scratch/pipeline/n3/build.pid') } });
+  const base = path.resolve('.scratch/pipeline/chat-node/tests'); fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, 'build-')), file = path.join(dir, 'build.pid');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const f = await setup(t, { env: { FAKE_PIPELINE_BUILD_SLOW_MS: '60000', FAKE_PIPELINE_BUILD_PID_FILE: file } });
   assert.equal((await f.req('/api/pipeline/sandbox/build', {})).code, 202);
-  const file = process.env.FAKE_PIPELINE_BUILD_PID_FILE;
   for (let i = 0; i < 200 && !fs.existsSync(file); i++) await sleep(20);
   const pid = Number(fs.readFileSync(file, 'utf8')); fs.rmSync(file);
   await f.server.close(); assert.throws(() => process.kill(pid, 0));
