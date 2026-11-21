@@ -7,11 +7,11 @@ file: "engine/src/scranton_pipeline/tools/checks.py"
 symbol: "failure_feedback"
 ordinal: 0
 kind: "how"
-text: "Builds required non-passed check repair feedback with current status/exit/duration and baseline matched by check ID, explicitly retaining unknown cause/equivalence. Adds bounded untrusted early diagnostic and output tail with fresh redaction. Caps each entry to 6000 and combined joined feedback to 24000 bytes; very large check counts use omitted-details summary. Does not change verification gates."
-see_also: "_failure_excerpt enforces run_dir/artifacts/logs containment, rejects links/reparse points and reads bounded prefix. tests/unit/test_check_feedback.py; tests/flow/test_run_robustness.py."
-hash: "span2:f7c2360125cb8c53"
-written: "2026-11-12"
-commit: "9ec5519"
+text: "Builds repair feedback for required checks that did not pass (`r[\"required\"] and not check_ok(r)`); returns [] when there are none. More than 24000 failed checks give one summary line without details; otherwise each entry is capped at `min(6000, (24000 - n) // n)` bytes. Per entry: a redacted header with current status / exit code / duration and the baseline status matched by check id (root cause relationship stated as unknown); when the row carries `baseline_comparison`, the header also lists the tests failing now that did not fail at baseline (`comparison[\"new\"]`) and the count still failing, and is clipped to 2500 instead of 1000. The excerpt comes from `_new_failure_excerpt` for those new names when there is a comparison, falling back to `_failure_excerpt`; then a bounded, redacted `output_tail` labelled as untrusted data (at most `tail_bytes`). Does not change verification gates."
+see_also: "tests/unit/test_check_feedback.py; tests/flow/test_run_robustness.py; _failure_excerpt enforces containment under the run directory"
+hash: "span2:9e7a29170f97ab2d"
+written: "2026-11-21"
+commit: "cd0d158"
 by: "core"
 ---
 

@@ -16,11 +16,11 @@ file: "src/core/live-activity.js"
 symbol: "createLiveActivity"
 ordinal: 0
 kind: "how"
-text: "Non-durable per-run live.json writer. Assistant message_start resets per-instance blocks/tails; message_update merges thinking/text by contentIndex, cleans and retains last2,000chars with cut flags. Writes atomically at400ms cadence; remove clears a finished instance, close immediately persists emptyLive. Orchestrator wires both pi transports; reasoning is not journaled."
-see_also: "src/core/events.js EventRecorder; readLive; .enma/live-activity-contract.md"
-hash: "span:0904cd92f2df17bf"
-written: "2026-11-12"
-commit: "9ec5519"
+text: "Per-run writer of the non-durable `<hive>/live.json` (atomic, at most one write per 400 ms, write failures ignored) plus the durable `thoughts.jsonl` (`THOUGHTS_FILE`). update(instanceId, agent, record): an assistant `message_start` flushes open blocks and resets the instance; `message_update` merges thinking / text deltas by `contentIndex` (each part keeps its last 4000 characters), and the instance entry shows the cleaned last 2000 characters per kind with cut flags and `open` = the kind still being written; `tool_execution_start` sets phase tool, `tool_execution_end` / `message_end` set idle. A block that ends is appended to thoughts.jsonl as one JSON line ({ v, n, ts, runId, instanceId, agent, kind: reasoning | answer, text, cut }) with text cut to `THOUGHT_MAX` (20000); appending stops for the run once `THOUGHTS_MAX_BYTES` (8 MiB) is exceeded; blocks still open at message end, removal or close are flushed with cut: true. remove(instanceId) flushes and drops the instance; close() flushes all, then persists `emptyLive`."
+see_also: "src/core/events.js EventRecorder; readLive in the same file; .enma/live-activity-contract.md"
+hash: "span:0803a62b541c9d8d"
+written: "2026-11-21"
+commit: "cd0d158"
 by: "core"
 ---
 
@@ -42,11 +42,11 @@ file: "src/core/orchestrator.js"
 symbol: "Orchestrator"
 ordinal: 0
 kind: "how"
-text: "run snapshots role prompts into audited run_started, obtains Michael plan or conversation direct answer, schedules dependency-ready milestones via runDag(maxParallel). Dwight snapshot feeds per-stage gates with separate checkouts; judges listed order, failed/missing gate keyword feeds Dwight, passing gates precede integration. Conversation adds answer/report prompt override, bounded agent_message and run_reply before run_finished. #runAgent wires onLive to ephemeral writer, onUsage to durable per-call agent_usage and structured targetFile/command tool events; serial JSON retains legacy no-instanceId agent_finished and explicitly removes its ephemeral tail."
-see_also: "src/core/live-activity.js; src/core/state.js; .enma/live-activity-contract.md; .enma/chat-view-contract.md"
-hash: "span:4bbc45fde7898f34"
-written: "2026-11-12"
-commit: "9ec5519"
+text: "`run` emits `run_started` with the audited role prompts (`auditRole`), gets Michael's plan (or a direct answer in conversation mode) and schedules the milestones with `runDag` (`maxParallel` from `config.execution`, default 1). In conversation mode a `run_reply` is emitted before `run_finished`; agent texts are journaled as `agent_message` cut to 16000 characters with a `truncated` flag. `#runAgent` wires `onLive` to the run's live writer (`this.rec.live.update`) and `onUsage` to durable `agent_usage` events. `#askHumanNow` in `onBreaker === 'hive'` mode first rejects a stale response (`rejectResponse`), writes `<hive>/human/request.json` atomically (temp file + rename, through `safePath`), waits in `waitForResponse` and removes the file when the wait ends."
+see_also: "src/core/live-activity.js; src/core/state.js; src/core/file-control.js; .enma/live-activity-contract.md; .enma/chat-view-contract.md; README section on --on-breaker hive"
+hash: "span:fedbbeabd2e3fedb"
+written: "2026-11-21"
+commit: "cd0d158"
 by: "core"
 ---
 
@@ -114,6 +114,69 @@ see_also: ".enma/custom-agents-contract.md; src/core/orchestrator.js, src/core/p
 hash: "span:ff3c2abb1be537fc"
 written: "2026-11-11"
 commit: "2118ea5"
+by: "core"
+---
+
+---
+file: "src/core/restore-points.js"
+kind: "where"
+text: "Restore points: the pre-run content of every file a run's integration replaces, deletes or creates in the user's workspace, kept so the run can be undone. On disk: `<hive>/restore-points/<runId>/manifest.json` plus `preimages/<sha256>` (a file the run created has no pre-image). Exports: `prepareRestorePoint({ hiveDir, runId, workspace, changes, before, initial, after })` - called by the worktree integration before it writes, returns `commit` / `rollback`; `listRestorePoints(hiveDir)` - newest first, `{ runId, createdAt, workspace, files, undoneAt, remaining }`, an entry that cannot be read is `{ runId, unreadable: true }`; `undoRun({ hiveDir, runId, force, siblings })`; `workspaceState(workspace)`. Limits: `MAX_PREIMAGE_BYTES` 16 MiB per file (larger files are recorded as not restorable), `MAX_MANIFEST_BYTES` 8 MiB, the current point plus the 9 newest other readable points are kept (pruned on commit). Not covered: execution modes that write into the workspace directly, the standalone `scranton agent` command, Pipeline chats."
+see_also: "src/core/worktree.js (integration calls prepareRestorePoint); src/core/cli.js cmdUndo; src/server/registry-router.js routes `<chat scope>/restore-points` (GET) and `/undo` (POST); visualizer/public/js/undo.js; test/core/restore-points.test.js; README section on undo"
+hash: "shape:ffeaa318bfdbf481"
+written: "2026-11-21"
+commit: "cd0d158"
+by: "core"
+---
+
+---
+file: "src/core/restore-points.js"
+symbol: "undoRun"
+ordinal: 0
+kind: "how"
+text: "Undo of one restore point. It takes the hive's run lease itself (`acquireRunLease` with `mode: 'undo'`, id `undo-<uuid>`, heartbeat) for its whole duration and releases it in `finally`; a held lease means \"a run is active\" or \"an undo is already running\". It refuses while a hive in `siblings` (the other chats of the project, passed by the registry route and the CLI's registry form) has a lease that is not automatically recoverable. Selection: the given `runId`, else the newest readable point without `undoneAt`; it refuses when a newer readable point is still not undone (\"Newer runs must be undone first\"), and refuses `force` when an unreadable entry's directory is newer than the selected point. The work runs inside `withWorkspaceLock`. Per file: no stored pre-image or a pre-image that fails its size / SHA-256 check -> code `unrestorable`, persisted as `undoUnrestorable` (settles); current content differs from what the run last wrote and no `force` -> code `changed`, left alone; otherwise the pre-image is written back atomically, or a file the run created is unlinked, bracketed by `undoPending` saves; any other failure (EBUSY, EPERM, unsafe path) -> code `blocked`, not persisted, retried by the next undo. Directories the run created are removed deepest first when empty; other removal errors become `warnings`. Point-level `undoneAt` is set once every file is undone or `undoUnrestorable`. Result: `{ runId, restored, removed, conflicts: [{ path, reason, code }], warnings }`."
+see_also: "src/core/run-lease.js cliRecoveryStatus; src/core/run-recovery.js (releases an undo-mode lease without touching any run); test/core/restore-points.test.js; .scratch/usability/probe/ scenario scripts (dynamic checks of 2026-11-21)"
+hash: "span:d615b15d756540f7"
+written: "2026-11-21"
+commit: "cd0d158"
+by: "core"
+---
+
+---
+file: "src/core/restore-points.js"
+symbol: "workspaceState"
+ordinal: 0
+kind: "trap"
+text: "Deliberately starts no git process. It only walks up from the workspace looking for a `.git` entry and reports `{ git, dirty: null, untracked: null }`. Running `git status` (or any git command that reads the work tree) inside the user's folder would honour that folder's own `.git/config` - an fsmonitor command or filter drivers named there are executed on the host, before the user has trusted anything. A first version did exactly that and was removed after review; do not \"improve\" the run-start notice by counting changed files with git."
+evidence: "`const stat = fs.lstatSync(path.join(dir, '.git')); if (stat.isDirectory() || stat.isFile()) return { ...unknown, git: true };`"
+see_also: "src/core/cli.js run-start notice (\"Git status is not inspected\"); test/core/restore-points.test.js"
+hash: "span:f607dbd972cf00f7"
+quote: "quote:ed3dfa3d87df155f"
+written: "2026-11-21"
+commit: "cd0d158"
+by: "core"
+---
+
+---
+file: "src/core/run-lease.js"
+symbol: "cliRecoveryStatus"
+ordinal: 0
+kind: "how"
+text: "Decides whether the CLI may recover a stale hive owner on its own. Returns `{ owner, host, seconds, automatic }`: `owner` is `runOwnerStatus` unchanged (`alive` = pid answers and heartbeat within `RUN_STALE_MS` = 30000 ms; `gone` = pid does not exist on this machine; everything else `unknown`); `automatic` is true only when the owner is `gone` AND the lease records no host or this machine's `os.hostname()` AND the heartbeat of that same run id is older than `RUN_STALE_MS`. A dead pid with a fresh heartbeat is therefore not recovered automatically - that is how a live run on another machine, in WSL or in another pid namespace sharing the hive looks. Used by `scranton run` / `recover` in cli.js and by `undoRun` to judge sibling hives; the server's orphan recovery keeps using `runOwnerStatus` directly. Leases carry `mode: 'undo'` when `undoRun` holds them; recovery releases such a lease without touching any run."
+see_also: ".enma/orphan-recovery-contract.md; src/core/run-recovery.js recoverOrphan; src/core/restore-points.js undoRun; docs/CONTROL.md recovery section"
+hash: "span:7de5c80505479479"
+written: "2026-11-21"
+commit: "cd0d158"
+by: "core"
+---
+
+---
+file: "src/core/run-summary.js"
+kind: "where"
+text: "What `scranton run` prints when a run ends. `formatRunSummary(orchestrator, result, durationMs)` builds the block from recorded data only: outcome, milestone counts by status from `orchestrator.rec.state`, the files whose integrated content differs from the initial snapshot (`orchestrator.worktrees.initial` vs `.integrated`; count plus up to 20 paths), an `Undo: scranton undo --hive <dir> --run <id>` line only when the run changed files and its restore point exists and is not undone, the private worktree for the standalone `scranton agent` command, duration, recorded usage / cost, and the path of `events.jsonl`. `quotePathArgument(value, platform)` quotes a path for the commands the CLI and doctor print (double quotes on Windows without doubling backslashes inside the path; single quotes elsewhere)."
+see_also: "src/core/cli.js execute (writes the block to stderr); src/core/doctor.js; test/core/cli-usability.test.js; test/core/cli-undo.test.js"
+hash: "shape:93ebef10277dfce6"
+written: "2026-11-21"
+commit: "cd0d158"
 by: "core"
 ---
 
