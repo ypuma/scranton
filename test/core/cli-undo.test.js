@@ -9,7 +9,7 @@ import { createProjectRegistry } from '../../src/core/projects.js';
 import { prepareRestorePoint } from '../../src/core/restore-points.js';
 import { formatRunSummary, quotePathArgument } from '../../src/core/run-summary.js';
 
-const root = path.resolve('.scratch/usability/fix5/cli-undo');
+const root = path.resolve('.scratch/usability/fix6/cli-undo');
 fs.mkdirSync(root, { recursive: true });
 const previous = process.env.SCRANTON_ISOLATION_ROOT;
 process.env.SCRANTON_ISOLATION_ROOT = path.join(root, 'isolation');
@@ -45,7 +45,7 @@ test('fake run summary names exact undo command; list and default undo remove it
   const state = JSON.parse(fs.readFileSync(path.join(f.hive, 'state.json')));
   assert.ok(f.io.err.includes(`Undo: scranton undo --hive ${quotePathArgument(f.hive)} --run ${state.runId}`));
   assert.equal(await f.undo('--list'), 0);
-  assert.match(f.io.out, new RegExp(`${state.runId} \\| .* \\| 1 files \\| 1 remaining \\| not undone`));
+  assert.match(f.io.out, new RegExp(`${state.runId} \\| .* \\| 1 files \\| 1 remaining \\| files still to undo`));
   assert.equal(await f.undo(), 0, f.io.err);
   assert.match(f.io.out, /Removed: todo.js/);
   assert.equal(fs.existsSync(path.join(f.ws, 'todo.js')), false);
@@ -127,7 +127,7 @@ test('summary never promises undo for missing, foreign, undone or unchanged rest
   assert.doesNotMatch(formatRunSummary(run, { status: 'success' }, 0), /Undo:/);
   run.runId = 'fixture-run'; assert.match(formatRunSummary(run, { status: 'success' }, 0), /Undo: scranton undo/);
   const file = path.join(f.hive, 'restore-points/fixture-run/manifest.json'), manifest = JSON.parse(fs.readFileSync(file));
-  manifest.undoneAt = new Date().toISOString(); fs.writeFileSync(file, JSON.stringify(manifest));
+  manifest.undoneAt = new Date().toISOString(); for (const e of manifest.files) e.undoneAt = manifest.undoneAt; fs.writeFileSync(file, JSON.stringify(manifest));
   assert.doesNotMatch(formatRunSummary(run, { status: 'success' }, 0), /Undo:/);
   fs.rmSync(file);
   assert.doesNotMatch(formatRunSummary(run, { status: 'success' }, 0), /Undo:/);
@@ -209,4 +209,33 @@ test('fix5: a sibling run hint names the other run rather than this chat list', 
     assert.match(f.io.err, /wait for or stop the run in the other chat; recover that chat only if its process is gone/);
     assert.doesNotMatch(f.io.err, /--list|inspect with/);
   } finally { releaseRunLease(sibling.hiveDir, lease.token); }
+});
+
+function backupLimitedPoint(f, count = 0) {
+  const initial = new Map([['large', { ...entry(''), data: Buffer.alloc(16 * 1024 * 1024 + 1) }]]);
+  for (let i = 0; i < count; i++) initial.set(`small-${i}`, entry('before'));
+  const integrated = new Map([...initial.keys()].map((name) => [name, entry('after')]));
+  prepareRestorePoint({ hiveDir: f.hive, runId: 'limited', workspace: f.ws, changes: [...initial.keys()], before: initial, initial, after: integrated }).commit();
+  for (const [name, e] of integrated) fs.writeFileSync(path.join(f.ws, name), e.data);
+  return { initial, integrated };
+}
+
+test('fix6 B: list never calls files without backups undone and describes partial undo honestly', async (t) => {
+  const f = fixture(t); backupLimitedPoint(f, 2);
+  await f.undo('--list'); assert.match(f.io.out, /2 remaining \| files still to undo; no backup for 1 file/); assert.doesNotMatch(f.io.out, /partly undone/);
+  fs.writeFileSync(path.join(f.ws, 'small-1'), 'human'); await f.undo();
+  await f.undo('--list'); assert.match(f.io.out, /1 remaining \| partly undone \(1 of 3\); no backup for 1 file/);
+  await f.undo('--force'); await f.undo('--list'); assert.match(f.io.out, /0 remaining \| partly undone \(2 of 3\); no backup for 1 file/);
+  const only = fixture(t); backupLimitedPoint(only);
+  await only.undo('--list'); assert.match(only.io.out, /0 remaining \| nothing can be undone \(no backup for 1 file\)/); assert.doesNotMatch(only.io.out, /\| undone/);
+  assert.equal(await only.undo(), 1); assert.match(only.io.out, /Nothing could be undone: no backup for 1 file\./); assert.match(only.io.err, /Pre-image exceeds 16777216 bytes/);
+});
+
+test('fix6 B: summary offers undo only for open files and warns about absent backups', async (t) => {
+  for (const count of [0, 2]) {
+    const f = fixture(t), worktrees = backupLimitedPoint(f, count);
+    const summary = formatRunSummary({ runId: 'limited', config: { hiveDir: f.hive }, rec: { state: {} }, worktrees }, { status: 'success' }, 0);
+    assert.match(summary, /Not restorable: 1 file has no backup\./);
+    if (count) assert.match(summary, /Undo: scranton undo/); else assert.doesNotMatch(summary, /Undo:/);
+  }
 });

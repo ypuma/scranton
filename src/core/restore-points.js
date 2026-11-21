@@ -19,12 +19,14 @@ const openFile = (e) => e.restorable && !e.undoneAt && !e.undoUnrestorable;
 const settled = (point) => Boolean(point.undoneAt) || !point.files.some(openFile);
 
 // Listing must validate names even when the workspace no longer exists.
-function target(workspace, hive, name, inspect = true) {
-  const file = safePath(workspace, name, inspect ? {} : { fs: { lstatSync() { throw Object.assign(Error(), { code: 'ENOENT' }); } } });
+function target(workspace, hive, name, inspect = true, reading = false) {
+  const file = safePath(workspace, name, !inspect ? { fs: { lstatSync() { throw Object.assign(Error(), { code: 'ENOENT' }); } } } : reading ? { fs: { ...fs, lstatSync(...args) {
+    try { return fs.lstatSync(...args); } catch (error) { if (error.code === 'ENOTDIR') error.code = 'ENOENT'; throw error; }
+  } } } : {});
   if (!name || name.split('/').some((part) => part.toLowerCase() === '.git') || contains(hive, file) || contains(file, hive)) throw Error('Unsafe restore target');
   if (inspect) for (let parent = path.dirname(file); parent !== workspace; parent = path.dirname(parent)) {
-    try { if (!fs.lstatSync(parent).isDirectory()) throw Error('Unsafe restore parent: not a directory'); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    try { const stat = fs.lstatSync(parent); if (!stat.isDirectory() && !(reading && stat.isFile())) throw Error('Unsafe restore parent: not a directory'); }
+    catch (error) { if (error.code !== 'ENOENT' && !(reading && error.code === 'ENOTDIR')) throw error; }
   }
   return file;
 }
@@ -51,7 +53,7 @@ const bytes = (root, name, max) => regular(root, name, max, (fd, size) => {
   return data;
 });
 function current(workspace, hive, name) {
-  target(workspace, hive, name);
+  target(workspace, hive, name, true, true);
   try {
     return regular(workspace, name, Number.MAX_SAFE_INTEGER, (fd, size, stat) => {
       const digest = createHash('sha256'), chunk = Buffer.alloc(64 * 1024); let total = 0, n;
@@ -59,7 +61,7 @@ function current(workspace, hive, name) {
       if (total !== size) throw Error('Restore target changed');
       return { sha256: digest.digest('hex'), size, mode: Number(stat.mode) & 0o111 ? '100755' : '100644' };
     });
-  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; }
 }
 function atomic(root, name, data, mode = 0o600) {
   const verify = () => {
@@ -117,7 +119,8 @@ export function listRestorePoints(hiveDir) {
   return allPoints(path.resolve(hiveDir)).map((point) => {
     if (point.unreadable) return point;
     const { runId, createdAt, workspace, files, undoneAt } = point;
-    return { runId, createdAt, workspace, files: files.length, undoneAt, remaining: files.filter(openFile).length };
+    return { runId, createdAt, workspace, files: files.length, undoneAt, remaining: files.filter(openFile).length,
+      undone: files.filter((e) => e.undoneAt).length, unrestorable: files.filter((e) => !e.restorable || e.undoUnrestorable).length };
   });
 }
 
@@ -131,7 +134,7 @@ export function prepareRestorePoint({ hiveDir, runId, workspace, changes, before
   const previous = point ? structuredClone(point) : null;
   point ??= { v: 1, runId, createdAt: new Date().toISOString(), workspace, files: [], createdDirs: [], undoneAt: null };
   for (const name of changes) {
-    const file = target(workspace, hive, name);
+    const file = target(workspace, hive, name, true, true);
     let e = point.files.find((e) => e.path === name);
     if (!e) {
       const original = initial.get(name), restorable = !original || original.data.length <= MAX_PREIMAGE_BYTES;
@@ -143,8 +146,9 @@ export function prepareRestorePoint({ hiveDir, runId, workspace, changes, before
       point.files.push(e);
     }
     e.pending = fingerprint(after.get(name));
-    for (let parent = path.dirname(file); parent !== workspace && !fs.existsSync(parent); parent = path.dirname(parent)) {
+    for (let parent = path.dirname(file); parent !== workspace; parent = path.dirname(parent)) {
       const relative = path.relative(workspace, parent).split(path.sep).join('/');
+      if (fs.existsSync(parent) && !(before.get(relative) && !after.get(relative))) break;
       if (!point.createdDirs.includes(relative)) point.createdDirs.push(relative);
     }
   }
@@ -203,7 +207,7 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
     };
     checkSiblings();
     const entries = allPoints(hive), points = entries.filter((p) => !p.unreadable);
-    const selected = runId === undefined ? points.find((p) => !settled(p)) : points.find((p) => p.runId === runId);
+    const selected = runId === undefined ? (points.find((p) => !settled(p)) ?? points.find((p) => !p.undoneAt)) : points.find((p) => p.runId === runId);
     if (!selected) {
       if (runId !== undefined && allPoints(hive).some((p) => p.runId === runId && p.unreadable)) throw refusal(`Restore point ${runId} is unreadable.`);
       throw Error('No restore point available');
@@ -223,50 +227,54 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
         result.conflicts = point.files.filter((e) => e.undoUnrestorable || !e.restorable).map((e) => ({ path: e.path, reason: e.undoUnrestorable ?? e.reason, code: 'unrestorable' }));
         return result;
       }
-      for (const e of point.files) {
-        try {
-          if (e.undoneAt) continue;
-          if (!e.restorable || e.undoUnrestorable) {
-            e.undoUnrestorable ??= e.reason;
-            result.conflicts.push({ path: e.path, reason: e.undoUnrestorable, code: 'unrestorable' }); continue;
-          }
+      // Vacate created paths and directories before putting original files back.
+      for (const restoring of [false, true]) {
+        for (const e of point.files.filter((e) => Boolean(e.original) === restoring)) {
           try {
-            let data;
-            if (e.original) {
-              try { data = bytes(pointDir(hive, point.runId), e.preimage, MAX_PREIMAGE_BYTES); }
-              catch (error) {
-                if (error.code === 'ENOENT' || ['Restore path is not a regular file', 'Restore file has hardlinks', 'Restore artifact exceeds size limit'].includes(error.message)) throw Error('Invalid pre-image');
-                throw error;
+            if (e.undoneAt) continue;
+            if (!e.restorable || e.undoUnrestorable) {
+              e.undoUnrestorable ??= e.reason;
+              result.conflicts.push({ path: e.path, reason: e.undoUnrestorable, code: 'unrestorable' }); continue;
+            }
+            try {
+              let data;
+              if (e.original) {
+                try { data = bytes(pointDir(hive, point.runId), e.preimage, MAX_PREIMAGE_BYTES); }
+                catch (error) {
+                  if (['ENOENT', 'ENOTDIR'].includes(error.code) || error.message?.startsWith('Link/reparse path rejected:') || ['Restore path is not a regular file', 'Restore file has hardlinks', 'Restore artifact exceeds size limit'].includes(error.message)) throw Error('Invalid pre-image');
+                  throw error;
+                }
+                if (data.length !== e.original.size || hash(data) !== e.original.sha256) throw Error('Invalid pre-image');
               }
-              if (data.length !== e.original.size || hash(data) !== e.original.sha256) throw Error('Invalid pre-image');
+              const actual = current(point.workspace, hive, e.path);
+              if (!force && !equal(actual, e.lastWritten) && !(e.pending !== undefined && equal(actual, e.pending)) && !(e.undoPending && equal(actual, e.original))) {
+                result.conflicts.push({ path: e.path, reason: 'File no longer matches what the run wrote', code: 'changed' }); continue;
+              }
+              e.undoPending = true; save(hive, point);
+              const file = target(point.workspace, hive, e.path);
+              if (!equal(current(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
+              if (!equal(actual, e.original)) {
+                if (e.original) { atomic(point.workspace, e.path, data, e.permissions); result.restored.push(e.path); }
+                else if (actual) { fs.unlinkSync(file); result.removed.push(e.path); }
+              }
+              e.undoneAt = new Date().toISOString(); delete e.undoPending; save(hive, point);
+            } catch (error) {
+              const code = error.message === 'Invalid pre-image' ? 'unrestorable' : error.message === 'Restore target changed' ? 'changed' : 'blocked';
+              const reason = code === 'blocked' ? blockedReason(error) : error.message;
+              if (e.undoneAt) { e.undoneAt = null; e.undoPending = true; }
+              if (code === 'unrestorable') e.undoUnrestorable = reason;
+              result.conflicts.push({ path: e.path, reason, code });
             }
-            const actual = current(point.workspace, hive, e.path);
-            if (!force && !equal(actual, e.lastWritten) && !(e.pending !== undefined && equal(actual, e.pending)) && !(e.undoPending && equal(actual, e.original))) {
-              result.conflicts.push({ path: e.path, reason: 'File no longer matches what the run wrote', code: 'changed' }); continue;
-            }
-            e.undoPending = true; save(hive, point);
-            const file = target(point.workspace, hive, e.path);
-            if (!equal(current(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
-            if (!equal(actual, e.original)) {
-              if (e.original) { atomic(point.workspace, e.path, data, e.permissions); result.restored.push(e.path); }
-              else if (actual) { fs.unlinkSync(file); result.removed.push(e.path); }
-            }
-            e.undoneAt = new Date().toISOString(); delete e.undoPending; save(hive, point);
-          } catch (error) {
-            const code = error.message === 'Invalid pre-image' ? 'unrestorable' : error.message === 'Restore target changed' ? 'changed' : 'blocked';
-            const reason = code === 'blocked' ? blockedReason(error) : error.message;
-            if (e.undoneAt) { e.undoneAt = null; e.undoPending = true; }
-            if (code === 'unrestorable') e.undoUnrestorable = reason;
-            result.conflicts.push({ path: e.path, reason, code });
-          }
-        } finally { await new Promise(setImmediate); }
-      }
-      for (const name of [...point.createdDirs].sort((a, b) => b.split('/').length - a.split('/').length)) {
-        try {
-          if (point.files.some((e) => openFile(e) && e.path.startsWith(name + '/'))) continue;
-          try { fs.rmdirSync(target(point.workspace, hive, name)); }
-          catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) result.warnings.push(`Cannot safely remove directory: ${name} (${error.code ?? 'unsafe path'}).`); }
-        } finally { await new Promise(setImmediate); }
+          } finally { await new Promise(setImmediate); }
+        }
+        if (restoring) break;
+        for (const name of [...point.createdDirs].sort((a, b) => b.split('/').length - a.split('/').length)) {
+          try {
+            if (point.files.some((e) => openFile(e) && e.path.startsWith(name + '/'))) continue;
+            try { fs.rmdirSync(target(point.workspace, hive, name)); }
+            catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) result.warnings.push(`Cannot safely remove directory: ${name} (${error.code ?? 'unsafe path'}).`); }
+          } finally { await new Promise(setImmediate); }
+        }
       }
       if (!point.undoneAt && settled(point)) point.undoneAt = new Date().toISOString();
       save(hive, point);

@@ -5,7 +5,7 @@
 import { request } from './context-panel.js';
 import { findChat, chatEngine, ALIVE_STATUSES } from './scope.js';
 import {
-  undoUrl, parseRestorePoints, parseUndo, buildUndo, undoState, undoneText, partialText, undoQuestion, forceQuestion, undoResult,
+  undoUrl, parseRestorePoints, parseUndo, buildUndo, undoState, undoneText, leftText, partialText, unrestorableText, undoQuestion, forceQuestion, undoResult,
   stuckText, blockedText, changedOf, stuckOf, blockedOf, conflictText, changesNote, undoError, unsupported, undoWarnings, UNDO_LABEL, CONTINUE_LABEL, FORCE_LABEL,
   ACTIVE_TEXT, RECOVERY_TEXT, OLDER_TEXT, UNREADABLE_POINT, UNDOING_TEXT, UNKNOWN_TEXT, UNDO_TIMEOUT_MS,
 } from './undo.js';
@@ -209,7 +209,8 @@ export function createUndo({ getProjects = () => null, confirm, active = () => f
     const going = Boolean(s) && sending?.runId === s.runId;
     // the result says it once; the state of the point is for a run undone before
     const said = mine || going ? ''
-      : state === 'undone' ? undoneText(point.undoneAt)
+      : state === 'undone' ? undoneText(point.undoneAt) + leftText(point)
+        : state === 'unrestorable' ? unrestorableText(point)
         : state === 'partial' ? partialText(point)
           : state === 'older' ? OLDER_TEXT
             : state === 'unreadable' ? UNREADABLE_POINT : '';

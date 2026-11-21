@@ -17,6 +17,8 @@ const RECORD_CAP = 16 * 1024 * 1024;
 export function piErrorText(value, env, cut = false) {
   let text = String(value ?? '');
   cut ||= text.length > 8192;
+  const start = Math.max(0, text.length - 8192), boundary = start > 0 && text[start - 1] === '\n';
+  const afterLabel = (boundary || /^\r?\n/.test(text.slice(start, start + 2))) && /\b(?:api[_-]?key|(?:access[_-]?|refresh[_-]?|id[_-]?)?token|(?:client[_-]?)?secret|password|authorization|set-cookie|cookie|key|signature|credential)["']?[ \t]*[:=][ \t\r]*\n?$/i.test(text.slice(text.lastIndexOf('\n', start - 2) + 1, start));
   text = text.slice(-8192);
   let marked = false;
   if (cut) {
@@ -24,9 +26,9 @@ export function piErrorText(value, env, cut = false) {
     const newline = text.indexOf('\n');
     if (newline !== -1) {
       // A cut label can put its credential value on the next line.
-      const label = /^[A-Za-z_-]{0,32}["']?[ \t]*[:=][ \t\r]*$/.test(text.slice(0, newline));
-      text = text.slice(newline + 1);
-      if (label) text = text.replace(/^[^\n]*(?:\n|$)/, '[redacted]\n');
+      const label = afterLabel && /^\r?\n/.test(text) || /^[A-Za-z_-]{0,32}["']?[ \t]*[:=][ \t\r]*$/.test(text.slice(0, newline));
+      if (!boundary) text = text.slice(newline + 1);
+      if (boundary ? afterLabel : label) text = text.replace(/^[^\n]*(?:\n|$)/, '[redacted]\n');
     } else {
       // Without a line boundary, suppress the unlabelled token fragment, not the cause after it.
       text = text.replace(/^[^"']*["']|^\S+/, '[redacted]');

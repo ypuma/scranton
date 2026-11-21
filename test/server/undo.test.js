@@ -12,7 +12,7 @@ import { prepareRestorePoint } from '../../src/core/restore-points.js';
 import { acquireRunLease, releaseRunLease } from '../../src/core/run-lease.js';
 
 async function fixture(t, { single = false, runner } = {}) {
-  const root = path.resolve('.scratch/usability/fix4/server'); fs.mkdirSync(root, { recursive: true });
+  const root = path.resolve('.scratch/usability/fix6/server'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'test-')), dataDir = path.join(dir, 'data'), workspace = path.join(dir, 'ws'), projectsRoot = path.join(dir, 'default-projects'); fs.mkdirSync(workspace);
   const registry = createProjectRegistry({ dataDir, projectsRoot }), project = registry.addProject({ name: 'Undo', workspace });
   const team = registry.createChat(project.id), sibling = registry.createChat(project.id), pipeline = registry.createChat(project.id, { engine: 'pipeline' });
@@ -37,8 +37,8 @@ test('restore points list exact public shape newest first, isolate chats and inc
   assert.deepEqual(await f.req(f.scope() + '/restore-points'), { status: 200, value: { points: [] } });
   f.point('old'); f.point('new', f.team, '2026-01-02T00:00:00.000Z');
   assert.deepEqual(await f.req(f.scope() + '/restore-points'), { status: 200, value: { points: [
-    { runId: 'new', createdAt: '2026-01-02T00:00:00.000Z', files: 2, undoneAt: null, remaining: 2 },
-    { runId: 'old', createdAt: '2026-01-01T00:00:00.000Z', files: 2, undoneAt: null, remaining: 2 }
+    { runId: 'new', createdAt: '2026-01-02T00:00:00.000Z', files: 2, undoneAt: null, remaining: 2, undone: 0, unrestorable: 0 },
+    { runId: 'old', createdAt: '2026-01-01T00:00:00.000Z', files: 2, undoneAt: null, remaining: 2, undone: 0, unrestorable: 0 }
   ] } });
   for (const chat of [f.sibling, f.pipeline]) {
     assert.deepEqual(await f.req(f.scope(chat) + '/restore-points'), { status: 200, value: { points: [] } });
@@ -176,4 +176,15 @@ test('fix4: undo route carries blocked code in a 200 body and keeps the point re
   const p = (await f.req(f.scope() + '/restore-points')).value.points[0]; assert.equal(p.undoneAt, null); assert.equal(p.remaining, 1);
   mock.mock.restore();
   assert.deepEqual(await f.req(f.scope() + '/undo', {}), { status: 200, value: { runId: 'run', restored: [], removed: ['new.txt'], conflicts: [], warnings: [] } });
+});
+
+test('fix6 B: GET counts undone and permanently damaged backups separately', async (t) => {
+  const f = await fixture(t); f.point('run');
+  const dir = path.join(f.team.hiveDir, 'restore-points/run'), p = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json')));
+  fs.unlinkSync(path.join(dir, p.files.find((e) => e.path === 'old.txt').preimage));
+  const result = await f.req(f.scope() + '/undo', {});
+  assert.deepEqual(result.value.conflicts, [{ path: 'old.txt', reason: 'Invalid pre-image', code: 'unrestorable' }]);
+  const listed = (await f.req(f.scope() + '/restore-points')).value.points[0];
+  assert.deepEqual(listed, { runId: 'run', createdAt: '2026-01-01T00:00:00.000Z', files: 2, undoneAt: listed.undoneAt, remaining: 0, undone: 1, unrestorable: 1 });
+  assert.ok(listed.undoneAt);
 });

@@ -42,9 +42,10 @@ export function undoUrl(projectId, chatId, action) {
   return UNDO_ACTIONS.includes(action) ? `/api/projects/${enc(projectId)}/chats/${enc(chatId)}/${action}` : null;
 }
 
-// GET restore-points -> { valid, points: [{ runId, createdAt, files, undoneAt, remaining, unreadable }] }, one per
-// run, newest first as the server lists them. remaining: the files not undone yet; a server from before it says
-// nothing, which is all of them while the point is open and none once it is undone.
+// GET restore-points -> { valid, points: [{ runId, createdAt, files, undoneAt, remaining, unreadable, undone?,
+// unrestorable? }] }, one per run, newest first as the server lists them. remaining: the files not undone yet; a
+// server from before it says nothing, which is all of them while the point is open and none once it is undone.
+// undone and unrestorable (the files put back or removed, the files without a usable backup) only when both come.
 export function parseRestorePoints(doc) {
   const d = obj(doc);
   const valid = Boolean(d) && Array.isArray(d.points);
@@ -61,7 +62,9 @@ export function parseRestorePoints(doc) {
     const files = count(x.files);
     const undoneAt = iso(x.undoneAt);
     const left = undoneAt ? 0 : count(x.remaining) ?? files;
-    points.push({ runId: x.runId, createdAt: iso(x.createdAt), files, undoneAt, remaining: left === null || files === null ? left : Math.min(left, files), unreadable: false });
+    const counts = files !== null && left !== null && count(x.undone) !== null && count(x.unrestorable) !== null
+      ? { undone: x.undone, unrestorable: x.unrestorable } : {};
+    points.push({ runId: x.runId, createdAt: iso(x.createdAt), files, undoneAt, remaining: left === null || files === null ? left : Math.min(left, files), unreadable: false, ...counts });
   }
   return { valid, points };
 }
@@ -96,14 +99,20 @@ export function buildUndo(runId, force = false) {
   return { body: force ? { runId, force: true } : { runId } };
 }
 
-// nothing left to undo is undone, also from a server that did not set undoneAt then
-const undone = (p) => Boolean(p.undoneAt) || (p.remaining === 0 && p.files !== 0);
-const open = (p) => !undone(p);
-const partly = (p) => !p.unreadable && !undone(p) && p.files !== null && p.remaining !== null && p.remaining < p.files;
+// A server that counts says what was undone; one that does not leaves remaining to tell, where files without a
+// backup look undone. Without counts, nothing left to undo is undone, also when undoneAt was not set then.
+const counted = (p) => Number.isInteger(p.undone) && Number.isInteger(p.unrestorable);
+const undone = (p) => (counted(p) ? p.remaining === 0 && (p.undone > 0 || Boolean(p.undoneAt)) : Boolean(p.undoneAt) || (p.remaining === 0 && p.files !== 0));
+const open = (p) => (counted(p) ? p.remaining > 0 : !undone(p));
+const partly = (p) => (counted(p) ? p.undone > 0 && p.remaining > 0
+  : !p.unreadable && !undone(p) && p.files !== null && p.remaining !== null && p.remaining < p.files);
+// nothing undone and nothing left: no file of the run has a backup to undo it from
+const lost = (p) => counted(p) && p.remaining === 0 && !undone(p) && p.unrestorable > 0;
 
 // What the outcome says for the run on screen. run: { runId, over (finished, not live), team }; points: the chat's,
 // newest first. -> 'none' | 'offer' | 'partial' (both can be undone) | 'older' (a later run is not fully undone) |
-// 'undone' | 'unreadable'. Whether a run of the chat is going is the caller's: it only hides the control.
+// 'undone' | 'unrestorable' (no backup for any file) | 'unreadable'. Whether a run of the chat is going is the
+// caller's: it only hides the control.
 export function undoState(run, points) {
   const list = Array.isArray(points) ? points : [];
   const at = run?.runId && run.over && run.team ? list.findIndex((p) => p.runId === run.runId) : -1;
@@ -111,21 +120,32 @@ export function undoState(run, points) {
   const point = list[at];
   if (point.unreadable) return 'unreadable';
   if (undone(point)) return 'undone';
+  if (lost(point)) return 'unrestorable';
+  if (counted(point) && !open(point)) return 'none';
   if (list.slice(0, at).some(open)) return 'older';
   return partly(point) ? 'partial' : 'offer';
 }
 
-// How far the point on the outcome's files line is undone: 'undone' | 'partial' | ''
-export const undoneMark = (point) => (!point || point.unreadable ? '' : undone(point) ? 'undone' : partly(point) ? 'partial' : '');
+// How far the point on the outcome's files line is undone: 'undone' | 'partial' | 'unrestorable' | ''
+export const undoneMark = (point) => (!point || point.unreadable ? '' : undone(point) ? 'undone' : lost(point) ? 'unrestorable' : partly(point) ? 'partial' : '');
 
 export const undoneText = (at, fmt = formatWhen) => (at ? `These changes were undone at ${fmt(at)}.` : 'These changes were undone.');
-export const partialText = (p) => `Partly undone: ${p.remaining} of ${plural(p.files, 'file')} kept as ${asIs(p.remaining)}.`;
+// after undoneText or a partial undo: the files without a backup, '' for none or a server that does not count them
+export const leftText = (p) => {
+  const n = counted(p) ? p.unrestorable : 0;
+  return n ? ` ${plural(n, 'file')} had no backup and stayed as the run left ${n === 1 ? 'it' : 'them'}.` : '';
+};
+const partOf = (p) => (counted(p) ? `${p.undone} of ${plural(p.files, 'file')} undone, ${p.remaining} still to undo.${leftText(p)}`
+  : `${p.remaining} of ${plural(p.files, 'file')} kept as ${asIs(p.remaining)}.`);
+export const partialText = (p) => `Partly undone: ${partOf(p)}`;
+export const unrestorableText = (p) => `These changes cannot be undone: no backup exists for ${p.unrestorable === 1 ? 'the file' : `the ${p.unrestorable} files`}.`;
 
 // The Changes panel of an undone run: its diff and list are what the run did. '' for a run that is not undone.
 export function changesNote(point, fmt = formatWhen) {
   const mark = undoneMark(point);
-  if (mark === 'undone') return `${undoneText(point.undoneAt, fmt)} ${AS_DONE}`;
-  if (mark === 'partial') return `These changes were partly undone: ${point.remaining} of ${plural(point.files, 'file')} kept as ${asIs(point.remaining)}. ${AS_DONE}`;
+  if (mark === 'undone') return `${undoneText(point.undoneAt, fmt)}${leftText(point)} ${AS_DONE}`;
+  if (mark === 'partial') return `These changes were partly undone: ${partOf(point)} ${AS_DONE}`;
+  if (mark === 'unrestorable') return unrestorableText(point);
   return '';
 }
 
@@ -133,18 +153,21 @@ export function changesNote(point, fmt = formatWhen) {
 export function undoQuestion(folder, point = null) {
   const where = folder ? ` in ${folder}` : '';
   const kept = 'A file that is no longer as the run left it is kept as it is and listed afterwards. Git history and the chat stay as they are.';
+  const k = counted(point ?? {}) ? point.unrestorable : 0;
+  const bare = k === 1 ? ' 1 file cannot be put back because no backup exists for it; it stays as the run left it.'
+    : k ? ` ${k} files cannot be put back because no backup exists for them; they stay as the run left them.` : '';
   if (partly(point ?? {})) {
     const n = point.remaining;
     return {
       title: 'Continue the undo of this run?',
-      detail: `The ${plural(n, 'file')} of this run that ${n === 1 ? 'was' : 'were'} kept${where} ${n === 1 ? 'is' : 'are'} tried again: what the run replaced or deleted is put back, and what it created is removed. ${kept}`,
+      detail: `The ${plural(n, 'file')} of this run that ${n === 1 ? 'was' : 'were'} kept${where} ${n === 1 ? 'is' : 'are'} tried again: what the run replaced or deleted is put back, and what it created is removed.${bare} ${kept}`,
       ok: 'Undo changes',
     };
   }
   const many = Number.isInteger(point?.files) && point.files > 0 ? ` The restore point holds ${plural(point.files, 'file')}.` : '';
   return {
     title: 'Undo the changes of this run?',
-    detail: `The files this run replaced or deleted${where} are put back, and the files it created are removed.${many} A file that was changed after the run is kept as it is and listed afterwards. Git history and the chat stay as they are.`,
+    detail: `The files this run replaced or deleted${where} are put back, and the files it created are removed.${many}${bare} A file that was changed after the run is kept as it is and listed afterwards. Git history and the chat stay as they are.`,
     ok: 'Undo changes',
   };
 }

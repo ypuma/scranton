@@ -151,7 +151,7 @@ export function createRunRail({
       e.oFilesText.dataset.key = key;
       e.oFilesText.replaceChildren(
         `${plural(n, 'file')} ${kept ? 'changed in' : 'written by the agents for'} `, el('span', 'mono', where),
-        ...(mark ? [mark === 'undone' ? ' · undone' : ' · partly undone'] : []),
+        ...(mark ? [{ undone: ' · undone', partial: ' · partly undone', unrestorable: ' · cannot be undone' }[mark]] : []),
       );
     }
     e.oChanges.hidden = !openChanges;

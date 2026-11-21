@@ -22,7 +22,9 @@ export function formatRunSummary(orchestrator, result, durationMs) {
     if (files.length > 20) lines.push(`  ... and ${files.length - 20} more`);
     if (files.length && !orchestrator.standaloneAgent) {
       try {
-        if (listRestorePoints(orchestrator.config.hiveDir).some((p) => p.runId === orchestrator.runId && !p.unreadable && !p.undoneAt)) lines.push(`Undo: scranton undo --hive ${quotePathArgument(orchestrator.config.hiveDir)} --run ${orchestrator.runId}`);
+        const point = listRestorePoints(orchestrator.config.hiveDir).find((p) => p.runId === orchestrator.runId && !p.unreadable);
+        if (point?.remaining > 0) lines.push(`Undo: scranton undo --hive ${quotePathArgument(orchestrator.config.hiveDir)} --run ${orchestrator.runId}`);
+        if (point?.unrestorable > 0) lines.push(`Not restorable: ${point.unrestorable} ${point.unrestorable === 1 ? 'file has' : 'files have'} no backup.`);
       } catch { lines.push('Undo: restore point could not be inspected'); }
     }
   } else lines.push('Workspace changes: not recorded');

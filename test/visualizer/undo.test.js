@@ -764,3 +764,72 @@ test('warnings of an undo are listed after its result as text; the newer 409 sen
     assert.equal(e.$('confirm-error').textContent, sentence);
   }
 });
+
+// a server that also counts the files undone and the files without a usable backup (larger than 16 MiB, say)
+const COUNTED = { ...POINT, undone: 0, unrestorable: 0 };
+const AS_DONE = 'The list and the diff below show what the run did, not the folder as it is now.';
+const changesText = (h) => {
+  const side = createSidePanel({});
+  side.render(h.state.view, null, h.undo.note('r1'));
+  return shown(h.$('changes-undone')) ? h.$('changes-undone').textContent : '';
+};
+
+test('a counting server: files without a backup before any undo are no partial undo; the confirmation says how many stay', async () => {
+  const h = await harness({ points: [{ ...COUNTED, remaining: 2, unrestorable: 1 }] });
+  assert.deepEqual(undoTexts(h.$), ['Undo these changes']);
+  assert.equal(h.$('rail-outcome-files-text').textContent, `3 files changed in ${FOLDER}`);
+  assert.equal(changesText(h), '');
+  await h.$('rail-undo-run').click();
+  assert.equal(h.$('confirm-title').textContent, 'Undo the changes of this run?');
+  assert.equal(h.$('confirm-detail').textContent, `The files this run replaced or deleted in ${FOLDER} are put back, and the files it created are removed. The restore point holds 3 files. 1 file cannot be put back because no backup exists for it; it stays as the run left it. A file that was changed after the run is kept as it is and listed afterwards. Git history and the chat stay as they are.`);
+  await h.$('confirm-ok').click();
+  assert.deepEqual(h.posts().map((r) => r.body), [{ runId: 'r1' }]);
+  const two = await harness({ points: [{ ...COUNTED, remaining: 1, unrestorable: 2 }] });
+  await two.$('rail-undo-run').click();
+  assert.match(two.$('confirm-detail').textContent, / 2 files cannot be put back because no backup exists for them; they stay as the run left them\. /);
+});
+
+test('a counting server: a run whose files all have no backup cannot be undone, and nothing calls it undone', async () => {
+  const h = await harness({ points: [{ ...COUNTED, remaining: 0, unrestorable: 3 }] });
+  const text = 'These changes cannot be undone: no backup exists for the 3 files.';
+  assert.deepEqual(undoTexts(h.$), [text]);
+  assert.equal(shown(h.$('rail-undo-run')), false);
+  assert.equal(h.$('rail-outcome-files-text').textContent, `3 files changed in ${FOLDER} · cannot be undone`);
+  assert.equal(changesText(h), text);
+  assert.equal(undoState({ runId: 'r1', over: true, team: true }, [{ ...COUNTED, remaining: 0, unrestorable: 3, unreadable: false }]), 'unrestorable');
+  // undo works backwards: a later point with nothing left holds nothing back
+  const later = await harness({ points: [{ ...COUNTED, runId: 'r2', remaining: 0, unrestorable: 2 }, POINT] });
+  assert.deepEqual(undoTexts(later.$), ['Undo these changes']);
+  const one = await harness({ points: [{ ...COUNTED, files: 1, remaining: 0, unrestorable: 1 }] });
+  assert.deepEqual(undoTexts(one.$), ['These changes cannot be undone: no backup exists for the file.']);
+});
+
+test('a counting server: partly undone with the true numbers, and the undo can go on', async () => {
+  const h = await harness({ points: [{ ...COUNTED, files: 4, remaining: 1, undone: 2, unrestorable: 1 }] });
+  const part = '2 of 4 files undone, 1 still to undo. 1 file had no backup and stayed as the run left it.';
+  assert.deepEqual(undoTexts(h.$), [`Partly undone: ${part}`, 'Continue the undo']);
+  assert.equal(h.$('rail-outcome-files-text').textContent, `4 files changed in ${FOLDER} · partly undone`);
+  assert.equal(changesText(h), `These changes were partly undone: ${part} ${AS_DONE}`);
+  const plain = await harness({ points: [{ ...COUNTED, remaining: 2, undone: 1 }] });
+  assert.deepEqual(undoTexts(plain.$), ['Partly undone: 1 of 3 files undone, 2 still to undo.', 'Continue the undo']);
+});
+
+test('a counting server: undone with the time, and how many files had no backup', async () => {
+  const h = await harness({ points: [{ ...COUNTED, undoneAt: UNDONE_AT, remaining: 0, undone: 1, unrestorable: 2 }] });
+  const text = `These changes were undone at ${formatWhen(UNDONE_AT)}. 2 files had no backup and stayed as the run left them.`;
+  assert.deepEqual(undoTexts(h.$), [text]);
+  assert.equal(h.$('rail-outcome-files-text').textContent, `3 files changed in ${FOLDER} · undone`);
+  assert.equal(changesText(h), `${text} ${AS_DONE}`);
+  const timeless = await harness({ points: [{ ...COUNTED, remaining: 0, undone: 3 }] });
+  assert.deepEqual(undoTexts(timeless.$), ['These changes were undone.']);
+});
+
+test('an older server without the two counts, or with only one of them: remaining alone decides, as before', async () => {
+  const doc = parseRestorePoints({ points: [{ ...POINT, remaining: 1 }, { ...POINT, runId: 'r0', remaining: 2, undone: 0 }] });
+  assert.deepEqual(doc.points.map(Object.keys), [Object.keys({ ...POINT, unreadable: false }), Object.keys({ ...POINT, unreadable: false })]);
+  const h = await harness({ points: [{ ...POINT, remaining: 2, unrestorable: 1 }] });
+  assert.deepEqual(undoTexts(h.$), ['Partly undone: 2 of 3 files kept as they are.', 'Continue the undo']);
+  const none = await harness({ points: [{ ...POINT, remaining: 0 }] });
+  assert.deepEqual(undoTexts(none.$), ['These changes were undone.']);
+  assert.equal(none.$('rail-outcome-files-text').textContent, `3 files changed in ${FOLDER} · undone`);
+});

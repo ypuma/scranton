@@ -380,11 +380,18 @@ async function cmdUndo(args, values, io) {
   try {
     if (values.list) {
       const points = listRestorePoints(hiveDir);
-      io.stdout.write(terminalText(points.length ? points.map((p) => p.unreadable ? `${p.runId} | unreadable` : `${p.runId} | ${p.createdAt} | ${p.files} files | ${p.remaining} remaining | ${p.undoneAt || p.remaining === 0 ? 'undone' : 'not undone'}`).join('\n') + '\n' : 'No restore points available.\n'));
+      io.stdout.write(terminalText(points.length ? points.map((p) => {
+        if (p.unreadable) return `${p.runId} | unreadable`;
+        const missing = `no backup for ${p.unrestorable} file${p.unrestorable === 1 ? '' : 's'}`;
+        const state = p.undone === p.files ? 'undone' : p.undone ? `partly undone (${p.undone} of ${p.files})` : p.remaining ? 'files still to undo' : `nothing can be undone (${missing})`;
+        const backup = p.unrestorable && (p.remaining || p.undone) ? `; ${missing}` : '';
+        return `${p.runId} | ${p.createdAt} | ${p.files} files | ${p.remaining} remaining | ${state}${backup}`;
+      }).join('\n') + '\n' : 'No restore points available.\n'));
       return 0;
     }
     const result = await undoRun({ hiveDir, runId: values.run, force: values.force ?? false, siblings });
     io.stdout.write(terminalText(`Undo run: ${result.runId}\n${result.restored.map((p) => `Restored: ${p}\n`).join('')}${result.removed.map((p) => `Removed: ${p}\n`).join('')}`));
+    if (!result.restored.length && !result.removed.length && result.conflicts.length && result.conflicts.every((c) => c.code === 'unrestorable')) io.stdout.write(`Nothing could be undone: no backup for ${result.conflicts.length} file${result.conflicts.length === 1 ? '' : 's'}.\n`);
     for (const warning of result.warnings) io.stderr.write(terminalText(`Warning: ${warning}\n`));
     for (const c of result.conflicts) io.stderr.write(terminalText(`${c.code === 'blocked' ? 'Blocked' : 'Conflict'}: ${c.path}: ${c.reason}${c.code === 'changed' ? `; to overwrite later edits: scranton undo ${scope} --run ${result.runId} --force` : c.code === 'blocked' ? '' : '; --force cannot bypass safety or backup limits'}.\n`));
     return result.conflicts.length ? 1 : 0;

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { WorktreeManager } from '../../src/core/worktree.js';
 import { listRestorePoints, undoRun, workspaceState, prepareRestorePoint, MAX_PREIMAGE_BYTES } from '../../src/core/restore-points.js';
 
-const scratch = path.resolve('.scratch/usability/fix5/restore');
+const scratch = path.resolve('.scratch/usability/fix6/restore');
 fs.mkdirSync(scratch, { recursive: true });
 const write = (dir, name, data) => { const file = path.join(dir, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); };
 const read = (dir, name) => fs.readFileSync(path.join(dir, name), 'utf8');
@@ -594,4 +594,59 @@ test('fix5: conflict continues and directory removals each yield an event-loop t
   assert.equal(reads, 4); assert.equal(removals, 4);
   assert.deepEqual(result.conflicts.map((c) => c.code), Array(4).fill('changed')); assert.deepEqual(result.warnings, []);
   assert.equal(result.removed.length, 4);
+});
+
+function tree(root) {
+  return fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).map((e) => e.isDirectory() ? [e.name, tree(path.join(root, e.name))] : [e.name, fs.readFileSync(path.join(root, e.name)).toString('hex')]);
+}
+
+test('fix6 A: file to directory integrates and one undo restores the exact tree', async (t) => {
+  const f = fixture(t); write(f.workspace, 'a', 'original'); const before = tree(f.workspace), m = await manager(t, f);
+  await integrate(m, 'm1', (dir) => { fs.unlinkSync(path.join(dir, 'a')); write(dir, 'a/b', 'created'); });
+  assert.equal(read(f.workspace, 'a/b'), 'created'); assert.equal(listRestorePoints(f.hiveDir)[0].files, 2);
+  assert.deepEqual(manifest(f).files.map((e) => e.path), ['a', 'a/b']);
+  assert.deepEqual(await undoRun({ hiveDir: f.hiveDir }), { runId: 'run', restored: ['a'], removed: ['a/b'], conflicts: [], warnings: [] });
+  assert.deepEqual(tree(f.workspace), before);
+});
+
+test('fix6 A: directory to file keeps the released integration refusal and tree', async (t) => {
+  const f = fixture(t); write(f.workspace, 'a/b', 'original'); const before = tree(f.workspace), m = await manager(t, f);
+  await assert.rejects(integrate(m, 'm1', (dir) => { fs.rmSync(path.join(dir, 'a'), { recursive: true }); write(dir, 'a', 'created'); }), /Not an independent regular file: a/);
+  assert.deepEqual(tree(f.workspace), before); assert.deepEqual(listRestorePoints(f.hiveDir), []);
+});
+
+test('fix6 A: reverse-shaped point removes the created file before recreating original parents', async (t) => {
+  const f = fixture(t); write(f.workspace, 'a/b', 'original'); const before = tree(f.workspace);
+  const initial = new Map([['a/b', entry('original')]]), after = new Map([['a', entry('created')]]);
+  prepareRestorePoint({ ...f, runId: 'run', changes: ['a', 'a/b'], before: initial, initial, after }).commit();
+  fs.rmSync(path.join(f.workspace, 'a'), { recursive: true }); write(f.workspace, 'a', 'created');
+  assert.deepEqual(manifest(f).files.map((e) => e.path), ['a', 'a/b']);
+  assert.deepEqual(await undoRun({ hiveDir: f.hiveDir }), { runId: 'run', restored: ['a/b'], removed: ['a'], conflicts: [], warnings: [] });
+  assert.deepEqual(tree(f.workspace), before);
+});
+
+for (const damage of ['link', 'preimages-file']) test(`fix6 A: ${damage} backup is permanently unrestorable`, async (t) => {
+  const f = fixture(t); record(f, 'run'); write(f.workspace, 'file', 'after');
+  const blob = path.join(path.dirname(manifestPath(f)), manifest(f).files[0].preimage); fs.unlinkSync(blob);
+  if (damage === 'link') { fs.mkdirSync(path.join(f.root, 'outside')); fs.symlinkSync(path.join(f.root, 'outside'), blob, 'junction'); }
+  else { fs.rmdirSync(path.dirname(blob)); fs.writeFileSync(path.dirname(blob), 'not a directory'); }
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).conflicts, [{ path: 'file', reason: 'Invalid pre-image', code: 'unrestorable' }]);
+  assert.ok(manifest(f).undoneAt); assert.equal(read(f.workspace, 'file'), 'after');
+});
+
+test('fix6 B: listing separates open, undone and unrestorable files before and after undo', async (t) => {
+  const f = fixture(t), large = { ...entry(''), data: Buffer.alloc(MAX_PREIMAGE_BYTES + 1) };
+  const initial = new Map([['large', large], ['one', entry('before')], ['two', entry('before')]]), after = new Map([...initial.keys()].map((name) => [name, entry('after')]));
+  prepareRestorePoint({ ...f, runId: 'run', changes: [...initial.keys()], before: initial, initial, after }).commit();
+  for (const name of initial.keys()) write(f.workspace, name, name === 'two' ? 'human' : 'after');
+  const counts = () => { const { files, remaining, undone, unrestorable } = listRestorePoints(f.hiveDir)[0]; return { files, remaining, undone, unrestorable }; };
+  assert.deepEqual(counts(), { files: 3, remaining: 2, undone: 0, unrestorable: 1 });
+  await undoRun({ hiveDir: f.hiveDir }); assert.deepEqual(counts(), { files: 3, remaining: 1, undone: 1, unrestorable: 1 });
+  await undoRun({ hiveDir: f.hiveDir, force: true }); assert.deepEqual(counts(), { files: 3, remaining: 0, undone: 2, unrestorable: 1 });
+});
+
+test('fix6 B: default undo reports and settles a point with no backups', async (t) => {
+  const f = fixture(t); record(f, 'run', 'large', { ...entry(''), data: Buffer.alloc(MAX_PREIMAGE_BYTES + 1) });
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).conflicts, [{ path: 'large', reason: 'Pre-image exceeds 16777216 bytes', code: 'unrestorable' }]);
+  assert.ok(manifest(f).undoneAt);
 });

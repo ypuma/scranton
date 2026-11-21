@@ -6,7 +6,7 @@ import { startPi } from '../../src/core/pi-runner.js';
 import { fakeConfig } from './helpers.js';
 
 function fixture(t) {
-  const root = path.resolve('.scratch/usability/fix3/transport');
+  const root = path.resolve('.scratch/usability/fix6/transport');
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'transport-'));
   const script = path.join(dir, 'pi.mjs'), runners = [];
@@ -259,5 +259,36 @@ test('fix5: single-line credentials straddling either cut retain no token fragme
     for (const redact of [piErrorText, piErrorTail]) {
       const result = redact(input, {}); assert.doesNotMatch(result, /private|rivate|ivate/); assert.match(result, /401 end$/);
     }
+  }
+});
+
+test('fix6 C: every window alignment across a credential label and value hides all secret fragments', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const secret = 'Q7mR2vX9pL4zT6kN'.repeat(510), segment = 'api_key:\n' + secret;
+  const fragments = new Set(Array.from({ length: secret.length - 3 }, (_, i) => secret.slice(i, i + 4)));
+  for (let offset = 0; offset <= segment.length; offset++) {
+    const suffix = '\n401 end\n', padding = ' '.repeat(8192 - (segment.length - offset + suffix.length));
+    const input = 'old banner\n' + segment + suffix + padding;
+    for (const redact of [piErrorText, piErrorTail]) {
+      const result = redact(input, {});
+      for (const fragment of fragments) assert.ok(!result.includes(fragment), `cut ${offset}: ${redact.name} leaked a secret fragment`);
+    }
+  }
+});
+
+test('fix6 C: an ordinary complete first line at the window boundary is kept', async () => {
+  const { piErrorText } = await import('../../src/core/pi-rpc-session.js');
+  const tail = 'x'.repeat(8160) + '401 ordinary diagnostic\n401 end\n';
+  assert.equal(tail.length, 8192);
+  assert.match(piErrorText('old banner\n' + tail, {}), /401 ordinary diagnostic\n401 end$/);
+});
+
+test('fix6 C: original credential labels with long spacing still mask the next-line value', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  for (const label of ['api_key', 'access_token', 'refresh_token', 'id_token', 'client_secret', 'password', 'authorization', 'cookie', 'set-cookie']) {
+    const value = 'Q7mR2vX9'.repeat(1021), tail = '\n' + value + '\n401 end';
+    assert.equal(tail.length, 8177);
+    const input = label + ' '.repeat(400) + ':' + tail + ' '.repeat(8192 - tail.length);
+    for (const redact of [piErrorText, piErrorTail]) assert.ok(!redact(input, {}).includes('Q7mR'), label);
   }
 });
