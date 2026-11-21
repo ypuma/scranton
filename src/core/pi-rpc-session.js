@@ -25,12 +25,18 @@ export function piErrorText(value, env, cut = false) {
     const newline = text.indexOf('\n');
     if (newline !== -1) {
       const p = start + (start > 0 && original[start - 1] === '\n' && !/^\r?\n/.test(text) && !/[:=][ \t"'\r]*$/.test(text.slice(0, newline)) ? 0 : newline + 1);
-      const previous = original.slice(original.lastIndexOf('\n', p - 2) + 1, p - 1);
+      let end = p;
+      const limit = Math.max(0, p - 4096);
+      while (end > limit && /\s/.test(original[end - 1])) end--;
+      let previous = end > limit ? original.slice(Math.max(0, end - 256), end) : '';
+      previous = previous.slice(previous.lastIndexOf('\n') + 1);
       text = text.slice(p - start);
-      if (/[:=][ \t"'\r]*$/.test(previous)) text = text.replace(/^[^\n]*(?:\n|$)/, '[redacted]\n');
+      if (/[:=][ \t"'\r]*$/.test(previous)) text = text.replace(/^\s*[^\n]*(?:\n|$)/, '[redacted]\n');
     } else {
-      // Without a line boundary, suppress the unlabelled token fragment, not the cause after it.
-      text = text.replace(/^[^"']*["']|^\S+/, '[redacted]');
+      // A label may precede the cut; the 256-character floor must not weaken quoted-value masking.
+      const a = text.match(/^[^"']*["']|^\S+/)?.[0].length ?? 0;
+      const b = text.match(/^[\s\S]{0,256}\S*/)[0].length;
+      text = '[redacted]' + text.slice(Math.max(a, b));
       marked = true;
     }
   }

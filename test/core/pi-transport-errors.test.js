@@ -6,7 +6,7 @@ import { startPi } from '../../src/core/pi-runner.js';
 import { fakeConfig } from './helpers.js';
 
 function fixture(t) {
-  const root = path.resolve('.scratch/usability/fix7/transport');
+  const root = path.resolve('.scratch/usability/fix8/transport');
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'transport-'));
   const script = path.join(dir, 'pi.mjs'), runners = [];
@@ -293,6 +293,13 @@ test('fix6 C: original credential labels with long spacing still mask the next-l
   }
 });
 
+function windowAt(segment, suffix, offset) {
+  const padding = '\r'.repeat(8192 - (segment.length - offset + suffix.length));
+  const input = 'old banner\n' + segment + suffix + padding;
+  assert.equal(input.length - 8192, 'old banner\n'.length + offset);
+  return input;
+}
+
 for (const label of ['api_key:', 'OPENAI_API_KEY:', 'GITHUB_TOKEN=', 'private_key:', 'Authorization:', '"client_secret" :', 'arbitrary label =\t"\'']) test(`fix7: every window alignment across ${label} hides the next-line secret`, async () => {
   const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
   const secret = 'Q7mR2vX9pL4zT6kN'.repeat(8);
@@ -300,9 +307,7 @@ for (const label of ['api_key:', 'OPENAI_API_KEY:', 'GITHUB_TOKEN=', 'private_ke
   for (const eol of ['\n', '\r\n']) {
     const segment = label + eol + secret, suffix = eol + '401 end' + eol;
     for (let offset = 0; offset < segment.length; offset++) {
-      const padding = '\r'.repeat(8192 - (segment.length - offset + suffix.length));
-      const input = 'old banner\n' + segment + suffix + padding;
-      assert.equal(input.length - 8192, 'old banner\n'.length + offset);
+      const input = windowAt(segment, suffix, offset);
       for (const redact of [piErrorText, piErrorTail]) {
         const result = redact(input, {});
         for (const fragment of fragments) assert.ok(!result.includes(fragment), `cut ${offset}: ${redact.name} leaked a secret fragment`);
@@ -334,4 +339,41 @@ test('fix7: ordinary multiline errors and complete lines after an ordinary cut l
       assert.equal(redact(input, {}), ordinary);
     }
   }
+});
+
+for (const label of ['api_key:', 'OPENAI_API_KEY:', 'GITHUB_TOKEN=', 'private_key:', 'Authorization:', '"client_secret" :']) {
+  for (const separator of ['\n\n', '\n\n\n', '\r\n\r\n', '\n \t\n']) test(`fix8: blank-separated ${label} ${JSON.stringify(separator)} hides every cut alignment`, async () => {
+    const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+    const secret = 'Q7mR2vX9pL4zT6kN'.repeat(8), segment = label + separator + secret;
+    const fragments = new Set(Array.from({ length: secret.length - 7 }, (_, i) => secret.slice(i, i + 8)));
+    const leaks = [];
+    for (let offset = 0; offset < segment.length; offset++) {
+      const input = windowAt(segment, '\n401 end\n', offset);
+      for (const redact of [piErrorText, piErrorTail]) {
+        const result = redact(input, {});
+        if ([...fragments].some(fragment => result.includes(fragment))) leaks.push(`${redact.name}@${offset}`);
+        assert.match(result, /401 end$/);
+      }
+    }
+    assert.deepEqual(leaks, []);
+  });
+}
+
+test('fix8: single-line credential shapes hide every cut alignment', async () => {
+  const { piErrorText, piErrorTail } = await import('../../src/core/pi-rpc-session.js');
+  const secret = 'Q7mR2vX9pL4zT6kN'.repeat(8);
+  const fragments = new Set(Array.from({ length: secret.length - 7 }, (_, i) => secret.slice(i, i + 8)));
+  const leaks = [];
+  for (const shape of ['api_key: SECRET', 'api_key = SECRET', 'api_key: "SECRET"', '"api_key": "SECRET"', 'token=SECRET']) {
+    const segment = shape.replace('SECRET', secret);
+    for (let offset = 0; offset < segment.indexOf(secret) + secret.length; offset++) {
+      const input = windowAt(segment, ' 401 end', offset);
+      assert.ok(!input.slice(-8192).includes('\n'));
+      for (const redact of [piErrorText, piErrorTail]) {
+        const result = redact(input, {});
+        if ([...fragments].some(fragment => result.includes(fragment))) leaks.push(`${shape}: ${redact.name}@${offset}`);
+      }
+    }
+  }
+  assert.deepEqual(leaks, []);
 });
