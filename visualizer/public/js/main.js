@@ -7,9 +7,11 @@ import { createControlPanel } from './control-panel.js';
 import { createLanes } from './lanes.js';
 import { createChatPanel } from './chat-panel.js';
 import { createAccountsPanel, createModelPicker } from './accounts-panel.js';
+import { accountsMissing } from './accounts.js';
 import { createAgentsPanel } from './agents-panel.js';
 import { createDreamingPanel } from './dreaming-panel.js';
 import { createContextPanel } from './context-panel.js';
+import { createUndo } from './undo-panel.js';
 import { CLIENT_HEADERS } from './control.js';
 import { createScope, parseHash, hashFor, pickScope, scopeGone, findProject, chatEngine } from './scope.js';
 import { createPipelineForm } from './pipeline-form.js';
@@ -246,9 +248,28 @@ $('usage-panel').append(usages.dash.el);
 $('pv-usage').append(usages.details.el);
 const boardDialog = $('board-dialog');
 $('board-dialog-close').addEventListener('click', () => boardDialog.close());
+// a finished team run's restore point: "Undo these changes" under its outcome
+const undo = createUndo({
+  getProjects: () => nav?.doc() ?? null,
+  confirm: (opts) => control.confirm(opts),
+  active: () => (control?.snapshot().gates.recovery ? 'recovery' : control?.snapshot().gates.alive ? 'run' : null),
+  announce: (text) => { $('control-announcer').textContent = text; },
+  onChange: () => schedule(),
+  // the folder is not what it was: the sidebar reads its counts again. The run's diff is what the run did and stays;
+  // the Changes panel says above it that the run was undone, from the points read again.
+  onUndone: () => {
+    nav?.refresh();
+    schedule();
+  },
+});
 const rail = createRunRail({
+  undo,
   viewMode: () => viewMode.get(),
   liveOff: () => livePoll.off(),
+  // a pipeline run's changes wait as a patch until they are approved, so only a team run names the folder
+  folder: () => (engine === 'team' ? view().workspace || findProject(nav?.doc(), scope.get()?.project)?.workspace || null : null),
+  openChanges: () => side.set('changes', { focus: true }),
+  earlier: () => Boolean(replay),
   openBoard: () => {
     if (boardDialog.open) return;
     renderActivity();
@@ -276,7 +297,7 @@ function renderActivity(v = view()) {
   $('board-dialog-aside').textContent = summary;
   rail.render(rv);
   renderThinking(rv);
-  side.render(rv, engine === 'pipeline' ? pipelineView.changes() : teamChanges(rv, summary));
+  side.render(rv, engine === 'pipeline' ? pipelineView.changes() : teamChanges(rv, summary), engine === 'pipeline' ? '' : undo.note(rv.runId));
   livePoll.sync();
 }
 
@@ -348,7 +369,13 @@ control = createControlPanel({
     settle();
   },
 });
-accounts = createAccountsPanel({ getControl: () => control.snapshot(), confirm: control.confirm, onChange: (list) => models.setAccounts(list) });
+accounts = createAccountsPanel({
+  getControl: () => control.snapshot(), confirm: control.confirm,
+  onChange: (list) => {
+    models.setAccounts(list);
+    thread?.render();
+  },
+});
 // a created, changed or deleted agent changes the gates and agent defaults the New run drawer offers
 agents = createAgentsPanel({ getControl: () => control.snapshot(), confirm: control.confirm, onChange: () => control.refresh() });
 // a project's Dreams: opened from the sidebar, never moves the page to another chat
@@ -424,6 +451,7 @@ function bind(next) {
   thinking.reset();
   thread.setScope();
   context.setScope(scope.get());
+  undo.setScope(scope.get());
   nav.render();
   attach();
   schedule();
@@ -487,6 +515,7 @@ nav = createNav({
     dreams.projects(doc);
     // a run of the chat on screen that finished shows here first, for either engine
     context.projects(doc);
+    undo.projects(doc);
     if (projectsMode && scopeGone(doc, scope.get())) follow({ replace: true });
     else if (projectsMode && bound && applyEngine()) {
       forgetLive();
@@ -496,6 +525,7 @@ nav = createNav({
       chatView.reset();
       livePoll.reset();
       rail.reset();
+      undo.setScope(scope.get());
       attach();
       schedule();
     }
@@ -523,6 +553,11 @@ thread = createThread({
       return r;
     },
     options: (opts) => pipelineView.newRun(opts),
+  },
+  // the empty states of a fresh installation lead to Accounts; an unknown account list claims nothing
+  accounts: {
+    missing: () => accountsMissing(accounts, models.catalog()),
+    open: () => accounts?.open({ returnTo: $('thread-empty-action') }),
   },
 });
 

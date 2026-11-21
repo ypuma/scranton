@@ -16,6 +16,10 @@ const enc = encodeURIComponent;
 // the maxlength of #p-folder
 const FOLDER_MAX = 1024;
 const SINGLE_DREAMS = 'Dreams need the project registry; this server serves a single project.';
+const FOLDER_HINT = 'Absolute path of the folder the agents work in.';
+// root: the folder GET /api/projects names as projectsRoot; a server from before it sends none
+export const folderHint = (root) => `${FOLDER_HINT} Leave it empty to create a new folder for the project ${root
+  ? `in ${root}` : 'under Documents/Scranton/projects in your user folder'}.`;
 
 // The desktop app's folder picker (Tauri dialog plugin). A browser never hands out an absolute path, so it has none.
 function dialogInvoke() {
@@ -56,7 +60,7 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce, o
     behind: [document.querySelector('.topbar'), $('main-col')],
     pDialog: $('project-dialog'), pForm: $('project-form'), pName: $('p-name'), pFolder: $('p-folder'), pCreate: $('p-create'),
     pCreateRow: $('p-create-row'), pError: $('p-error'), pCancel: $('p-cancel'), pSubmit: $('p-submit'),
-    pBrowse: $('p-browse'), pBrowseStatus: $('p-browse-status'),
+    pBrowse: $('p-browse'), pBrowseStatus: $('p-browse-status'), pFolderHint: $('p-folder-hint'),
     rnDialog: $('rename-dialog'), rnForm: $('rename-form'), rnTitle: $('rn-title'), rnLabel: $('rn-label'), rnInput: $('rn-input'),
     rnError: $('rn-error'), rnCancel: $('rn-cancel'), rnSubmit: $('rn-submit'),
     rmDialog: $('remove-dialog'), rmForm: $('remove-form'), rmTitle: $('rm-title'), rmDetail: $('rm-detail'), rmHistoryRow: $('rm-history-row'),
@@ -496,7 +500,9 @@ export function createNav({ getScope, navigate, openRun, onProjects, announce, o
     syncCreate();
     picking = null;
     syncBrowse();
-    pickNote('');
+    // a browser cannot open a folder picker: said in the dialog, not only in a tooltip
+    pickNote(dialogInvoke() ? '' : 'Browse works in the Scranton desktop app. In a browser, type or paste the absolute path.');
+    e.pFolderHint.textContent = folderHint(doc?.projectsRoot);
     formError(e.pError, '');
     for (const f of [e.pName, e.pFolder]) f.removeAttribute('aria-invalid');
     openDialog(e.pDialog, async () => {

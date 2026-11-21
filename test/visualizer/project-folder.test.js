@@ -46,6 +46,7 @@ function heldPicker() {
 test('a chosen folder fills the field with the exact path and enables the create option; nothing is posted', async () => {
   const p = heldPicker();
   const h = await harness({ picker: p.invoke });
+  assert.equal(h.$('p-browse-status').textContent, '', 'the desktop app needs no note');
   h.$('p-name').value = 'App';
   assert.equal(h.$('p-create').disabled, true, 'no folder yet');
   const done = h.browse();
@@ -117,6 +118,7 @@ test('in a browser the button is unavailable, explains itself, and never invents
   const h = await harness();
   assert.equal(h.$('p-browse').getAttribute('aria-disabled'), 'true');
   assert.match(h.$('p-browse').title, /desktop app/);
+  assert.equal(h.$('p-browse-status').textContent, 'Browse works in the Scranton desktop app. In a browser, type or paste the absolute path.', 'said in the dialog, not only in a tooltip');
   await h.browse();
   assert.match(h.$('p-browse-status').textContent, /needs the Scranton desktop app\. Type the absolute path instead\./);
   assert.equal(h.$('p-folder').value, '');

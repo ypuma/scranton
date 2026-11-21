@@ -517,6 +517,8 @@ test('sharing switch: POST settings with the control headers, re-rendered from t
   const h = harness();
   await h.scope('a');
   await h.open();
+  // the line under the box says what the box says, not what Off would mean
+  assert.equal(h.$('context-cross-hint').textContent, 'On: the next turn of every chat here also gets a short digest of the other chats of this project. Projects never share anything with each other.');
   const before = h.requests.length;
   h.$('context-cross').checked = false;
   await h.$('context-cross').fire('change');
@@ -527,6 +529,7 @@ test('sharing switch: POST settings with the control headers, re-rendered from t
   assert.deepEqual([reread.method, reread.key], ['GET', 'a:get'], 'the pack follows the setting');
   assert.equal(h.$('context-cross').checked, false);
   assert.match(h.$('context-cross-status').textContent, /^Sharing is off/);
+  assert.match(h.$('context-cross-hint').textContent, /^Off: no chat of this project receives or provides/);
   assert.equal(h.$('context-line-text').textContent, `Context: 5 turns · notes${T}`);
   assert.equal(h.$('context-figures').childNodes[3].textContent, 'Sharing between chats is off');
 

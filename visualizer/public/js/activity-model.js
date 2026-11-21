@@ -3,7 +3,7 @@
 // poll, the Pipeline side the run document its view polls. Pure: no DOM, no fetch.
 import {
   AGENT_IDS, lanesOf, isLive, isBusy, settledStatus, laneGate, gateView, displayName, roleTitle, own, activeRoles, workflowOf, isGate,
-  dependencyState, humanNeeded, customRoles, freshUsage, addUsage, USAGE_POINTS_MAX, TOUCHED_MAX,
+  dependencyState, humanNeeded, customRoles, freshUsage, addUsage, countWritten, USAGE_POINTS_MAX, TOUCHED_MAX,
 } from './state.js';
 import { stripBidi, formatDuration, runElapsed } from './format.js';
 import { ROLE_LABEL, TERMINAL, lastWorkNode, stepper } from './pipeline-model.js';
@@ -502,12 +502,16 @@ export function pipelineUsage(run, list = null) {
 // ------------------------------------------------------------ the run as the panels show it
 
 // state: the reducer state (or its interrupted view). live: { doc, at } of the /live poll, or null.
-// runs: the chat's run list. -> { runId, live, agents, board, usage }
+// runs: the chat's run list. -> { runId, live, agents, board, usage, outcome, written (how many files the agents
+// wrote or edited) }
 export function teamRunView({ state, live = null, runs = [], now = Date.now() } = {}) {
   const going = ['planning', 'running', 'paused'].includes(state?.status);
   const agents = teamAgents(state, going ? liveTails(live, state?.runId, now) : null);
   const board = teamBoard(state, agents);
-  return { runId: state?.runId ?? null, live: going, agents, board, usage: teamUsage(state, runs), outcome: going ? null : teamOutcome(state, board) };
+  return {
+    runId: state?.runId ?? null, live: going, agents, board, usage: teamUsage(state, runs), outcome: going ? null : teamOutcome(state, board),
+    written: countWritten(state),
+  };
 }
 
 // How a run that is over ended, for the head of the run panel: { label, tone: 'ok' | 'warn' | 'bad', unit, done,

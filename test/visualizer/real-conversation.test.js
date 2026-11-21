@@ -108,7 +108,7 @@ test('a conversation run with milestones: reply, totals and statuses as state.js
   assert.equal(replies.length, 1, 'exactly one reply entry');
   assert.equal(entries.at(-1), replies[0], 'and it is the last entry');
   assert.deepEqual([replies[0].replyKind, replies[0].text, replies[0].tone, replies[0].who.name], ['report', snapshot.reply.text, 'ok', 'Michael']);
-  assert.match(replies[0].context, /^Success · 3\/3 milestones · [\d.]+k tokens · \$\d+\.\d+ · \d+s$/);
+  assert.match(replies[0].context, /^Success · 3\/3 milestones · \d+ files? written · [\d.]+k tokens · \$\d+\.\d+ · \d+s$/);
 
   // every agent message of the run is an agent entry, and no mailbox summary doubles one
   const messages = events.filter((e) => e.type === 'agent_message');

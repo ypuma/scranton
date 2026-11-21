@@ -402,6 +402,7 @@ body[data-shell="desktop"] .main { position: relative; }
 .thread-runs select:disabled { opacity: 0.7; }
 .thread-empty { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); color: var(--text-2); }
 .thread-empty strong { color: var(--text); font-weight: 600; }
+.thread-empty-accounts { flex-basis: 100%; font-size: var(--fs-s); }
 .thread > .hitl-status { margin: 0; }
 body[data-scope="none"] #dash,
 body[data-scope="none"] #empty,
@@ -1501,7 +1502,8 @@ dialog[open]::backdrop { opacity: 1; }
 .model-grid { display: grid; gap: var(--s3); min-width: 0; }
 .models[data-demo="true"] .model-grid { opacity: 0.45; }
 .models-need { margin: 0; font-size: var(--fs-s); color: var(--text); }
-.models-signin { margin: 0; padding: var(--s2) 0 0; border-top: 1px solid var(--line); font-size: var(--fs-s); color: var(--text-2); }
+/* outside the Options fold, beside Start: the one thing a first run cannot do without */
+.models-signin { margin: 0; padding: var(--s2) var(--s3); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); font-size: var(--fs-s); color: var(--text); }
 
 /* the gates: one row each, its check on the left and its stage number on the right; a long list scrolls */
 .workflow { gap: var(--s3); }
@@ -1527,7 +1529,7 @@ dialog[open]::backdrop { opacity: 1; }
 .run-options-title::before { content: "+"; display: inline-block; width: 0.875rem; font-family: var(--mono); }
 .run-options[open] .run-options-title::before { content: "-"; }
 .run-options > summary:hover .run-options-title { color: var(--text); }
-.run-options > summary .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-options > summary .hint { min-width: 0; overflow-wrap: anywhere; }
 .run-options > :not(summary) { margin-top: var(--s4); }
 /* why Start cannot be pressed, beside it */
 .run-reason { color: var(--text-2); }
@@ -2153,6 +2155,7 @@ body[data-side] .rail { display: none; }
 
 .changes { overflow: hidden auto; overscroll-behavior: contain; }
 .changes-note { margin: 0; overflow-wrap: anywhere; }
+.changes-undone { margin: 0; padding-left: var(--s3); border-left: 2px solid var(--text); font-size: var(--fs-s); color: var(--text); overflow-wrap: anywhere; }
 .changes-files { flex: none; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .changes-files li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--s3); padding: var(--s2) 0; border-bottom: 1px solid var(--row-line); font-size: var(--fs-s); min-width: 0; }
 .changes-path { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
@@ -2205,6 +2208,17 @@ body[data-side] .rail { display: none; }
 .outcome-result[data-tone="ok"] { color: var(--ok); }
 .outcome-result[data-tone="bad"] { color: var(--bad); }
 .outcome-result[data-tone="warn"] { color: var(--warn); }
+.outcome-files { margin: var(--s3) 0 0; font-size: var(--fs-s); color: var(--text-2); overflow-wrap: anywhere; }
+.outcome-files .mono { color: var(--text); }
+/* undo: the control, or what an undo did, under the files it is about */
+.outcome-undo { display: grid; justify-items: start; gap: var(--s2); min-width: 0; font-size: var(--fs-s); color: var(--text-2); }
+.outcome-undo > p { margin: 0; overflow-wrap: anywhere; }
+.outcome-undo-result { color: var(--text); }
+.outcome-undo-result:focus { outline: none; }
+.outcome-undo-stuck { color: var(--text); }
+.outcome-conflicts { display: grid; gap: var(--s1); margin: 0; padding: 0 0 0 var(--s4); min-width: 0; justify-self: stretch; }
+.outcome-conflicts li { overflow-wrap: anywhere; }
+.outcome-conflicts .mono { color: var(--text); }
 #rail-usage[data-chart="closed"] .usage > :not(.usage-figs) { display: none; }
 .rail-sec > .msg-more { justify-self: start; margin: 0; }
 /* in the drawer of a narrow window the drawer scrolls, not the rail's content */
@@ -2548,6 +2562,7 @@ body[data-scope="none"] #chat-view { display: none; }
 .chat-body .plan-brief-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--s3); }
 .chat-body .plan-brief-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
 .chat-plan { margin-top: var(--s2); }
+.chat-body .chat-raw { margin-top: var(--s3); min-width: 0; }
 .chat-entry[data-kind="agent"] > .chat-plan { margin-left: var(--s3); }
 .md hr { height: 1px; border: 0; background: var(--line); margin: var(--s3) 0; }
 

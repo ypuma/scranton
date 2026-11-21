@@ -78,14 +78,14 @@
       </div>
       <button type="button" class="btn btn-small rail-toggle" id="rail-toggle" aria-expanded="false" aria-controls="run-rail" title="Agents, cost and board of this run" hidden>
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3.5h11v9h-11zM10 3.5v9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
-        <span>Run</span> <span class="mono rail-toggle-fig" id="rail-toggle-fig"></span>
+        <span id="rail-toggle-label">Run</span> <span class="mono rail-toggle-fig" id="rail-toggle-fig"></span>
       </button>
       <div class="thread-runs" id="thread-runs">
         <label class="field-label" for="run-picker">Run</label>
         <select id="run-picker" aria-describedby="thread-status"></select>
       </div>
     </div>
-    <p class="thread-empty" id="thread-empty" hidden><strong id="thread-empty-title">No chat yet</strong> <span id="thread-empty-detail"></span> <button type="button" class="btn btn-small" id="thread-empty-action"></button></p>
+    <p class="thread-empty" id="thread-empty" hidden><strong id="thread-empty-title">No chat yet</strong> <span id="thread-empty-detail"></span> <button type="button" class="btn btn-small" id="thread-empty-action"></button> <span class="thread-empty-accounts" id="thread-empty-accounts" hidden>No account is signed in and no API key was found, so the agents have no model to use unless pi finds a key in the environment. <button type="button" class="link-btn" id="thread-empty-accounts-open">Open Accounts</button></span></p>
     <div class="replay" id="replay-banner" role="status" hidden>
       <span class="replay-mark" aria-hidden="true">◐</span>
       <strong class="replay-title">Viewing earlier run</strong>
@@ -411,6 +411,19 @@
           <div class="outcome-fig" id="rail-outcome-duration-fig"><dt>Duration</dt><dd id="rail-outcome-duration"></dd></div>
           <div class="outcome-fig"><dt>Cost</dt><dd id="rail-outcome-cost"></dd></div>
         </dl>
+        <p class="outcome-files" id="rail-outcome-files" hidden><span id="rail-outcome-files-text"></span> <button type="button" class="link-btn" id="rail-outcome-changes" aria-controls="side-panel">Open changes</button></p>
+        <div class="outcome-undo" id="rail-undo" hidden>
+          <p class="outcome-undone" id="rail-undo-done" hidden></p>
+          <button type="button" class="btn btn-small" id="rail-undo-run" aria-haspopup="dialog" hidden>Undo these changes</button>
+          <p class="outcome-undo-result" id="rail-undo-result" tabindex="-1" hidden></p>
+          <ul class="outcome-conflicts" id="rail-undo-conflicts" aria-labelledby="rail-undo-result" hidden></ul>
+          <p class="outcome-undo-stuck" id="rail-undo-stuck-text" hidden></p>
+          <ul class="outcome-conflicts" id="rail-undo-stuck" aria-labelledby="rail-undo-stuck-text" hidden></ul>
+          <p class="outcome-undo-stuck" id="rail-undo-blocked-text" hidden></p>
+          <ul class="outcome-conflicts" id="rail-undo-blocked" aria-labelledby="rail-undo-blocked-text" hidden></ul>
+          <ul class="outcome-conflicts" id="rail-undo-warnings" aria-label="Warnings of the undo" hidden></ul>
+          <button type="button" class="btn btn-small" id="rail-undo-force" aria-haspopup="dialog" hidden>Overwrite the later changes</button>
+        </div>
       </section>
       <section class="rail-sec" aria-labelledby="rail-agents-title">
         <header class="rail-sec-head">
@@ -465,6 +478,7 @@
       </div>
     </section>
     <section class="side-view changes" id="side-changes" aria-label="Changes of this run" hidden>
+      <p class="changes-undone" id="changes-undone" hidden></p>
       <p class="hint changes-note" id="changes-note"></p>
       <ul class="changes-files" id="changes-files" aria-label="Changed files"></ul>
       <p class="placeholder" id="changes-empty" hidden>No file has been changed in this run yet</p>
@@ -591,8 +605,8 @@
       <div class="drawer-body">
         <div class="field" role="radiogroup" aria-labelledby="f-engine-label" id="f-engine" hidden>
           <span class="field-label" id="f-engine-label">Engine</span>
-          <label class="check"><input type="radio" name="engine" value="team" id="f-engine-team" checked><span>Team <span class="hint">Michael plans milestones, Dwight builds them, the gates check every turn</span></span></label>
-          <label class="check" id="f-engine-pipeline-row"><input type="radio" name="engine" value="pipeline" id="f-engine-pipeline" aria-describedby="f-engine-pipeline-hint"><span>Pipeline <span class="hint" id="f-engine-pipeline-hint">a fixed plan, implement, check and review graph with two approval points</span></span></label>
+          <label class="check"><input type="radio" name="engine" value="team" id="f-engine-team" checked><span>Team <span class="hint">a planner (Michael) splits the request into milestones, a developer (Dwight) builds each one, and reviewers check every turn</span></span></label>
+          <label class="check" id="f-engine-pipeline-row"><input type="radio" name="engine" value="pipeline" id="f-engine-pipeline" aria-describedby="f-engine-pipeline-hint"><span>Pipeline <span class="hint" id="f-engine-pipeline-hint">fixed steps: a planner writes a plan you approve, implementers build it, the project checks and a reviewer verify it, and you approve the changes before they reach the folder</span></span></label>
         </div>
         <p class="form-error team-only" id="config-error" role="alert" hidden></p>
         <div class="field team-only">
@@ -685,7 +699,6 @@
             <p class="hint" id="models-note">Only models of signed-in accounts and configured API keys can be picked. pi default uses the model from the agent configuration.</p>
           </details>
           <p class="hint" id="models-docker-note" hidden></p>
-          <p class="models-signin" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use.</span> <button type="button" class="link-btn" id="models-accounts">Open Accounts</button></p>
         </fieldset>
         <details class="advanced team-only" id="run-advanced">
           <summary>Advanced</summary>
@@ -709,6 +722,7 @@
           </div>
         </details>
         </details>
+        <p class="models-signin team-only" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use unless pi finds a key in the environment.</span> <button type="button" class="link-btn" id="models-accounts">Open Accounts</button></p>
         <label class="check trust team-only" id="f-trust-row"><input type="checkbox" id="f-trusted" name="trustedHost"><span>I trust this request and workspace, and accept that the agents run without a sandbox <span class="hint" id="f-trust-kept" hidden>accepted for this chat</span></span></label>
         <div class="pf" id="pipeline-fields" hidden>
           <p class="form-error" id="pf-unavailable" role="alert" hidden></p>
@@ -1369,7 +1383,7 @@
           <form class="keyform" id="context-project" novalidate aria-labelledby="context-project-title">
             <h3 class="keyform-title" id="context-project-title">Project <span class="hint" id="context-project-name"></span></h3>
             <p class="form-error" id="context-project-error" role="alert" hidden></p>
-            <label class="check" id="context-cross-row"><input type="checkbox" id="context-cross"><span>Share context between the chats of this project<span class="hint">Off: no chat of this project receives or provides the other chats part. Projects never share anything with each other.</span></span></label>
+            <label class="check" id="context-cross-row"><input type="checkbox" id="context-cross"><span>Share context between the chats of this project<span class="hint" id="context-cross-hint">Off: no chat of this project receives or provides the other chats part. Projects never share anything with each other.</span></span></label>
             <span class="hint form-status" id="context-cross-status" role="status" aria-live="polite"></span>
             <div class="field">
               <label for="context-notes">Project notes <span class="hint">standing preferences for every chat of this project</span></label>
@@ -1416,7 +1430,7 @@
           <input id="p-folder" class="mono" type="text" maxlength="1024" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="C:\Users\you\code\app" aria-describedby="p-folder-hint p-browse-status">
           <button type="button" class="btn" id="p-browse" aria-describedby="p-browse-status">Browse...</button>
         </div>
-        <span class="hint" id="p-folder-hint">Absolute path of the folder the agents work in. Leave it empty to create a new folder under the default projects folder.</span>
+        <span class="hint" id="p-folder-hint">Absolute path of the folder the agents work in. Leave it empty to create a new folder for the project under Documents/Scranton/projects in your user folder.</span>
         <span class="hint form-status" id="p-browse-status" role="status" aria-live="polite"></span>
       </div>
       <label class="check" id="p-create-row"><input type="checkbox" id="p-create" checked><span>Create the folder if it does not exist</span></label>

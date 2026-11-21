@@ -1018,7 +1018,11 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
     // switching between Docker and the trusted host shows the agent defaults or the stored picks again
     if (filledDocker !== null && filledDocker !== docker()) fill(true);
     e.fields.hidden = support !== 'yes';
-    if (support !== 'yes') return;
+    // the sign-in note sits beside Start, outside the fields: it goes with them
+    if (support !== 'yes') {
+      e.signin.hidden = true;
+      return;
+    }
     const locked = docker();
     e.fields.dataset.demo = String(ctx.demo);
     e.fields.dataset.docker = String(locked);
@@ -1049,7 +1053,8 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
   }
 
   for (const role of MODEL_ROLES) listen(role);
-  e.signinBtn.addEventListener('click', () => openAccounts({ returnTo: e.selects.michael }));
+  // a sign-in hides the note; the selects may be folded away under Options, Start is always there
+  e.signinBtn.addEventListener('click', () => openAccounts({ returnTo: $('run-submit') }));
   // the Agents drawer opens over the New run drawer; a save there polls the control document, which syncs here
   e.agents.addEventListener('click', () => openAgents());
 
@@ -1072,6 +1077,8 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
       syncRoles();
       return buildModels(values(), catalog, { names: ctx.names, ...run });
     },
+    // the model list as last read, null before: the empty states decide their sign-in note from it too
+    catalog: () => (support === 'yes' ? catalog : null),
     // the select of a role, for an error that names it (a custom gate's select has no fixed id)
     field: (role) => (Object.hasOwn(e.selects, role) ? e.selects[role] : null),
     // where a missing agent default is fixed, when the selects are locked; null without an Agents drawer

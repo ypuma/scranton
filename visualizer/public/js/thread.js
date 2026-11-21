@@ -37,11 +37,13 @@ async function getDoc(url) {
 // pipeline: the run composer of a pipeline chat, which starts runs through the pipeline routes:
 //   { gate() -> { loaded, active, runs } (pipeline-model.js pipelineComposerGate), note() -> { text, tone } | null,
 //     start(task) -> what control.startFollowUp answers, options({ task, problem, onStarted }) }
-export function createThread({ scope, nav, control, onReplay, view = () => 'dashboard', hasRun = () => false, onRuns = null, keepEvent = () => true, pipeline = null }) {
+// accounts: { missing() -> true when nobody is signed in and no key is known, open() } for the empty states; null: none
+export function createThread({ scope, nav, control, onReplay, view = () => 'dashboard', hasRun = () => false, onRuns = null, keepEvent = () => true, pipeline = null, accounts = null }) {
   const e = {
     root: $('thread'), project: $('thread-project'), sep: $('thread-sep'), title: $('thread-title'), state: $('thread-state'), rename: $('thread-rename'),
     runs: $('thread-runs'), picker: $('run-picker'), status: $('thread-status'),
     empty: $('thread-empty'), emptyTitle: $('thread-empty-title'), emptyDetail: $('thread-empty-detail'), emptyAction: $('thread-empty-action'),
+    emptyAccounts: $('thread-empty-accounts'), emptyAccountsOpen: $('thread-empty-accounts-open'),
     banner: $('replay-banner'), bannerDetail: $('replay-detail'), back: $('replay-back'),
     form: $('followup'), label: $('followup-label'), text: $('followup-text'), send: $('followup-send'), options: $('followup-options'),
     hint: $('followup-hint'), count: $('followup-count'), fStatus: $('followup-status'), fix: $('followup-fix'),
@@ -138,6 +140,8 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
       e.emptyAction.hidden = doc.mode === 'single' || !p;
       emptyAction = () => p && nav.newChat(p.id);
     }
+    // before the first run: a run without a model fails at its first agent
+    e.emptyAccounts.hidden = !accounts?.missing();
   }
 
   function render() {
@@ -261,6 +265,7 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     if (s?.chat && !e.rename.hidden) nav.rename('chat', s);
   });
   e.emptyAction.addEventListener('click', () => emptyAction?.());
+  e.emptyAccountsOpen.addEventListener('click', () => accounts?.open());
 
   // ------------------------------------------------------------ follow up
   function setProblem(next) {

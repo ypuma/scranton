@@ -7,6 +7,8 @@ import { RAIL_KEY, RAIL_WIDE, railMode, parseRailChoice, liveLine, boardSummary,
 import { STATUS_GLYPH } from './pipeline.js';
 import { createLiveBlock } from './agent-live.js';
 import { createUsage, usageFigures } from './usage-chart.js';
+import { plural } from './format.js';
+import { undoneMark } from './undo.js';
 
 // agents listed before "Show all"; the ones that are active are always among them
 export const RAIL_AGENTS_SHOWN = 6;
@@ -41,15 +43,21 @@ export function railAgents(agents, all = false) {
 
 // viewMode(): 'chat' | 'dashboard'. openBoard(): show the whole board. liveOff(): the chat's server has no /live.
 // media: the query that says the window has room for the rail beside the transcript.
-export function createRunRail({ viewMode, openBoard, liveOff = () => false, media = matchMedia(RAIL_WIDE) }) {
+// folder(): where the run's changes are, for its outcome (null: the engine keeps them elsewhere). openChanges(): the
+// Changes side panel. earlier(): an earlier run of the chat is on screen, not its last one. undo: the outcome's
+// "Undo these changes" (undo-panel.js), told which run it is under; its point(runId) is the run's restore point.
+export function createRunRail({
+  viewMode, openBoard, liveOff = () => false, media = matchMedia(RAIL_WIDE), folder = () => null, openChanges = null, earlier = () => false, undo = null,
+}) {
   const e = {
     rail: $('run-rail'), body: $('rail-body'), close: $('rail-close'), status: $('rail-status'),
-    toggle: $('rail-toggle'), toggleFig: $('rail-toggle-fig'), line: $('run-live-line'), lineText: $('run-live-text'),
+    toggle: $('rail-toggle'), toggleLabel: $('rail-toggle-label'), toggleFig: $('rail-toggle-fig'), line: $('run-live-line'), lineText: $('run-live-text'),
     dialog: $('rail-dialog'), dialogBody: $('rail-dialog-body'), dialogClose: $('rail-dialog-close'),
     agents: $('rail-agents'), agentsTitle: $('rail-agents-title'), agentsAside: $('rail-agents-aside'), agentsEmpty: $('rail-agents-empty'), agentsMore: $('rail-agents-more'),
     liveNote: $('rail-live-note'), usage: $('rail-usage'), usageMore: $('rail-usage-more'),
     outcome: $('rail-outcome'), oResult: $('rail-outcome-result'), oUnit: $('rail-outcome-unit'), oDone: $('rail-outcome-done'), oDoneFig: $('rail-outcome-done-fig'),
     oDuration: $('rail-outcome-duration'), oDurationFig: $('rail-outcome-duration-fig'), oCost: $('rail-outcome-cost'),
+    oFiles: $('rail-outcome-files'), oFilesText: $('rail-outcome-files-text'), oChanges: $('rail-outcome-changes'),
     board: $('rail-board'), boardSummary: $('rail-board-summary'), boardNotice: $('rail-board-notice'),
   };
   const usage = createUsage({ height: 132, id: 'rail-usage' });
@@ -129,6 +137,25 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
       e.oDurationFig.hidden = !o.duration;
       say(e.oCost, usageFigures(view.usage).cost);
     }
+    // what the run produced and where: what its restore point wrote into the folder, else what the agents wrote,
+    // which may never have reached it (a milestone that was not integrated)
+    const point = o ? undo?.point?.(view.runId) ?? null : null;
+    const kept = Number.isInteger(point?.files) && !point.unreadable;
+    const n = o ? (kept ? point.files : view.written ?? 0) : 0;
+    const dir = o ? folder() : null;
+    const where = n ? dir : null;
+    const mark = kept ? undoneMark(point) : '';
+    const key = `${n}|${where}|${kept}|${mark}`;
+    e.oFiles.hidden = !where;
+    if (where && e.oFilesText.dataset.key !== key) {
+      e.oFilesText.dataset.key = key;
+      e.oFilesText.replaceChildren(
+        `${plural(n, 'file')} ${kept ? 'changed in' : 'written by the agents for'} `, el('span', 'mono', where),
+        ...(mark ? [mark === 'undone' ? ' · undone' : ' · partly undone'] : []),
+      );
+    }
+    e.oChanges.hidden = !openChanges;
+    undo?.render({ runId: view.runId, over: Boolean(o) && !view.live, folder: dir });
     if (chart.run !== view.runId) chart = { run: view.runId, open: false };
     const open = view.live || chart.open;
     e.usage.dataset.chart = open ? 'open' : 'closed';
@@ -155,8 +182,10 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
     view = next;
     if (!view) return;
     const m = sync();
-    // the cost stays on screen while the rail is not: the toggle carries it
-    say(e.toggleFig, view.runId ? usageFigures(view.usage).cost : '');
+    // the cost stays on screen while the rail is not: the toggle carries it, and says which run it is the cost of
+    const figs = view.runId ? usageFigures(view.usage) : null;
+    say(e.toggleLabel, view.live || earlier() || !view.runId ? 'Run' : 'Last run');
+    say(e.toggleFig, figs ? `${figs.cost}${figs.chat && !earlier() ? ` \u00b7 chat ${figs.chat.cost}` : ''}` : '');
     const line = liveLine(view, m);
     e.line.hidden = !line;
     say(e.lineText, line);
@@ -214,6 +243,12 @@ export function createRunRail({ viewMode, openBoard, liveOff = () => false, medi
     render();
   });
   e.board.addEventListener('click', () => openBoard?.());
+  e.oChanges.addEventListener('click', () => {
+    // the panel opens beside the transcript; a rail shown as a drawer would cover it, and hands the focus back first
+    if (!overlay) return openChanges?.();
+    e.dialog.addEventListener('close', () => openChanges?.(), { once: true });
+    e.dialog.close();
+  });
   media.addEventListener?.('change', () => render());
 
   return {

@@ -127,7 +127,8 @@ test('an agent message: the keyword as a quiet chip, an intermediate one lighter
   assert.equal(note.dataset.final, 'false');
   assert.equal(final.dataset.final, 'true');
   assert.equal(note.querySelector('.badge'), null);
-  assert.deepEqual([final.querySelector('.chat-keyword').textContent, final.querySelector('.chat-keyword').dataset.tone], ['TASK_COMPLETE', 'quiet']);
+  const chip = final.querySelector('.chat-keyword');
+  assert.deepEqual([chip.textContent, chip.dataset.tone, chip.dataset.keyword, chip.title], ['Work done', 'quiet', 'TASK_COMPLETE', '[TASK_COMPLETE]']);
   assert.equal(final.querySelector('.chat-body').textContent, 'Implemented m2.', 'the keyword line is not shown twice');
   assert.deepEqual(final.querySelector('.chat-head').children.map((n) => n.textContent).slice(0, 3), ['Dwight', 'Developer', 'm2 · cycle 1']);
   assert.equal(final.querySelector('.chat-note').textContent, 'This text was shortened.');

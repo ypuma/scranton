@@ -439,7 +439,8 @@ export function createControlPanel({
     const replay = replaying();
     e.newRun.setAttribute('aria-disabled', String(alive || g.recovery || replay));
     e.newRun.title = replay ? 'Showing an earlier run (read only) - go back to live to start a run'
-      : alive ? 'A run is in progress' : g.recovery ? 'Recovery required - an earlier run still holds this chat' : 'Start a run';
+      : alive ? `A run is in progress in this chat${workspace() ? '. For another run at the same time, start a new chat with + in the sidebar' : ''}`
+        : g.recovery ? 'Recovery required - an earlier run still holds this chat' : 'Start a run';
     if (!alive && document.activeElement === e.stop) e.newRun.focus();
     e.stop.hidden = !alive || readOnly;
     e.stop.setAttribute('aria-disabled', String(stopping));
@@ -704,7 +705,7 @@ export function createControlPanel({
     const to = pin('stop');
     confirm({
       title: 'Stop the run?',
-      detail: 'The orchestrator ends the active agent and finishes the run as aborted. If the process has not exited 15 s later, the server kills it.',
+      detail: 'The orchestrator ends the active agent and finishes the run as aborted. Nothing is undone: what already reached the project folder stays there. If the process has not exited 15 s later, the server kills it.',
       ok: 'Stop run',
       scoped: to,
       action: async () => {
@@ -847,16 +848,18 @@ export function createControlPanel({
     if (built.field !== 'workflow') firstGate()?.removeAttribute('aria-invalid');
     for (const [id, row] of gateRows) if (built.field !== `stage.${id}`) row.stage.removeAttribute('aria-invalid');
     models?.sync({ demo, host: e.fHost.checked, noPlan: e.fNoPlan.checked, configured: control.models, gates: stages, agents: control.agents, names });
-    syncOptions(demo ? null : bad ? 'workflow needs a fix' : workflowText(stages, names));
+    syncOptions(demo ? null : bad ? 'Checks: the workflow needs a fix' : `Checks: ${stages.map((stage) => workflowText([stage], names)).join(', then ')}`);
   }
 
-  // What the closed Options fold holds, in a line: the gates, where the agents run, how many milestones at once.
+  // What the closed Options fold holds, in words a first run can read: the checks, the sandbox, how many milestones
+  // at once.
   let gatesLine = '';
   function syncOptions(gatesText = gatesLine) {
     gatesLine = gatesText;
     const n = Number(e.fParallel.value.trim() || e.fParallel.placeholder);
     e.optionsSummary.textContent = gatesText === null ? `Demo with scripted agents${e.fScenario.value ? `: ${e.fScenario.value}` : ''}` : [
-      gatesText, e.fHost.checked ? 'this computer' : 'Docker', n > 1 ? `${n} in parallel` : 'one at a time', e.fNoPlan.checked && 'no planning',
+      gatesText, e.fHost.checked ? 'no sandbox' : 'Docker sandbox', n > 1 ? `up to ${n} milestones at once` : 'one milestone at a time',
+      e.fNoPlan.checked && 'no planning',
     ].filter(Boolean).join(' \u00b7 ');
   }
 
@@ -933,8 +936,9 @@ export function createControlPanel({
     const input = fieldInput(field);
     if (!input) return;
     input.setAttribute('aria-invalid', 'true');
-    // everything but the request and the acknowledgement lives in the Options fold: a mistake there opens it
-    if (input !== e.fRequest && input !== e.fTrusted) e.options.open = true;
+    // everything but the request lives in the Options fold or is answered there: a missing acknowledgement opens
+    // it too, so the Docker sandbox its message offers is on screen
+    if (input !== e.fRequest) e.options.open = true;
     if (e.advanced.contains(input)) e.advanced.open = true;
     if (!input.disabled) return input.focus();
     // a select locked to its agent default (Docker) cannot take focus: Agents fixes it, else the message is read
@@ -989,7 +993,8 @@ export function createControlPanel({
 
   e.newRun.addEventListener('click', () => {
     if (onNewRun()) return;
-    if (e.newRun.getAttribute('aria-disabled') === 'true') return;
+    // a button that does nothing says why, for those who never see its tooltip
+    if (e.newRun.getAttribute('aria-disabled') === 'true') return say(e.newRun.title);
     openRun();
   });
   for (const b of e.runForm.querySelectorAll('[data-close]')) b.addEventListener('click', () => e.runDialog.close());

@@ -7,8 +7,24 @@ const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' &&
 
 // The plan the planner wrote as its message: JSON ({ milestones: [...] }), usually in a fenced block and followed
 // by its keyword. null: the text is something else, and is shown as it is. No DOM here: the adapters use it.
+// A message that ends on [PLAN_READY] may say a line before its fenced block; any other message has to be the plan.
+// A fence inside one of the plan's strings ends the shortest block early, so the block up to the last fence and the
+// whole message are tried after it.
 export function parsePlanText(raw) {
-  const body = text(raw).trim().replace(/\n?\[[A-Z][A-Z_]*\]$/, '').trim().replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+  const t = text(raw).trim();
+  const bare = t.replace(/\n?\[[A-Z][A-Z_]*\]$/, '').trim();
+  const fenced = /\[PLAN_READY\]$/.test(t)
+    ? [/```[a-z]*[ \t]*\n([\s\S]*?)\n?```/i, /```[a-z]*[ \t]*\n([\s\S]*)\n?```/i].map((re) => re.exec(bare)?.[1].trim())
+    : [];
+  const whole = bare.replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+  for (const body of [...fenced, whole]) {
+    const plan = body ? planFrom(body) : null;
+    if (plan) return plan;
+  }
+  return null;
+}
+
+function planFrom(body) {
   if (!body.startsWith('{')) return null;
   let doc;
   try { doc = JSON.parse(body); } catch { return null; }

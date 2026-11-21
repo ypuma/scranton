@@ -55,7 +55,8 @@ test('every event type becomes its entry, in order, with a unique id and a known
     { who: { id: 'dwight', name: 'Dwight', title: 'Developer' }, context: 'm1 · cycle 1', text: 'Reading the parser first.', final: false, truncated: false });
   assert.deepEqual(pick(out[4], ['who', 'context', 'text', 'tone']), { who: { id: 'dwight', name: 'Dwight', title: 'Developer' }, context: 'm1', text: 'read src/cli.js', tone: null });
   assert.equal(out[5].final, true);
-  assert.deepEqual(pick(out[6], ['who', 'context', 'text', 'tone']), { who: { id: 'oscar', name: 'Oscar', title: 'Reviewer' }, context: 'm1 · cycle 1', text: 'gate passed [REVIEW_APPROVED]', tone: 'ok' });
+  assert.deepEqual(pick(out[6], ['who', 'context', 'text', 'tone']), { who: { id: 'oscar', name: 'Oscar', title: 'Reviewer' }, context: 'm1 · cycle 1', text: 'Approved', tone: 'ok' });
+  assert.equal(out[6].keyword, 'REVIEW_APPROVED', 'the verdict in the run panel\'s words, the keyword kept beside it');
   assert.deepEqual(pick(out[7], ['text', 'tone']), { text: 'm1 cycle 1 passed: All gates passed', tone: 'ok' });
   assert.deepEqual(pick(out[8], ['text', 'tone']), { text: 'm1 passed', tone: 'ok' });
   assert.deepEqual(pick(out[9], ['kind', 'who', 'context', 'text', 'tone']), { kind: 'human', who: { id: 'human', name: 'You', title: '' }, context: 'to dwight-m1', text: 'Keep it short.', tone: null });
@@ -202,7 +203,7 @@ test('the bundled demo recording reads as a conversation with one reply', () => 
   assert.match(out[0].text, /^Build a tiny todo CLI/);
   assert.equal(out.filter((x) => x.kind === 'reply').length, 1);
   assert.deepEqual(pick(out.at(-1), ['kind', 'replyKind', 'text', 'tone']), { kind: 'reply', replyKind: 'summary', text: 'All 3 milestones passed', tone: 'ok' });
-  assert.match(out.at(-1).context, /^Success · 3\/3 milestones · [\d.]+k tokens · \$\d+\.\d+ · \dm \d\ds$/);
+  assert.match(out.at(-1).context, /^Success · 3\/3 milestones · 3 files written · [\d.]+k tokens · \$\d+\.\d+ · \dm \d\ds$/);
   assert.ok(out.filter((x) => x.kind === 'agent').length >= 8, 'tasks, handoffs and bug reports');
   assert.deepEqual(out.filter((x) => x.kind === 'question').map((x) => x.tone), [null], 'the question of the recording was answered');
   assert.ok(out.some((x) => x.kind === 'human' && /^You chose Feedback for Dwight\n\nTreat a missing todos\.json/.test(x.text)));

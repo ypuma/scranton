@@ -65,7 +65,7 @@ export function createSidePanel({ onChange } = {}) {
     plan: $('plan-body'), planEmpty: $('plan-empty'), boardPlan: $('board-plan'),
     form: $('browser-form'), url: $('browser-url'), reload: $('browser-reload'), status: $('browser-status'),
     empty: $('browser-empty'), frame: $('browser-frame'),
-    note: $('changes-note'), files: $('changes-files'), none: $('changes-empty'), diff: $('changes-diff'),
+    note: $('changes-note'), undone: $('changes-undone'), files: $('changes-files'), none: $('changes-empty'), diff: $('changes-diff'),
   };
   let open = parseSide(store.get(SIDE_KEY));
   let shown = '';
@@ -151,7 +151,8 @@ export function createSidePanel({ onChange } = {}) {
   if (open === 'browser' && e.url.value) show(e.url.value, { quiet: true });
 
   // rv: the run view on screen. diff: a pipeline chat's diff artifact ({ content, loading, error, truncated }) or null.
-  function render(rv, diff = null) {
+  // undone: what an undo of the run changed since (undo.js changesNote), '' for none.
+  function render(rv, diff = null, undone = '') {
     const plan = planOf(rv?.board);
     const nextPlan = JSON.stringify(plan);
     if (nextPlan !== planKey) {
@@ -164,9 +165,11 @@ export function createSidePanel({ onChange } = {}) {
       if (open === 'plan') e.aside.textContent = asides.plan;
     }
     const files = changedFiles(rv?.agents);
-    const key = JSON.stringify([rv?.runId, files, diff?.key, diff?.loading, diff?.error, Boolean(diff?.content), diff?.known]);
+    const key = JSON.stringify([rv?.runId, files, diff?.key, diff?.loading, diff?.error, Boolean(diff?.content), diff?.known, undone]);
     if (key === changesKey) return;
     changesKey = key;
+    e.undone.hidden = !undone;
+    e.undone.textContent = undone;
     e.files.replaceChildren(...files.map((f) => {
       const li = el('li');
       const path = el('span', 'changes-path mono', f.path);

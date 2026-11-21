@@ -36,7 +36,7 @@ function el(tag, cls, text) {
 }
 
 // GET without a body, POST as JSON with the control headers. -> { ok, status, data }; status 0 = no answer
-async function request(url, { body, signal } = {}) {
+export async function request(url, { body, signal } = {}) {
   try {
     const r = await fetch(url, body === undefined
       ? { cache: 'no-store', headers: CLIENT_HEADERS, signal }
@@ -68,7 +68,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
     historyNote: $('context-history-note'), reset: $('context-reset'), restore: $('context-restore'), actionStatus: $('context-action-status'),
     confirmBox: $('context-reset-confirm'), question: $('context-reset-question'), resetCancel: $('context-reset-cancel'), resetOk: $('context-reset-ok'),
     form: $('context-project'), projectName: $('context-project-name'), projectError: $('context-project-error'),
-    crossRow: $('context-cross-row'), cross: $('context-cross'), crossStatus: $('context-cross-status'),
+    crossRow: $('context-cross-row'), cross: $('context-cross'), crossHint: $('context-cross-hint'), crossStatus: $('context-cross-status'),
     notes: $('context-notes'), count: $('context-notes-count'), notesError: $('context-notes-error'), notesStatus: $('context-notes-status'),
     undo: $('context-notes-undo'), save: $('context-notes-save'), foot: $('context-foot'),
   };
@@ -262,6 +262,9 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
     return ok ? {} : { error: UNREADABLE };
   }
 
+  const crossHint = (on) => `${on
+    ? 'On: the next turn of every chat here also gets a short digest of the other chats of this project.'
+    : 'Off: no chat of this project receives or provides the other chats part.'} Projects never share anything with each other.`;
   const crossText = (on) => (on
     ? 'Sharing is on. The chats of this project see a short digest of each other\'s turns.'
     : 'Sharing is off. No chat of this project receives or provides the other chats part.');
@@ -456,6 +459,8 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
     showError(e.projectError, projectError);
     const shared = (pdoc ?? d).settings.crossChat;
     if (busy !== 'settings') e.cross.checked = shared;
+    // the line under the box says what the box says now
+    setText(e.crossHint, crossHint(e.cross.checked));
     e.cross.disabled = Boolean(busy) || !pdoc;
     e.crossRow.dataset.disabled = String(e.cross.disabled);
     e.notes.disabled = !pdoc || busy === 'notes';

@@ -24,6 +24,9 @@ export const FAILURE_TEXT_MAX = 2000;
 // points the usage series keeps.
 export const TOUCHED_MAX = 8;
 export const USAGE_POINTS_MAX = 120;
+// The paths of the files a run wrote that are kept, newest last, as many as the log keeps rows: a path that fell out
+// of them and is written again counts once more.
+export const WRITTEN_MAX = LOG_SIZE;
 const FILE_TOOLS = { read: 'read', write: 'write', edit: 'edit' };
 const SHELL_TOOLS = new Set(['bash', 'powershell']);
 // Instance states after which nothing is delivered any more (the control route's list, plus the view-only
@@ -300,6 +303,9 @@ export function createState() {
     usage: freshUsage(),
     // per instance: the agent_usage deltas folded since its last agent_finished
     usagePending: {},
+    // the files the run's agents wrote or edited (writtenFile): how many, each once, and the last WRITTEN_MAX of them
+    written: [],
+    writtenCount: 0,
   };
 }
 
@@ -567,6 +573,8 @@ function apply(s, e) {
         x.updatedAt = e.ts ?? null;
         touch(x, call, e.ts ?? null);
       }
+      const file = writtenFile(e);
+      if (file) noteWritten(s, file);
       break;
     }
 
@@ -749,6 +757,26 @@ function toolCall(e) {
     targetFile: text(e.targetFile) || (Object.hasOwn(FILE_TOOLS, tool) ? text(detail) : '') || null,
     command: text(e.command) || (SHELL_TOOLS.has(tool) ? text(detail) : '') || null,
   };
+}
+
+// The file an agent_tool event wrote or edited, '' for any other event. What "N files written" counts, in the run
+// rail and under the reply in the Chat view alike.
+export function writtenFile(e) {
+  if (e?.type !== 'agent_tool' || (e.tool !== 'write' && e.tool !== 'edit')) return '';
+  return toolCall(e).targetFile ?? '';
+}
+
+// How many files the run's agents wrote, as "N files written" says it.
+export const countWritten = (s) => (Number.isInteger(s?.writtenCount) ? s.writtenCount : Array.isArray(s?.written) ? s.written.length : 0);
+
+function noteWritten(s, file) {
+  const count = countWritten(s);
+  const list = (s.written ??= []);
+  const at = list.lastIndexOf(file);
+  if (at >= 0) list.splice(at, 1);
+  s.writtenCount = at >= 0 ? count : count + 1;
+  list.push(file);
+  if (list.length > WRITTEN_MAX) list.splice(0, list.length - WRITTEN_MAX);
 }
 
 // newest first, each path once

@@ -616,3 +616,8 @@ export function credentialHint({ accounts = null, catalog = null }) {
   if (!accounts && !catalog) return false;
   return !(accounts ?? []).some((a) => a.status === 'signed_in') && !(catalog?.providers ?? []).some((p) => p.signedIn);
 }
+
+// The empty states of a fresh installation lead to Accounts: only where its panel can open and, as the New run note
+// decides it, nobody is signed in and no provider has a key. panel: the Accounts panel (accounts-panel.js) or null;
+// catalog: the model list the New run drawer read last, or null.
+export const accountsMissing = (panel, catalog = null) => Boolean(panel?.available()) && credentialHint({ accounts: panel.accounts(), catalog });

@@ -136,6 +136,8 @@ export function parseProjects(doc) {
     maxConcurrentRuns: Number.isInteger(doc.maxConcurrentRuns) && doc.maxConcurrentRuns > 0 ? doc.maxConcurrentRuns : null,
     running: count(doc.running),
     projects,
+    // where a project without a folder of its own is created; a server from before it sends none
+    projectsRoot: typeof doc.projectsRoot === 'string' && doc.projectsRoot.length <= 1024 && isAbsolutePath(str(doc.projectsRoot)) ? str(doc.projectsRoot) : null,
   };
 }
 

@@ -1,6 +1,6 @@
 // The pi team as a conversation: Contract v1 events (docs/EVENTS.md, conversation mode included) and the run list
 // of a chat -> the engine-neutral entries of the Chat view (chat-entries.js). Pure: no DOM, no fetch.
-import { displayName, roleTitle, roleOf } from './state.js';
+import { displayName, roleTitle, roleOf, gateLabel, writtenFile, countWritten } from './state.js';
 import { formatTokens, formatCost, formatDuration } from './format.js';
 import { DECISION_LABEL } from './control.js';
 import { CHAT_MAX } from './chat.js';
@@ -50,12 +50,14 @@ const routeTone = (delivery) => (delivery === 'rejected' ? 'fail' : delivery ===
 // delivered and rejected are final, and a late queued echo does not undo an unknown outcome (as the reducer)
 const keeps = (was, next) => was === 'delivered' || was === 'rejected' || (was === 'unknown' && next === 'queued');
 
-// The line under a reply: the outcome, then the totals the run line shows.
-function outcome(status, t) {
+// The line under a reply: the outcome, then the totals the run line shows. files: how many the agents wrote or
+// edited, as the run rail counts them; whether they reached the folder only the restore point says.
+function outcome(status, t, files) {
   const end = Date.parse(t.finishedAt ?? '') - Date.parse(t.startedAt ?? '');
   return [
     OUTCOME[status] ?? cleanLine(status, 24),
     t.total ? `${t.passed}/${t.total} milestones` : '',
+    files ? `${files} file${files === 1 ? '' : 's'} written` : '',
     t.turns ? `${formatTokens(t.input + t.output)} tokens` : '',
     t.turns ? formatCost(t.cost) : '',
     Number.isFinite(end) && end >= 0 ? formatDuration(end) : '',
@@ -85,7 +87,7 @@ function detail(runId, events, { state, listed, outbox }) {
   // the last message of every instance, and the lines of milestones that were aborted
   const spoken = new Map();
   const aborted = [];
-  const t = { input: 0, output: 0, cost: 0, turns: 0, passed: 0, total: 0, startedAt: null, finishedAt: null };
+  const t = { input: 0, output: 0, cost: 0, turns: 0, passed: 0, total: 0, files: new Set(), startedAt: null, finishedAt: null };
   let asked = null;
   let reply = null;
   let request = null;
@@ -134,6 +136,8 @@ function detail(runId, events, { state, listed, outbox }) {
       // the tools an instance uses between two of its messages are one line: how many, and the last one
       case 'agent_tool': {
         const key = e.instanceId || e.agent;
+        const file = writtenFile(e);
+        if (file) t.files.add(file);
         const call = cleanLine(`${e.tool ?? ''} ${e.detail ?? ''}`, 160);
         const open = tools.get(key);
         if (open) {
@@ -193,7 +197,9 @@ function detail(runId, events, { state, listed, outbox }) {
       case 'gate_result':
         out.push({
           id: `gate-${runId}-${e.seq}`, runId, kind: 'activity', ts: ts(e), who: sender(e.agent, names), context: where(e.milestoneId, e.cycle),
-          text: cleanLine(`gate ${e.result}${e.keyword ? ` [${e.keyword}]` : ''}`, 120), tone: GATE_TONE[e.result] ?? 'warn',
+          // the run panel's words for the verdict; the keyword goes with it, out of the line
+          text: cleanLine(gateLabel(roleOf(e.agent, names) ?? e.agent, e.result), 120), tone: GATE_TONE[e.result] ?? 'warn',
+          ...(e.keyword ? { keyword: cleanLine(e.keyword, 40) } : {}),
         });
         break;
 
@@ -267,7 +273,8 @@ function detail(runId, events, { state, listed, outbox }) {
           out.push(reply);
         }
         reply.tone = e.status === 'success' ? 'ok' : 'fail';
-        reply.context = outcome(e.status, t);
+        // the run on screen: the reducer saw all of its events, a page's buffer may have dropped early ones
+        reply.context = outcome(e.status, t, state?.runId === runId && Array.isArray(state.written) ? countWritten(state) : t.files.size);
         // an aborted run names its aborted milestones in its reply: their own lines would say it again
         if (e.status === 'aborted') for (const x of aborted) out.splice(out.indexOf(x), 1);
         break;

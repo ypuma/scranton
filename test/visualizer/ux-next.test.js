@@ -54,13 +54,13 @@ test('New run: the request, Options in one closed fold with its choices in a lin
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.equal(h.$('run-options').open, false);
-  assert.equal(h.$('run-options-summary').textContent, 'Review + Security → Tests · this computer · 3 in parallel');
+  assert.equal(h.$('run-options-summary').textContent, 'Checks: Review + Security, then Tests · no sandbox · up to 3 milestones at once');
   assert.equal(h.$('run-busy').hidden, true);
   assert.equal(h.$('run-submit').disabled, false);
   await h.sandbox(false);
   h.$('f-parallel').value = '1';
   await h.$('f-parallel').fire('input');
-  assert.equal(h.$('run-options-summary').textContent, 'Review + Security → Tests · Docker · one at a time');
+  assert.equal(h.$('run-options-summary').textContent, 'Checks: Review + Security, then Tests · Docker sandbox · one milestone at a time');
   // a mistake inside the fold opens it; one in the request does not
   await h.sandbox(true);
   h.$('f-request').value = '';

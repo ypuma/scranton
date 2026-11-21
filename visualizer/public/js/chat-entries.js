@@ -4,9 +4,10 @@
 //
 // Entry: { id, runId, kind: 'request' | 'agent' | 'activity' | 'human' | 'question' | 'reply', ts,
 //          who?: { id, name, title }, context?, text?, final?, truncated?, tone?: 'ok' | 'fail' | 'warn' | null,
-//          replyKind?: 'answer' | 'report' | 'summary' | 'result' }
+//          replyKind?: 'answer' | 'report' | 'summary' | 'result', keyword?: the protocol keyword behind an activity line }
 // A reply's context is its outcome line; a question with tone 'warn' is still waiting for its answer.
 import { stripBidi, formatWhen } from './format.js';
+import { gateLabel } from './state.js';
 
 export const ENTRY_KINDS = ['request', 'agent', 'activity', 'human', 'question', 'reply'];
 export const REPLY_KINDS = ['answer', 'report', 'summary', 'result'];
@@ -43,6 +44,17 @@ export function splitKeyword(text) {
   const m = /^\s*\[([A-Z][A-Z0-9_]{1,39})\]$/.exec(t.slice(at + 1));
   return m ? { text: t.slice(0, Math.max(0, at)).replace(/\s+$/, ''), keyword: m[1] } : { text: t, keyword: null };
 }
+
+// What a handoff keyword says, in the words the run panel uses for the same verdict (state.js gateLabel). A keyword
+// of a custom agent has no such words and is shown as it is. The planner's ANSWER_READY and REPORT_READY end its
+// direct answer and closing report in conversation mode (orchestrator.js).
+const KEYWORD_WORDS = {
+  PLAN_READY: 'Plan ready', ANSWER_READY: 'Answer ready', REPORT_READY: 'Report ready', TASK_COMPLETE: 'Work done', BLOCKED: 'Blocked',
+  REVIEW_APPROVED: gateLabel('oscar', 'passed'), CHANGES_REQUESTED: gateLabel('oscar', 'failed'),
+  SECURITY_PASSED: gateLabel('hank', 'passed'), SECURITY_ISSUES: gateLabel('hank', 'failed'),
+  TEST_PASSED: gateLabel('angela', 'passed'), TEST_FAILED: gateLabel('angela', 'failed'),
+};
+export const keywordWords = (keyword) => (Object.hasOwn(KEYWORD_WORDS, keyword) ? KEYWORD_WORDS[keyword] : keyword);
 
 export function isLong(text) {
   const t = String(text ?? '');

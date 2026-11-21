@@ -1,7 +1,7 @@
 // The Chat view: a chat's runs as one conversation, drawn from the engine-neutral entries of an adapter
 // (.enma/chat-view-contract.md section 7, chat-entries.js). It never reads an engine's events itself, and model
 // text only ever becomes text nodes.
-import { groupRuns, runDigest, followers, splitKeyword, isLong, entryKey, entryLabel, announcement, REPLY_LABEL } from './chat-entries.js';
+import { groupRuns, runDigest, followers, splitKeyword, keywordWords, isLong, entryKey, entryLabel, announcement, REPLY_LABEL } from './chat-entries.js';
 import { renderMarkdown } from './chat-markdown.js';
 import { formatWhen } from './format.js';
 
@@ -87,10 +87,15 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
     h.append(el('span', 'chat-who', x.who?.name || 'Scranton'));
     if (x.kind !== 'reply' && x.who?.title) h.append(el('span', 'chat-role', x.who.title));
     if (x.kind !== 'reply' && x.context) h.append(el('span', 'chat-context', x.context));
-    const chip = keyword ? el('span', 'badge chat-keyword', keyword)
+    // the keyword in the run panel's words; the protocol word stays at hand for whoever looks for it
+    const chip = keyword ? el('span', 'badge chat-keyword', keywordWords(keyword))
       : x.kind === 'question' && x.tone === 'warn' ? el('span', 'badge', 'waiting for an answer') : null;
     if (chip) {
       chip.dataset.tone = keyword ? 'quiet' : 'loud';
+      if (keyword) {
+        chip.dataset.keyword = keyword;
+        chip.title = `[${keyword}]`;
+      }
       h.append(chip);
     }
     if (x.ts) {
@@ -118,7 +123,7 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
         if (prefix) line.append(el('span', 'sr-only', `${prefix} · `));
         line.append(x.text ?? '');
       } else line.textContent = text;
-      line.title = text;
+      line.title = x.keyword ? `${text} [${x.keyword}]` : text;
       const time = el('time', 'chat-time mono', x.ts ? formatWhen(x.ts) : '');
       time.title = x.ts ?? '';
       node.replaceChildren(line, time);
@@ -134,8 +139,15 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
       // what a person typed is shown as typed; what a model wrote goes through the Markdown subset
       // an entry that carries a plan (the planner's message) is read as one, not as a long line of JSON
       const planned = plan && Array.isArray(x.plan) && x.plan.length > 0;
-      if (planned) body.append(plan.render(x.plan));
-      else if (model) body.append(...renderMarkdown(text));
+      if (planned) {
+        body.append(plan.render(x.plan));
+        // the message as the planner wrote it, JSON and all, for whoever wants to read or copy it
+        if (plan.brief && expanded.has(x.id)) {
+          const raw = el('div', 'chat-raw');
+          raw.append(...renderMarkdown(text));
+          body.append(raw);
+        }
+      } else if (model) body.append(...renderMarkdown(text));
       else body.textContent = text;
       parts.push(body);
       if (planned && plan.open) {
@@ -146,11 +158,13 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
       }
     }
     // a plan shown as its titles (plan.brief) is short whatever the length of the JSON it came as
-    const long = !(plan?.brief && Array.isArray(x.plan) && x.plan.length > 0) && isLong(text);
+    const brief = Boolean(plan?.brief && Array.isArray(x.plan) && x.plan.length > 0);
+    const long = !brief && isLong(text);
     node.dataset.long = String(long);
     node.toggleAttribute('data-open', expanded.has(x.id));
-    if (long) {
-      const more = el('button', 'msg-more', expanded.has(x.id) ? 'Show less' : 'Show more');
+    if (long || (brief && text.trim())) {
+      const more = el('button', 'msg-more', brief ? (expanded.has(x.id) ? 'Hide the raw message' : 'Show the raw message')
+        : expanded.has(x.id) ? 'Show less' : 'Show more');
       more.type = 'button';
       more.dataset.toggle = x.id;
       more.setAttribute('aria-expanded', String(expanded.has(x.id)));
