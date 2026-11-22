@@ -1,3 +1,4 @@
+import './helpers.js';
 import './isolation-test-root.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,15 +9,16 @@ import { promisify } from 'node:util';
 import { loadConfig } from '../../src/core/config.js';
 import { normalizeWorkflow } from '../../src/core/workflow.js';
 import { resolvePrompt, stagePrompt, promptAudit } from '../../src/core/prompts.js';
-import { validateDockerModels } from '../../src/core/sandbox.js';
-import { startPi } from '../../src/core/pi-runner.js';
+import { createSandbox as createDockerSandbox } from '../../src/core/sandbox-docker/index.js';
+import { startAgent } from '../../src/core/agent/index.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 const exec = promisify(execFile);
 function setup(t, gates = 'oscar+hank,angela') {
   const root = path.resolve('.scratch/roles-backend'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'roles-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const config = loadConfig({ cwd: dir, env: {}, flags: { gates, trustedHost: true }, fileConfig: { pi: { command: [process.execPath, path.resolve('tools/fake-pi.js')] } } });
+  const config = loadConfig({ cwd: dir, env: {}, flags: { gates, trustedHost: true }, fileConfig: {  } });
+  config.scripted = 'happy';
   return { dir, config };
 }
 const events = (config) => fs.readFileSync(path.join(config.hiveDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
@@ -38,15 +40,16 @@ test('prompt precedence, frontmatter stripping, delivery and audit hashes', (t) 
   assert.equal(resolvePrompt(config, 'oscar').editable, false);
   assert.equal(resolvePrompt(config, 'oscar').source, 'config');
 });
-test('Docker validates only active gate roles', (t) => {
+test('Docker model selection is host-only and does not require explicit gate models', (t) => {
   const { config } = setup(t); config.execution.sandbox.mode = 'docker';
   for (const role of ['michael', 'dwight', 'oscar', 'hank']) Object.assign(config.agents[role], { provider: 'fake', model: 'fake' });
-  config.workflow = { gates: [['oscar', 'hank']] }; validateDockerModels(config);
-  config.agents.hank.model = null; assert.throws(() => validateDockerModels(config), /for hank;/);
+  config.workflow = { gates: [['oscar', 'hank']] };
+  config.agents.hank.model = null;
+  assert.doesNotThrow(() => loadConfig({cwd: config.cwd, env: {}, fileConfig: {execution: {sandbox: {mode: 'docker'}}, workflow: config.workflow}}));
 });
-for (const gates of ['oscar,hank,angela', 'oscar+hank,angela']) test(`real CLI fake-pi passes ${gates}`, async (t) => {
+for (const gates of ['oscar,hank,angela', 'oscar+hank,angela']) test(`real CLI scripted runtime passes ${gates}`, async (t) => {
   const { dir, config } = setup(t, gates);
-  await exec(process.execPath, [path.resolve('bin/scranton.js'), 'demo', '--no-plan', '--delay', '0', '--scenario', 'happy', '--gates', gates, '--workspace', config.workspace, '--hive', config.hiveDir], { cwd: dir, env: process.env, timeout: 30000 });
+  await exec(process.execPath, [path.resolve('bin/scranton.js'), 'run', 'Test gates', '--trusted-host', '--no-plan', '--gates', gates, '--workspace', config.workspace, '--hive', config.hiveDir], { cwd: dir, env: { ...process.env, SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' }, timeout: 30000 });
   const es = events(config);
   assert.equal(es.at(-1).status, 'success');
   assert.deepEqual(es.filter((e) => e.type === 'gate_result').map((e) => e.agent).sort(), ['angela', 'hank', 'oscar']);
@@ -58,7 +61,7 @@ for (const gates of ['oscar,hank,angela', 'oscar+hank,angela']) test(`real CLI f
 test('changes_once sends one combined report and passes cycle 2; security_issues trips once per stage', async (t) => {
   for (const scenario of ['changes_once', 'security_issues']) {
     const { config } = setup(t);
-    const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { FAKE_PI_SCENARIO: scenario } });
+    const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario } });
     const result = await o.run('test gates'); const es = events(config);
     if (scenario === 'changes_once') {
       assert.equal(result.status, 'success', result.summary);
@@ -75,27 +78,46 @@ test('changes_once sends one combined report and passes cycle 2; security_issues
     }
   }
 });
-test('parallel failures aggregate in listed order independent of finish order, repeated three times', async (t) => {
+test('parallel failures aggregate in listed order independent of finish order, repeated three times', { timeout: 180000 }, async (t) => {
   let reference, referenceState, referenceGates;
   const finishOrders = [];
   const stableState = (value) => JSON.parse(JSON.stringify(value, (key, item) => ['ts', 'updatedAt', 'runId', 'sessionId', 'worktree', 'workspace', 'startedAt', 'finishedAt', 'durationMs'].includes(key) ? undefined : item));
-  for (const [oscar, hank] of [[0, 400], [400, 0], [0, 400]]) {
+  for (const [oscar, hank] of [[0, 1], [1, 0], [0, 1]]) {
     const { config } = setup(t);
-    const checkoutReadiness = [];
-    const o = new Orchestrator({ config, onBreaker: 'abort', extraEnv: { FAKE_PI_DETERMINISTIC: '1', FAKE_PI_SCENARIO: 'flaky', FAKE_PI_OSCAR_DELAY_MS: String(oscar), FAKE_PI_HANK_DELAY_MS: String(hank) }, startRunner: (options) => {
+    const checkoutReadiness = [], stages = new Map();
+    const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_DETERMINISTIC: '1', SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy', SCRANTON_FAKE_DELAY_MS: '0' }, startRunner: (options) => {
       if (['oscar', 'hank'].includes(options.agentId)) checkoutReadiness.push(['oscar', 'hank'].every((role) => o.worktrees.worktrees.has(`${role}-${options.milestone}`)));
-      return startPi(options);
+      // One milestone exercises aggregation and retry without two unrelated successful milestones.
+      const scenario = options.cycle === 1 ? { oscar: 'changes_once', hank: 'security_issues' }[options.agentId] ?? 'happy' : 'happy';
+      const runner = startAgent({ ...options, scripted: scenario });
+      if (['oscar', 'hank'].includes(options.agentId)) {
+        const key = options.milestone + ':' + options.cycle;
+        if (!stages.has(key)) stages.set(key, {});
+        const stage = stages.get(key), first = oscar < hank ? 'oscar' : 'hank';
+        stage[options.agentId] = runner.done;
+        stage.ready ??= Promise.withResolvers();
+        if (stage.oscar && stage.hank) stage.ready.resolve();
+        stage.firstFinished ??= Promise.withResolvers();
+        runner.done = (async () => {
+          await stage.ready.promise;
+          const results = await Promise.all([stage.oscar, stage.hank]);
+          if (options.agentId !== first) await stage.firstFinished.promise;
+          else setImmediate(() => stage.firstFinished.resolve());
+          return results[options.agentId === 'oscar' ? 0 : 1];
+        })();
+      }
+      return runner;
     } });
     assert.equal((await o.run('ordered')).status, 'success');
     assert.ok(checkoutReadiness.every(Boolean), 'all stage checkouts exist before parallel launch');
     const es = events(config);
-    const finishOrder = es.filter((e) => e.type === 'agent_finished' && e.milestoneId === 'm2' && e.cycle === 1 && ['oscar', 'hank'].includes(e.agent)).map((e) => e.agent);
+    const finishOrder = es.filter((e) => e.type === 'agent_finished' && e.milestoneId === 'm1' && e.cycle === 1 && ['oscar', 'hank'].includes(e.agent)).map((e) => e.agent);
     assert.deepEqual(finishOrder, oscar < hank ? ['oscar', 'hank'] : ['hank', 'oscar'], 'forced gate finish order');
     finishOrders.push(finishOrder.join(','));
     const failed = es.find((e) => e.type === 'cycle_result' && e.result === 'failed');
     assert.equal(failed.reason, 'Stage 1 failed: Oscar [CHANGES_REQUESTED], Hank [SECURITY_ISSUES]');
-    const archives = fs.readdirSync(path.join(config.hiveDir, 'dwight-m2', 'archive'));
-    const reports = archives.map((f) => fs.readFileSync(path.join(config.hiveDir, 'dwight-m2', 'archive', f), 'utf8')).concat(fs.readFileSync(path.join(config.hiveDir, 'dwight-m2', 'inbox.md'), 'utf8'));
+    const archives = fs.readdirSync(path.join(config.hiveDir, 'dwight-m1', 'archive'));
+    const reports = archives.map((f) => fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'archive', f), 'utf8')).concat(fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'inbox.md'), 'utf8'));
     const report = reports.find((s) => s.includes("Oscar's Review report"));
     assert.ok(report.indexOf("Oscar's Review report") < report.indexOf("Hank's Security report"));
     const decisions = es.filter((e) => e.type === 'cycle_result').map(({ milestoneId, cycle, result, failedCycles, reason }) => ({ milestoneId, cycle, result, failedCycles, reason }));
@@ -114,9 +136,9 @@ test('blocked gate retry repeats only the paused stage without a failed cycle', 
   const { config } = setup(t, 'oscar,hank,angela');
   let questions = 0;
   const o = new Orchestrator({ config, noPlan: true, hitl: async () => {
-    questions++; o.extraEnv.FAKE_PI_SCENARIO = 'happy'; return { decision: 'retry' };
-  }, extraEnv: { FAKE_PI_SCENARIO: 'happy' }, listener: (e) => {
-    if (e.type === 'gate_result' && e.agent === 'oscar') o.extraEnv.FAKE_PI_SCENARIO = 'blocked';
+    questions++; o.extraEnv.SCRANTON_FAKE_SCENARIO = 'happy'; return { decision: 'retry' };
+  }, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' }, listener: (e) => {
+    if (e.type === 'gate_result' && e.agent === 'oscar') o.extraEnv.SCRANTON_FAKE_SCENARIO = 'blocked';
   } });
   assert.equal((await o.run('retry stage')).status, 'success');
   const es = events(config);
@@ -125,15 +147,14 @@ test('blocked gate retry repeats only the paused stage without a failed cycle', 
   assert.equal(es.some((e) => e.type === 'cycle_result' && e.result === 'failed'), false);
 });
 
-test('saved custom prompt reaches host child and readonly Docker mount, never directory', async (t) => {
+test('saved custom prompt stays on host; Docker mounts only worktree and Git mask', async (t) => {
   const { WorktreeManager } = await import('../../src/core/worktree.js');
-  const { prepareSandbox } = await import('../../src/core/sandbox.js');
   const { createHash } = await import('node:crypto');
   const { config } = setup(t, 'oscar');
   fs.mkdirSync(config.promptsDir, { recursive: true });
   const text = 'Custom reviewer marker [REVIEW_APPROVED] [CHANGES_REQUESTED] [BLOCKED]';
   fs.writeFileSync(path.join(config.promptsDir, 'oscar.md'), text);
-  const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { FAKE_PI_EXPECT_PROMPT: text, FAKE_PI_FAIL_ROLE: 'oscar' } });
+  const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_EXPECT_PROMPT: text, SCRANTON_FAKE_FAIL_ROLE: 'oscar' } });
   // Only Oscar is customized; the fixture validates his argv in a standalone invocation.
   o.standaloneAgent = 'oscar';
   assert.equal((await o.run('check prompt')).status, 'success');
@@ -143,15 +164,21 @@ test('saved custom prompt reaches host child and readonly Docker mount, never di
   await manager.init(); t.after(() => manager.close());
   const checkout = await manager.createWorktree({ agent: 'oscar', milestoneId: 'm1' });
   const prompt = stagePrompt(config, { dir: config.hiveDir }, 'oscar');
-  const execution = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace: checkout.dir, sessionDir: path.join(config.hiveDir, 'sessions', 'oscar'), systemPromptFile: prompt,
-    extensionFile: path.resolve('tools/pi-agent-chat.js'), instanceId: 'oscar-m1', runId: 'prompt-mount', env: {} }, {
-    executable: path.resolve('.scratch/roles-backend/fake-docker.exe'), run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : ''
+  const tempDir = path.join(config.hiveDir, 'docker-temp'); fs.mkdirSync(tempDir);
+  let args;
+  const execution = createDockerSandbox({worktree: checkout.dir, tempDir}, {
+    executable: path.resolve('.scratch/roles-backend/fake-docker.exe'),
+    runSync: (_exe, argv) => { if (argv[0] === 'run') args = argv; return ['info', 'image'].includes(argv[0]) ? 'linux' : ''; },
+    run: async () => ''
   });
-  assert.ok(execution.argsPrefix.includes(`type=bind,source=${prompt},target=/scranton/prompt.md,readonly`));
-  assert.equal(execution.systemPromptFile, '/scranton/prompt.md');
-  assert.equal(execution.argsPrefix.some((arg) => arg.includes(`source=${config.promptsDir},`)), false);
+  execution.prepare();
+  const mounts = args.filter((_, i) => args[i - 1] === '--mount');
+  assert.equal(mounts.length, 2);
+  assert.ok(mounts.includes(`type=bind,source=${checkout.dir},target=/workspace`));
+  assert.ok(mounts.some(m => m.endsWith('target=/workspace/.git,readonly')));
+  for (const privatePath of [prompt, config.promptsDir, path.join(config.hiveDir, 'sessions')]) assert.equal(args.some(arg => arg.includes(privatePath)), false);
   assert.equal(fs.readFileSync(prompt, 'utf8'), text + '\n');
-  await execution.cleanup();
+  await execution.dispose();
 });
 
 test('parallel gate checkouts share exact developer ref; gate edits never integrate', async (t) => {
@@ -180,27 +207,27 @@ test('missing configured prompt fails cleanly through CLI and releases its lease
   const file = path.join(dir, 'config.json');
   const missing = path.join(dir, 'missing-oscar.md');
   fs.writeFileSync(file, JSON.stringify({ agents: { oscar: { skill: missing } } }));
-  const args = [path.resolve('bin/scranton.js'), 'demo', '--no-plan', '--delay', '0', '--scenario', 'happy', '--gates', 'oscar', '--workspace', config.workspace, '--hive', config.hiveDir, '--config', file];
-  await assert.rejects(exec(process.execPath, args, { cwd: dir, env: process.env, timeout: 30000 }), (error) => error.code === 1);
+  const args = [path.resolve('bin/scranton.js'), 'run', 'Test gates', '--trusted-host', '--no-plan', '--gates', 'oscar', '--workspace', config.workspace, '--hive', config.hiveDir, '--config', file];
+  await assert.rejects(exec(process.execPath, args, { cwd: dir, env: { ...process.env, SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' }, timeout: 30000 }), (error) => error.code === 1);
   assert.equal(fs.existsSync(path.join(config.hiveDir, 'control', 'owner.json')), false, 'prompt refusal releases the lease');
   assert.equal(events(config).at(-1).type, 'run_finished', 'prompt refusal terminates the event stream');
   assert.equal(events(config).at(-1).status, 'failed');
   assert.ok(events(config).at(-1).summary.includes('oscar') && events(config).at(-1).summary.includes(missing));
   fs.writeFileSync(missing, 'Restored [REVIEW_APPROVED]');
-  await exec(process.execPath, args, { cwd: dir, env: process.env, timeout: 30000 });
+  await exec(process.execPath, args, { cwd: dir, env: { ...process.env, SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' }, timeout: 30000 });
   assert.equal(events(config).at(-1).status, 'success', 'same hive accepts the next run');
 });
 
 test('parallel blocked gates await siblings, choose listed first and retry only that stage', async (t) => {
   const { config } = setup(t, 'angela,oscar+hank');
   let questions = 0;
-  const o = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'happy', FAKE_PI_OSCAR_DELAY_MS: '400' }, listener: (e) => {
-    if (e.type === 'gate_result' && e.agent === 'angela') o.extraEnv.FAKE_PI_SCENARIO = 'blocked';
+  const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy', SCRANTON_FAKE_OSCAR_DELAY_MS: '400' }, listener: (e) => {
+    if (e.type === 'gate_result' && e.agent === 'angela') o.extraEnv.SCRANTON_FAKE_SCENARIO = 'blocked';
   }, hitl: async ({ reason }) => {
     questions++;
     assert.match(reason, /^Oscar:/, 'first blocked gate is chosen in listed order');
     assert.deepEqual(events(config).filter((e) => e.type === 'gate_result').map((e) => e.agent).sort(), ['angela', 'hank', 'oscar'], 'sibling finishes before pause');
-    o.extraEnv.FAKE_PI_SCENARIO = 'happy';
+    o.extraEnv.SCRANTON_FAKE_SCENARIO = 'happy';
     return { decision: 'retry' };
   } });
   assert.equal((await o.run('blocked parallel')).status, 'success');
@@ -211,7 +238,7 @@ test('parallel blocked gates await siblings, choose listed first and retry only 
 
 test('gate output without a keyword fails its stage and skips later stages', async (t) => {
   const { config } = setup(t); config.maxFailedCycles = 1;
-  const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { FAKE_PI_MISSING_KEYWORD_ROLE: 'oscar' } });
+  const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_MISSING_KEYWORD_ROLE: 'oscar' } });
   assert.equal((await o.run('missing keyword')).status, 'aborted');
   const es = events(config);
   assert.match(es.find((e) => e.type === 'cycle_result').reason, /^Oscar reported \[MISSING_KEYWORD\]:/);
@@ -222,8 +249,8 @@ test('gate output without a keyword fails its stage and skips later stages', asy
 test('abort drains parallel gate runners and leaves run_finished last', async (t) => {
   const { config } = setup(t);
   const running = new Set(), killed = new Set();
-  const o = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_OSCAR_DELAY_MS: '400', FAKE_PI_HANK_DELAY_MS: '400' }, startRunner: (options) => {
-    const runner = startPi(options), kill = runner.kill;
+  const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_OSCAR_DELAY_MS: '400', SCRANTON_FAKE_HANK_DELAY_MS: '400' }, startRunner: (options) => {
+    const runner = startAgent(options), kill = runner.kill;
     runner.kill = (reason) => { if (['oscar', 'hank'].includes(options.agentId)) killed.add(options.agentId); return kill(reason); };
     return runner;
   }, listener: (e) => {
@@ -247,7 +274,7 @@ test('abort waits for queued gate preparation without delivering after abort', a
   const { config } = setup(t);
   const prepare = WorktreeManager.prototype.prepareGate;
   let prepared = false;
-  const o = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_OSCAR_DELAY_MS: '10000' } });
+  const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_OSCAR_DELAY_MS: '10000' } });
   t.mock.method(WorktreeManager.prototype, 'prepareGate', async function (options) {
     if (options.agent === 'hank') {
       o.abort('abort during second checkout');
@@ -315,7 +342,7 @@ test('live prompt PUT affects the next run only; launches and audit use the run 
     const received = [];
     const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', startRunner: (options) => {
       if (options.agentId === 'oscar') received.push(fs.readFileSync(options.systemPromptFile, 'utf8').trim());
-      const runner = startPi(options);
+      const runner = startAgent(options);
       if (options.agentId === 'dwight') {
         const done = runner.done;
         runner.done = done.then(async (result) => { await put(after); return result; });
@@ -344,7 +371,7 @@ test('gate feedback retains per-role labels without Angela attribution or duplic
 
 test('human feedback after a gate failure carries neutral gate reports to Dwight', async (t) => {
   const { config } = setup(t, 'oscar+hank'); config.maxFailedCycles = 1;
-  const o = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'changes_once' }, hitl: async () => ({ decision: 'feedback', feedback: 'Address the review' }) });
+  const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'changes_once' }, hitl: async () => ({ decision: 'feedback', feedback: 'Address the review' }) });
   assert.equal((await o.run('feedback reports')).status, 'success');
   const body = fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'inbox.md'), 'utf8');
   assert.match(body, /Oscar's Review report/);

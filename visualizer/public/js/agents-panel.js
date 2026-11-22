@@ -9,7 +9,7 @@ import {
   defaultKeywords, idProblem, buildNewAgent, buildAgentPatch, modelValueKey, instructionText, canResetInstruction, agentErrorField, agentError,
   customCount, formTools, THINKING_LEVELS,
 } from './agents.js';
-import { parseModels, modelGroups } from './accounts.js';
+import { parseModels, modelGroups, AUTOMATIC } from './accounts.js';
 import { sendJson } from './control-panel.js';
 import { getJson, fillModelSelect } from './accounts-panel.js';
 import { stripBidi } from './format.js';
@@ -65,7 +65,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
   // the roles document while the drawer is open, null otherwise
   let doc = null;
   let loading = null;
-  // GET /api/models while the drawer is open: the options of the model selects (null: pi default only)
+  // GET /api/models while the drawer is open: the options of the model selects (null: Automatic only)
   let catalog = null;
   // what is open: the prompt editor of a role, the settings of a role, or New agent; at most one of them
   let editing = null;
@@ -149,7 +149,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     return loading;
   }
 
-  // The model list of the New run drawer, for the model selects here; without it only pi default is offered.
+  // The model list of the New run drawer, for the model selects here; without it only Automatic is offered.
   function loadModels() {
     return getJson('/api/models').then((answer) => {
       const next = answer ? parseModels(answer) : null;
@@ -163,7 +163,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
   // current: the model the server reports, offered even when the list does not have it (any more)
   function fillModel(select, value, current) {
     const groups = modelGroups(catalog);
-    fillModelSelect(select, groups, 'pi default');
+    fillModelSelect(select, groups, AUTOMATIC);
     if (value && !groups.some((g) => g.options.some((o) => o.value === value)) && current) {
       const opt = el('option', '', `${stripBidi(current.provider)}/${stripBidi(current.model)} (not in the model list)`);
       opt.value = value;
@@ -174,7 +174,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
 
   function fillThinking(select, value) {
     const list = levels().includes(value) || !value ? levels() : [...levels(), value];
-    const def = el('option', '', 'pi default');
+    const def = el('option', '', AUTOMATIC);
     def.value = '';
     select.replaceChildren(def, ...list.map((l) => {
       const opt = el('option', '', l);

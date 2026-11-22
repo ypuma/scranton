@@ -32,7 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/scranton-node"],
+    "externalBin": ["binaries/scranton-node", "binaries/scranton-sandbox-helper"],
     "resources": { "staged/app/": "app/" },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }

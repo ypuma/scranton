@@ -3,69 +3,124 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
-import { fingerprint } from '../../scripts/prepare-desktop.mjs';
+import { pathToFileURL } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { desktopPlatform } from '../../scripts/desktop-platform.mjs';
+import { verifyToolArchive } from '../../scripts/desktop-tools.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const root = path.resolve(import.meta.dirname, '../..');
 const app = path.join(root, 'src-tauri/staged/app');
-const staged = existsSync(path.join(app, 'packaging-manifest.json'));
-const readJson = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
+const host = desktopPlatform();
+const options = { skip: !existsSync(path.join(app, 'packaging-manifest.json')) && 'Run npm.cmd run app:prepare first' };
+const json = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-test('staged desktop contains the actual installed Pi and only locked production dependencies', { skip: !staged && 'Run npm.cmd run app:prepare first' }, async () => {
-  const lock = await readJson(path.join(root, 'package-lock.json'));
-  const manifest = await readJson(path.join(app, 'packaging-manifest.json'));
-  const pi = 'node_modules/@earendil-works/pi-coding-agent';
-  assert.equal(manifest.pi.version, '1.5.2');
-  assert.equal(manifest.platform, process.platform, 'Staging is stale or belongs to another platform');
-  assert.equal(manifest.arch, process.arch);
-  assert.equal(manifest.target, desktopPlatform().target);
-  assert.deepEqual(await fingerprint(path.join(app, pi)), await fingerprint(path.join(root, pi)));
+test('staged desktop contains own runtime, completion helpers and locked production dependencies; zero Pi files', options, async () => {
+  const lock = await json(path.join(root, 'package-lock.json'));
+  const manifest = await json(path.join(app, 'packaging-manifest.json'));
+  assert.equal(manifest.runtime.engine, 'scranton');
+  assert.equal(manifest.pi, undefined);
+  for (const key of ['platform', 'arch', 'target']) assert.equal(manifest[key], host[key]);
   for (const [relative, pkg] of Object.entries(lock.packages)) {
+    assert.doesNotMatch(relative, /@earendil-works/);
     if (!relative || pkg.dev || pkg.optional) continue;
-    assert.equal((await readJson(path.join(app, relative, 'package.json'))).version, pkg.version, relative);
+    assert.equal((await json(path.join(app, relative, 'package.json'))).version, pkg.version, relative);
   }
   await assert.rejects(fs.access(path.join(app, 'node_modules/@tauri-apps/cli')));
-  for (const file of ['tools/pi-agent-chat.js', 'tools/pi-codex-compaction.js', 'tools/pipeline-pi-complete.js', 'tools/fake-pi-rpc.js', 'tools/fake-pi.js', 'sandbox/Dockerfile', 'sandbox/.dockerignore', 'src/core/antigravity/provider.js', 'src/core/antigravity/oauth.js', 'src/core/antigravity/stream.js', 'src/core/antigravity/extension.js', 'src/core/antigravity/broker.js', 'src/core/antigravity/docker-extension.js']) {
+  for (const file of ['tools/pipeline-complete.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json']) {
     assert.deepEqual(await fs.readFile(path.join(app, file)), await fs.readFile(path.join(root, file)), file);
   }
   for (const file of ['hive', '.env', '.pi', '.git', 'sessions', '.scratch']) await assert.rejects(fs.access(path.join(app, file)));
+  async function visit(dir) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      assert.doesNotMatch(entry.name, /^(?:pi-.*|fake-pi.*|.*-pi-complete\.js|@earendil-works)$/i, path.join(dir, entry.name));
+      if (entry.isDirectory()) await visit(path.join(dir, entry.name));
+    }
+  }
+  await visit(app);
 });
 
-test('bundled Node loads Pi CLI without system Node/Pi PATH or host credentials', { skip: !staged && 'Run npm.cmd run app:prepare first' }, async () => {
-  const manifest = await readJson(path.join(app, 'packaging-manifest.json'));
+test('bundled Node runs own runtime offline with empty PATH and isolated credentials', options, async () => {
   const profile = path.join(root, '.scratch/packaging/test-profile');
   await fs.mkdir(profile, { recursive: true });
-  const node = path.join(root, `src-tauri/binaries/${desktopPlatform().nodeFile}`);
-  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, PI_CODING_AGENT_DIR: profile };
-  const run = spawnSync(node, [path.join(app, 'node_modules/@earendil-works/pi-coding-agent', manifest.pi.entrypoint), '--help'], { cwd: profile, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
-  assert.equal(run.status, 0, run.stderr || run.error?.message);
-  assert.match(run.stdout, /--mode/);
-  // Negative control: an unavailable packaged entrypoint must fail under the same environment.
-  const missing = spawnSync(node, [path.join(profile, 'missing-pi.js'), '--help'], { cwd: profile, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
-  assert.notEqual(missing.status, 0);
+  const node = path.join(root, 'src-tauri/binaries', host.nodeFile);
+  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: profile };
+  const run = (entry) => spawnSync(node, [entry], { cwd: profile, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
+  const result = run(path.join(app, 'scripts/runtime-smoke.mjs'));
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.match(result.stdout, /Scranton offline runtime smoke passed/);
+  assert.notEqual(run(path.join(profile, 'missing-runtime.mjs')).status, 0);
 });
 
-test('staged dreaming helper matches source and resolves runtime dependencies offline', { skip: !staged && 'Run npm.cmd run app:prepare first' }, async (t) => {
-  for (const file of ['tools/dreaming-pi-complete.js', 'src/core/dreaming-completion.js']) {
-    assert.deepEqual(await fs.readFile(path.join(app, file)), await fs.readFile(path.join(root, file)), file);
+test('native sandbox sidecar is staged, registered and explicitly wired into Node startup', options, async () => {
+  const manifest = await json(path.join(app, 'packaging-manifest.json'));
+  assert.equal(manifest.sandboxHelper.file, `scranton-sandbox-helper-${host.target}${host.platform === 'win32' ? '.exe' : ''}`);
+  const helper = path.join(root, 'src-tauri/binaries', manifest.sandboxHelper.file);
+  assert.equal(hash(await fs.readFile(helper)), manifest.sandboxHelper.sha256);
+  assert.ok((await json(path.join(root, 'src-tauri/tauri.conf.json'))).bundle.externalBin.includes('binaries/scranton-sandbox-helper'));
+  const source = await fs.readFile(path.join(root, 'src-tauri/src/main.rs'), 'utf8');
+  assert.match(source, /command\.env\("SCRANTON_SANDBOX_HELPER", &helper\)/);
+  assert.match(source, /if !helper\.is_file\(\)/);
+  const { resolveSandboxHelper } = await import(pathToFileURL(path.join(app, 'src/core/sandbox-native/index.js')));
+  assert.equal(resolveSandboxHelper({ env: { SCRANTON_SANDBOX_HELPER: helper } }), helper);
+  if (host.platform === 'win32') {
+    const run = spawnSync(helper, ['exec', '--cwd', root, '--mode', 'low', '--', path.join(process.env.SystemRoot, 'System32/cmd.exe'), '/d', '/c', 'exit 0'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    assert.equal(run.status, 0, run.stderr || run.error?.message);
   }
-  const scratch = path.join(root, '.scratch/packaging'); await fs.mkdir(scratch, { recursive: true });
-  const profile = await fs.mkdtemp(path.join(scratch, 'dreaming-')); t.after(() => fs.rm(profile, { recursive: true, force: true }));
-  const node = path.join(root, `src-tauri/binaries/${desktopPlatform().nodeFile}`);
-  const script = `
-    import assert from 'node:assert/strict';
-    const helper = await import(${JSON.stringify(new URL('../../src-tauri/staged/app/tools/dreaming-pi-complete.js', import.meta.url).href)});
-    assert.equal(typeof helper.runDreamingCompletion, 'function');
-    const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
-    assert.equal(typeof ModelRuntime.create, 'function');
-    const provider = await import(${JSON.stringify(new URL('../../src-tauri/staged/app/src/core/antigravity/provider.js', import.meta.url).href)});
-    assert.equal(typeof provider.antigravityProvider, 'function');
-  `;
-  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, PI_CODING_AGENT_DIR: profile };
-  const run = spawnSync(node, ['--input-type=module', '--eval', script], { cwd: app, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
-  assert.equal(run.status, 0, run.stderr || run.error?.message);
+});
+
+test('all shipping targets have exact tool pins; native staged rg/fd match verified archives and resolve before PATH', options, async () => {
+  const lock = await json(path.join(root, 'tools-lock.json'));
+  const manifest = await json(path.join(app, 'packaging-manifest.json'));
+  const { resolveBinaries } = await import(pathToFileURL(path.join(app, 'src/core/tools/binaries.js')));
+  const resolved = resolveBinaries({ PATH: path.join(root, '.scratch/packaging/nonexistent') });
+  for (const name of ['rg', 'fd']) {
+    assert.deepEqual(Object.keys(lock.tools[name].targets).sort(), ['x86_64-pc-windows-msvc', 'aarch64-apple-darwin', 'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu'].sort());
+    for (const pin of Object.values(lock.tools[name].targets)) {
+      assert.match(pin.sha256, /^[a-f0-9]{64}$/);
+      assert.match(pin.url, /^https:\/\/github\.com\/(?:BurntSushi\/ripgrep|sharkdp\/fd)\/releases\/download\//);
+    }
+    const pin = lock.tools[name].targets[host.target], receipt = manifest.tools[name];
+    const archive = await fs.readFile(path.join(root, '.scratch/packaging/tools-cache', path.basename(new URL(pin.url).pathname)));
+    verifyToolArchive(archive, pin);
+    const corrupted = Buffer.from(archive); corrupted[0] ^= 1;
+    assert.throws(() => verifyToolArchive(corrupted, pin), /SHA-256 mismatch/);
+    assert.equal(receipt.sha256, pin.sha256);
+    assert.equal(receipt.version, lock.tools[name].version);
+    const binary = path.join(app, receipt.file);
+    assert.equal(hash(await fs.readFile(binary)), receipt.binarySha256);
+    assert.equal(resolved[name], binary);
+    const run = spawnSync(binary, ['--version'], { env: { SystemRoot: process.env.SystemRoot, PATH: '' }, encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(run.stdout.includes(receipt.version));
+  }
+});
+
+test('staged tools use bundled rg/fd offline and retain explicit native JS fallbacks', options, async (t) => {
+  const scratch = path.join(root, '.scratch/packaging/search');
+  await fs.mkdir(scratch, { recursive: true });
+  const fixture = await fs.mkdtemp(path.join(scratch, 'case-'));
+  t.after(() => fs.rm(fixture, { recursive: true, force: true }));
+  await fs.writeFile(path.join(fixture, 'sample.txt'), 'bundled search needle\n');
+  const { runTool } = await import(pathToFileURL(path.join(app, 'src/core/tools/index.js')));
+  const { resolveBinaries } = await import(pathToFileURL(path.join(app, 'src/core/tools/binaries.js')));
+  for (const name of ['rg', 'fd']) {
+    await fs.writeFile(path.join(fixture, name + (host.platform === 'win32' ? '.exe' : '')), 'must not execute');
+    assert.equal(resolveBinaries({ PATH: fixture })[name], path.join(app, 'tools/bin', name + (host.platform === 'win32' ? '.exe' : '')));
+  }
+  for (const binaries of [undefined, {}]) {
+    const launched = [];
+    const ctx = { root: fixture, allow: ['grep', 'find'], env: { SystemRoot: process.env.SystemRoot, PATH: '' }, binaries,
+      spawn: (file, args, options) => { launched.push(file); return spawn(file, args, options); } };
+    const grep = await runTool('grep', { pattern: 'needle', glob: '*.txt' }, ctx);
+    assert.equal(grep.isError, false, grep.content);
+    assert.match(grep.content, /sample\.txt:1: bundled search needle/);
+    const find = await runTool('find', { pattern: '*.txt' }, ctx);
+    assert.equal(find.isError, false, find.content);
+    assert.match(find.content, /sample\.txt/);
+    assert.deepEqual(launched, binaries ? [] : ['rg', 'fd'].map((name) => path.join(app, 'tools/bin', name + (host.platform === 'win32' ? '.exe' : ''))));
+  }
 });
 
 test('desktop sidecar uses registry data, legacy import and authenticated aggregate control', async () => {
@@ -75,18 +130,4 @@ test('desktop sidecar uses registry data, legacy import and authenticated aggreg
   assert.doesNotMatch(source, /\["app-server", "--hive"\]/);
   assert.match(source, /X-Scranton-Client: 1/);
   assert.match(source, /pendingHuman.*as_u64/);
-});
-
-test('staged Antigravity extension loads with bundled Node and empty PATH offline', { skip: !staged && 'Run npm.cmd run app:prepare first' }, async (t) => {
-  const scratch = path.join(root, '.scratch/antigravity-backend'); await fs.mkdir(scratch, { recursive: true });
-  const profile = await fs.mkdtemp(path.join(scratch, 'packaged-')); t.after(() => fs.rm(profile, { recursive: true, force: true }));
-  await fs.writeFile(path.join(profile, 'auth.json'), JSON.stringify({ 'google-antigravity': { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', projectId: 'fake-project', expires: Date.now() + 3600000 } }));
-  const node = path.join(root, `src-tauri/binaries/${desktopPlatform().nodeFile}`);
-  const manifest = await readJson(path.join(app, 'packaging-manifest.json'));
-  const args = [path.join(app, 'node_modules/@earendil-works/pi-coding-agent', manifest.pi.entrypoint), '--no-extensions', '--no-mcp', '--no-skills', '--list-models', 'gemini-3'];
-  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, PI_CODING_AGENT_DIR: profile };
-  const run = (extension) => spawnSync(node, [...args, ...extension], { cwd: profile, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
-  const loaded = run(['--extension', path.join(app, 'src/core/antigravity/extension.js')]);
-  assert.equal(loaded.status, 0, loaded.stderr || loaded.error?.message); assert.match(loaded.stdout, /google-antigravity/);
-  assert.doesNotMatch(run([]).stdout, /google-antigravity/);
 });

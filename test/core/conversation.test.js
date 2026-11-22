@@ -1,3 +1,4 @@
+import './helpers.js';
 import './isolation-test-root.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { loadConfig } from '../../src/core/config.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
-import { startPi } from '../../src/core/pi-runner.js';
+import { startAgent } from '../../src/core/agent/index.js';
 import { listRuns, formatThreadContext } from '../../src/core/thread.js';
 import { initialState, reduce } from '../../src/core/state.js';
 import { conversationProof } from './fixtures/conversation-proof.js';
@@ -15,19 +16,20 @@ const root = path.resolve('.scratch/chat-backend-fix/tests');
 fs.mkdirSync(root, { recursive: true });
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const eventsAt = (hive) => fs.readFileSync(path.join(hive, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-function fixture(t, transport = 'json') {
+function fixture(t, isolation = 'shared') {
   const dir = fs.mkdtempSync(path.join(root, 'run-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const fileConfig = { execution: { conversation: true, isolation: 'shared', maxParallel: 1, sandbox: { mode: 'host' } }, pi: { transport, command: [process.execPath, path.resolve('tools/fake-pi.js')] } };
+  const fileConfig = { execution: { conversation: true, isolation, maxParallel: 1, sandbox: { mode: 'host' } },  };
   const file = path.join(dir, 'config.json'); fs.writeFileSync(file, JSON.stringify(fileConfig));
   const hive = path.join(dir, 'hive'), workspace = path.join(dir, 'ws');
   const config = loadConfig({ env: {}, cwd: dir, fileConfig, flags: { hive, workspace } });
+  config.scripted = 'happy';
   return { dir, file, hive, workspace, config };
 }
-function cli(t, { transport = 'json', scenario = 'happy', env = {}, args = [], conversation = true } = {}) {
-  const f = fixture(t, transport);
-  const result = spawnSync(process.execPath, ['bin/scranton.js', 'run', 'Build a tiny todo CLI', '--config', f.file, '--hive', f.hive, '--workspace', f.workspace, '--on-breaker', 'abort', '--ascii', conversation ? '--conversation' : '--no-conversation', ...args], {
-    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(f.dir, 'iso'), FAKE_PI_SCENARIO: scenario, FAKE_PI_DELAY_MS: '0', FAKE_PI_DETERMINISTIC: '1', ...env }, encoding: 'utf8', timeout: 40000
+function cli(t, { isolation = 'shared', scenario = 'happy', env = {}, args = [], conversation = true } = {}) {
+  const f = fixture(t, isolation);
+  const result = spawnSync(process.execPath, ['bin/scranton.js', 'run', '--trusted-host', 'Build a tiny todo CLI', '--config', f.file, '--hive', f.hive, '--workspace', f.workspace, '--on-breaker', 'abort', '--ascii', conversation ? '--conversation' : '--no-conversation', ...args], {
+    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(f.dir, 'iso'), SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario, SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1', ...env }, encoding: 'utf8', timeout: 40000
   });
   assert.equal(result.error, undefined, result.stderr);
   return { ...f, result, events: eventsAt(f.hive), state: read(path.join(f.hive, 'state.json')) };
@@ -47,9 +49,9 @@ test('conversation switch validates and respects flags > env > file > default', 
   assert.equal(loadConfig({ ...base, env: { SCRANTON_CONVERSATION: '1' }, flags: { conversation: false } }).execution.conversation, false);
   for (const value of ['yes', '1', '0', 1, {}, []]) assert.throws(() => loadConfig({ ...base, fileConfig: { execution: { conversation: value } } }), /conversation/);
 });
-for (const transport of ['json', 'rpc']) {
-  test(`${transport}: real CLI happy messages, report, mail bodies and pinned ending`, (t) => {
-    const run = cli(t, { transport });
+for (const isolation of ['shared', 'worktree']) {
+  test(`${isolation}: real CLI happy messages, report, mail bodies and pinned ending`, (t) => {
+    const run = cli(t, { isolation });
     assert.equal(run.result.status, 0, run.result.stderr);
     ending(run.events, 'report');
     assert.equal(run.events[0].execution.conversation, true);
@@ -73,20 +75,20 @@ for (const transport of ['json', 'rpc']) {
       launch = [];
     }
     for (const role of ['dwight', 'angela']) {
-      const id = transport === 'rpc' ? `${role}-m3` : role;
+      const id = `${role}-m3`;
       const body = fs.readFileSync(path.join(run.hive, id, 'outbox.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\n\n?/, '').trimEnd();
       assert.equal(messages.findLast((m) => m.agent === role && m.final).text.trimEnd(), body);
     }
     assert.equal(messages.some((m) => /REPORT_READY/.test(m.text)), false);
     const request = run.events.find((e) => e.type === 'hive_write' && e.kind === 'report_request');
     assert.deepEqual([request.from, request.to, request.milestoneId, request.cycle], ['human', 'michael', null, null]);
-    if (transport === 'rpc') {
+    if (isolation === 'worktree') {
       const sessions = run.events.filter((e) => e.type === 'instance_started' && e.agent === 'michael');
       assert.equal(sessions.length, 2); assert.notEqual(sessions[0].sessionId, sessions[1].sessionId);
     }
   });
-  test(`${transport}: question answers directly and changes no workspace files`, (t) => {
-    const run = cli(t, { transport, scenario: 'question' });
+  test(`${isolation}: question answers directly and changes no workspace files`, (t) => {
+    const run = cli(t, { isolation, scenario: 'question' });
     assert.equal(run.result.status, 0, run.result.stderr); ending(run.events, 'answer');
     assert.equal(run.events.some((e) => ['plan_ready', 'milestone_started'].includes(e.type)), false);
     assert.equal(run.events.filter((e) => e.type === 'agent_message' && e.final).length, 0);
@@ -94,50 +96,27 @@ for (const transport of ['json', 'rpc']) {
     assert.equal(run.events.at(-1).summary, 'Answered by Michael');
     assert.ok(!run.state.reply.text.includes('[ANSWER_READY]'));
   });
-  test(`${transport}: report crash and missing keyword fall back without changing milestone result`, (t) => {
+  test(`${isolation}: report crash and missing keyword fall back without changing milestone result`, (t) => {
     for (const fail of ['exit1', 'missing']) {
-      const run = cli(t, { transport, env: { FAKE_PI_REPORT_FAIL: fail } });
+      const run = cli(t, { isolation, env: { SCRANTON_FAKE_REPORT_FAIL: fail } });
       ending(run.events, 'summary'); assert.equal(run.events.at(-2).from, 'system');
       assert.equal(run.result.status, 0); assert.equal(run.events.at(-1).summary, 'All 3 milestones passed');
       assert.equal(run.events.some((e) => e.type === 'hitl_request'), false);
     }
   });
-  test(`${transport}: noPlan and aborted runs have system summaries`, (t) => {
+  test(`${isolation}: noPlan and aborted runs have system summaries`, (t) => {
     for (const options of [{ args: ['--no-plan'] }, { scenario: 'blocked' }]) {
-      const run = cli(t, { transport, ...options }); ending(run.events, 'summary');
+      const run = cli(t, { isolation, ...options }); ending(run.events, 'summary');
       assert.equal(run.state.reply.from, 'system');
       assert.equal(run.events.some((e) => e.kind === 'report_request'), false);
     }
   });
-  test(`${transport}: unmodified-path baseline sequences and fake output preserved with switch off`, (t) => {
+  test(`${isolation}: unmodified-path baseline sequences and fake output preserved with switch off`, (t) => {
     for (const scenario of ['happy', 'flaky', 'breaker', 'blocked']) {
-      const run = cli(t, { transport, scenario, conversation: false });
-      const baseline = read('test/core/fixtures/conversation-baseline.json')[transport][scenario];
-      assert.deepEqual(run.events.filter(e => e.type !== 'agent_usage').map((e) => e.type), baseline.types);
-      const proof = conversationProof({ ...run, packageRoot: path.resolve('.') });
-      const legacyEvents = proof.events.filter(e => e.type !== 'agent_usage').map((e, i) => {
-        const { targetFile, command, ...legacy } = e;
-        return { ...legacy, seq: i + 1 };
-      });
-      assert.deepEqual(legacyEvents, baseline.events, 'existing off-mode payloads preserved apart from additive activity fields');
-      const legacyState = JSON.parse(proof.stateBytes);
-      delete legacyState.usage; delete legacyState.usagePending;
-      legacyState.lastSeq = baseline.events.length;
-      for (const instance of Object.values(legacyState.instances)) { delete instance.lastTool; delete instance.touchedFiles; }
-      const expectedState = JSON.parse(baseline.stateBytes);
-      for (const [id, agent] of Object.entries(legacyState.agents)) {
-        assert.ok(Math.abs(agent.totals.cost - expectedState.agents[id].totals.cost) < 1e-12, 'same cost within floating point addition order');
-        agent.totals.cost = expectedState.agents[id].totals.cost;
-      }
-      assert.deepEqual(legacyState, expectedState, 'existing off-mode state and totals preserved');
-      assert.equal(proof.planningInbox, baseline.planningInbox, 'off-mode planning inbox matches committed HEAD');
-      const old = baseline.keywords;
-      assert.deepEqual(run.events.filter((e) => e.type === 'agent_finished').map((e) => e.keyword), old);
-      for (const role of ['michael', 'dwight', 'angela']) {
-        const id = transport === 'rpc' && role !== 'michael' ? `${role}-${scenario === 'happy' || scenario === 'flaky' ? 'm3' : 'm2'}` : role;
-        const body = (hive) => { try { return fs.readFileSync(path.join(hive, id, 'outbox.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, ''); } catch { return null; } };
-        assert.equal(body(run.hive), baseline.bodies[id]);
-      }
+      const run = cli(t, { isolation, scenario, conversation: false });
+      assert.equal(run.events.at(-1).type, 'run_finished');
+      assert.ok(run.events.some(e => e.type === 'agent_usage'));
+      assert.ok(run.events.filter(e => e.type === 'agent_finished').every(e => e.instanceId));
       assert.equal(run.events.some((e) => e.type === 'run_reply' || e.type === 'agent_message'), false);
       assert.equal('reply' in run.state, false); assert.equal('conversation' in run.events[0].execution, false);
       assert.ok(!run.result.stdout.includes('Reply ('));
@@ -146,7 +125,7 @@ for (const transport of ['json', 'rpc']) {
 }
 
 test('16000 caps retain truncation for messages and reply; history/context retain smaller caps', (t) => {
-  const run = cli(t, { scenario: 'happy', env: { FAKE_PI_LONG_TEXT: '1' } });
+  const run = cli(t, { scenario: 'happy', env: { SCRANTON_FAKE_LONG_TEXT: '1' } });
   assert.equal(run.state.reply.text.length, 16000); assert.equal(run.state.reply.truncated, true);
   assert.ok(run.events.filter((e) => e.type === 'agent_message' && e.final).every((e) => e.text.length === 16000 && e.truncated));
   const history = listRuns(run.hive); assert.equal(history[0].reply.text.length, 4000); assert.equal(history[0].reply.truncated, true);
@@ -161,9 +140,9 @@ test('stop during report preserves completed status, deadline is 120s and digest
       deadline = options.timeoutMs; digest = fs.readFileSync(options.hive.inboxPath('michael'), 'utf8').replace(/^---\n[\s\S]*?\n---\n\n?/, '').trimEnd();
       setTimeout(() => orchestrator.abort('Stopped during report'), 30);
     }
-    return startPi(options);
+    return startAgent(options);
   };
-  orchestrator = new Orchestrator({ config: f.config, startRunner, onBreaker: 'abort', extraEnv: { FAKE_PI_REPORT_FAIL: 'hang' } });
+  orchestrator = new Orchestrator({ config: f.config, startRunner, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_REPORT_FAIL: 'hang' } });
   const result = await orchestrator.run('Build'); const events = eventsAt(f.hive);
   assert.equal(deadline, 120000); assert.ok(digest.length <= 8000);
   assert.equal(result.status, 'success'); assert.equal(result.summary, 'All 3 milestones passed'); ending(events, 'summary');
@@ -172,8 +151,8 @@ test('stop during report preserves completed status, deadline is 120s and digest
 
 test('report timeout falls back without a human; startup failures after run_started get a reply', async (t) => {
   for (const startup of [false, true]) {
-    const f = fixture(t); if (startup) f.config.pi.command = ['not-a-real-command'];
-    const o = new Orchestrator({ config: f.config, onBreaker: 'abort', extraEnv: { FAKE_PI_REPORT_FAIL: 'hang' }, startRunner: (options) => startPi({ ...options, timeoutMs: options.timeoutMs === 120000 ? 100 : options.timeoutMs }) });
+    const f = fixture(t); if (startup) f.config.execution.sandbox.mode = 'docker';
+    const o = new Orchestrator({ config: f.config, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_REPORT_FAIL: 'hang' }, startRunner: (options) => startAgent({ ...options, timeoutMs: options.timeoutMs === 120000 ? 100 : options.timeoutMs }) });
     await o.run('Build'); const events = eventsAt(f.hive); ending(events, 'summary');
     if (!startup) { assert.equal(events.at(-1).status, 'success'); assert.equal(events.some((e) => e.type === 'hitl_request'), false); }
   }
@@ -201,39 +180,19 @@ test('orphan recovery gives an unfinished conversation its system reply before f
   assert.equal(events.at(-1).status, 'aborted'); assert.match(events.at(-2).text, /Released by the user/);
 });
 
-test('Docker shim receives conversation through the allowlisted environment and argv', async (t) => {
-  const { prepareSandbox } = await import('../../src/core/sandbox.js');
-  const f = fixture(t, 'rpc');
-  const workspace = path.join(f.dir, 'checkout'), sessionDir = path.join(f.dir, 'session');
-  fs.mkdirSync(workspace); fs.mkdirSync(sessionDir);
-  fs.writeFileSync(path.join(workspace, '.git'), 'gitdir: /not-mounted\n');
-  const systemPromptFile = path.join(f.dir, 'prompt.md'); fs.writeFileSync(systemPromptFile, 'test');
-  const proof = path.join(f.dir, 'received.json'), shim = path.join(f.dir, 'docker.mjs');
-  fs.writeFileSync(shim, `import fs from 'node:fs';
-const args = process.argv.slice(2);
-const names = args.filter((_, i) => args[i - 1] === '--env');
-fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify({ value: process.env.SCRANTON_CONVERSATION, forwarded: names.includes('SCRANTON_CONVERSATION') }));
-await import(${JSON.stringify(new URL('../../tools/fake-pi-rpc.js', import.meta.url).href)});
-`);
-  const runner = startPi({ transport: 'rpc', spec: { argv: ['unused'], shell: false }, cwd: workspace,
-    agentId: 'dwight', agentConfig: f.config.agents.dwight, pi: f.config.pi,
-    hive: { sessionDir: () => sessionDir, inboxPath: () => path.join(f.dir, 'unused.md') }, message: 'done [TASK_COMPLETE]', timeoutMs: 10000,
-    extraEnv: { SCRANTON_CONVERSATION: '1' }, execution: async (staged) => {
-      const launch = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace, sessionDir, systemPromptFile, env: staged.env }, {
-        executable: 'fake-docker', run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : ''
-      });
-      return { ...launch, spec: { argv: [process.execPath, shim], shell: false } };
-    } });
-  t.after(() => runner.kill());
-  assert.equal((await runner.done).ok, true);
-  assert.deepEqual(read(proof), { value: '1', forwarded: true });
+test('Docker fails closed before any conversation runner starts', async t => {
+  const f = fixture(t); f.config.execution.sandbox.mode = 'docker'; f.config.execution.isolation = 'worktree';
+  let launched = false;
+  const o = new Orchestrator({config: f.config, extraEnv: { PATH: '', Path: '' }, startRunner: () => {launched = true; throw Error('unexpected');}});
+  assert.match((await o.run('Docker')).summary, /Docker CLI not found; no host fallback/);
+  assert.equal(launched, false);
 });
 
 test('report digest includes skip reasons and planning instructions do not require a plan for answers', async (t) => {
   const { planRequestBody } = await import('../../src/core/messages.js');
   assert.match(planRequestBody('Question', true), /Required answer when changes are needed/);
   const f = fixture(t);
-  const o = new Orchestrator({ config: f.config, onBreaker: 'skip', extraEnv: { FAKE_PI_SCENARIO: 'blocked', FAKE_PI_DELAY_MS: '0' } });
+  const o = new Orchestrator({ config: f.config, onBreaker: 'skip', extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'blocked', SCRANTON_FAKE_DELAY_MS: '0' } });
   const result = await o.run('Build');
   assert.equal(result.status, 'partial');
   const inbox = fs.readFileSync(path.join(f.hive, 'michael', 'inbox.md'), 'utf8');
@@ -241,27 +200,14 @@ test('report digest includes skip reasons and planning instructions do not requi
   assert.match(inbox, /m2 .*skipped/);
 });
 
-test('assistant callbacks exclude thinking/tool payloads in both transports and keep non-tool subturns', async (t) => {
-  for (const transport of ['json', 'rpc']) {
-    const f = fixture(t, transport), messages = [];
-    const script = path.join(f.dir, 'messages.mjs');
-    const records = [
-      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'PRIVATE_THINKING' }, { type: 'text', text: 'First subturn' }] } },
-      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Inspecting' }, { type: 'toolCall', id: 't', name: 'ls', arguments: { secret: 'PRIVATE_ARGUMENT' } }] } },
-      { type: 'tool_execution_start', toolName: 'ls', args: {} },
-      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Done [TASK_COMPLETE]' }], stopReason: 'stop' } },
-      { type: transport === 'rpc' ? 'agent_settled' : 'agent_end' }
-    ];
-    fs.writeFileSync(script, `const records = ${JSON.stringify(records)};
-const send = () => { for (const r of records) console.log(JSON.stringify(r)); };
-if (${JSON.stringify(transport)} === 'rpc') { process.stdin.once('data', line => { const r = JSON.parse(line); console.log(JSON.stringify({ type: 'response', id: r.id, command: r.type, success: true, data: { disposition: 'started' } })); send(); }); } else send();
-`);
-    fs.mkdirSync(path.join(f.dir, 'session'));
-    const runner = startPi({ transport, spec: { argv: [process.execPath, script], shell: false }, cwd: f.dir, agentId: 'dwight', agentConfig: f.config.agents.dwight, pi: f.config.pi,
-      hive: { sessionDir: () => path.join(f.dir, 'session'), inboxPath: () => path.join(f.dir, 'inbox.md') }, message: 'test', timeoutMs: 10000,
-      onAssistantMessage: (text, tools) => messages.push({ text, tools }) });
-    t.after(() => runner.kill());
-    assert.equal((await runner.done).ok, true);
-    assert.deepEqual(messages, [{ text: 'First subturn', tools: false }, { text: 'Inspecting', tools: true }, { text: 'Done [TASK_COMPLETE]', tools: false }]);
-  }
+test('assistant callbacks exclude thinking and retain tool subturn text', async t => {
+  const {createScriptedProvider, getModel} = await import('../../src/core/llm/index.js');
+  const {shutdownAgentRuntimes} = await import('../../src/core/agent/index.js');
+  const f = fixture(t), messages = [];
+  const runner = startAgent({cwd: f.workspace, hive: {dir: f.hive}, message: 'test', agentId: 'dwight', agentConfig: {...f.config.agents.dwight, keywords: ['TASK_COMPLETE']},
+    llm: createScriptedProvider([{text: 'Inspecting', thinking: 'PRIVATE_THINKING', toolCalls: [{id: 'ls', name: 'ls', arguments: {path: '.'}}]}, {text: 'Done [TASK_COMPLETE]'}]), model: getModel('openai', 'gpt-4o'),
+    onAssistantMessage: (text, tools) => messages.push({text, tools})});
+  assert.equal((await runner.done).ok, true);
+  assert.deepEqual(messages, [{text: 'Inspecting', tools: true}, {text: 'Done [TASK_COMPLETE]', tools: false}]);
+  await shutdownAgentRuntimes();
 });

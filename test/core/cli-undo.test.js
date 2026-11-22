@@ -19,7 +19,7 @@ function fixture(t) {
   const dir = fs.mkdtempSync(path.join(root, 'test-')), hive = path.join(dir, 'hive'), ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const io = { cwd: dir, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pi.js')]), SCRANTON_ISOLATION_ROOT: path.join(dir, 'iso'), FAKE_PI_DELAY_MS: '0', FAKE_PI_DETERMINISTIC: '1', FAKE_PI_SCENARIO: 'happy' }, out: '', err: '', stdout: { write(s) { io.out += s; } }, stderr: { write(s) { io.err += s; } } };
+  const io = { cwd: dir, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), SCRANTON_FAKE_MODE: '1', SCRANTON_ISOLATION_ROOT: path.join(dir, 'iso'), SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1', SCRANTON_FAKE_SCENARIO: 'happy' }, out: '', err: '', stdout: { write(s) { io.out += s; } }, stderr: { write(s) { io.err += s; } } };
   const run = () => runCli(['run', 'build', '--no-plan', '--trusted-host', '--workspace', ws, '--hive', hive], io);
   const undo = (...args) => { io.out = ''; io.err = ''; return runCli(['undo', '--hive', hive, ...args], io); };
   return { dir, hive, ws, io, run, undo };

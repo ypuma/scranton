@@ -1,9 +1,9 @@
 // The Workflow section as a stage editor over the server's catalog (GET /api/control defaults.agents): one row per
 // gate, built-in and custom, each on or off with a stage number; a stored choice drops deleted or unknown agents;
-// a custom gate gets a model select whose default names its agent default, and is no Docker gap with one.
+// a custom gate gets a model select whose default names its agent default, else Automatic, in every sandbox.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { modelKey, dockerGaps, runRoles, buildModels, parseModels, piDefaultLabel, parseStoredModels, resolveChoices } from '../../visualizer/public/js/accounts.js';
+import { modelKey, runRoles, buildModels, parseModels, defaultLabel, parseStoredModels, resolveChoices } from '../../visualizer/public/js/accounts.js';
 import {
   WORKFLOW_KEY, WORKFLOW_ERROR, parseControl, gateCatalog, roleIds, parseStoredWorkflow, buildWorkflow, buildRunRequest, workflowGates,
   modelErrorRoles, errorField, configuredChoice,
@@ -136,42 +136,36 @@ test('drawer: a configured workflow with a custom gate is respected without a st
   assert.equal(h.storage.map.has(WORKFLOW_KEY), false);
 });
 
-test('models: a custom gate\'s default option names its agent default, and it is then no Docker gap', async (t) => {
-  assert.equal(piDefaultLabel({ seclint: SOL }, 'seclint'), 'Agent default (openai/gpt-6.1-sol)');
-  assert.equal(piDefaultLabel({ seclint: null }, 'seclint'), 'pi default');
-  assert.equal(piDefaultLabel({ seclint: null }, 'seclint', true), 'No agent default');
+test('models: a custom gate\'s default option names its agent default, else Automatic, and a pick holds in Docker too', async (t) => {
+  assert.equal(defaultLabel({ seclint: SOL }, 'seclint'), 'Agent default (openai/gpt-6.1-sol)');
+  assert.equal(defaultLabel({ seclint: null }, 'seclint'), 'Automatic');
+  assert.equal(defaultLabel(null, 'seclint'), 'Automatic', 'an older server that reports no defaults');
   assert.deepEqual(runRoles({ gates: [['seclint'], ['angela']] }), ['michael', 'dwight', 'angela', 'seclint']);
-  const base = { michael: SOL, dwight: SOL, angela: SOL };
-  assert.deepEqual(dockerGaps({ gates: [['seclint'], ['angela']], configured: { ...base, seclint: null } }), ['seclint']);
-  assert.deepEqual(dockerGaps({ gates: [['seclint'], ['angela']], configured: { ...base, seclint: SOL } }), [], 'the agent default counts');
-  const none = { michael: GPT, dwight: GPT, angela: GPT, seclint: GPT };
-  const r = buildModels(none, parseModels(CATALOG), { gates: [['seclint']], configured: { ...base, seclint: null }, names: { seclint: 'Seclint' } });
-  assert.deepEqual([r.field, r.fields], ['models.seclint', ['models.seclint']], 'a pick does not stand in for the agent default');
-  assert.match(r.error, /Seclint has none\. Set one in Agents\./);
+  const picks = { michael: GPT, dwight: GPT, angela: GPT, seclint: GPT };
+  assert.deepEqual(Object.keys(buildModels(picks, parseModels(CATALOG), { gates: [['seclint']], names: { seclint: 'Seclint' } }).models), ['michael', 'dwight', 'seclint']);
+  assert.deepEqual(buildModels({}, parseModels(CATALOG), { gates: [['seclint']] }), { models: {} }, 'a role without a pick runs on its default; nothing is a gap');
   assert.deepEqual(parseStoredModels(JSON.stringify({ seclint: PICK, 'Bad-Id': PICK }), null), { seclint: PICK }, 'the picker keeps a custom choice');
   assert.equal(resolveChoices({ seclint: PICK }, parseModels(CATALOG), ['seclint']).seclint.value, GPT);
 
   const h = harness({ control: withAgents(AGENTS, { execution: DOCKER, models: { michael: SOL, dwight: SOL, angela: SOL, seclint: SOL, docs2: null } }), stored: { stages: { angela: 1, seclint: 1, docs2: 2 } } });
   t.after(() => h.panel.setMode('demo'));
   await h.open();
+  assert.equal(h.$('f-sandbox-docker').checked, true);
   assert.equal(h.select('seclint').childNodes[0].textContent, 'Agent default (openai/gpt-6.1-sol)');
-  assert.equal(h.select('docs2').childNodes[0].textContent, 'No agent default', 'Docker offers no pi default');
+  assert.equal(h.select('docs2').childNodes[0].textContent, 'Automatic');
+  assert.equal(h.select('docs2').disabled, false, 'Docker no longer locks the selects');
   assert.equal(h.$('model-row-oscar').hidden, true, 'Oscar does not run');
-  assert.match(h.$('models-need-text').textContent, /Doris has none\./);
   await h.$('run-form').fire('submit');
-  assert.deepEqual(h.posts, []);
-  assert.equal(h.select('docs2').getAttribute('aria-invalid'), 'true');
-  assert.equal(h.select('seclint').getAttribute('aria-invalid'), null, 'the agent default is no gap');
-  assert.equal(h.select('docs2').disabled, true, 'Docker keeps the select locked');
-  assert.equal(h.$('run-error').getAttribute('tabindex'), '-1');
-  assert.equal(globalThis.document.activeElement, h.$('run-error'), 'the message, never the locked select');
-  await h.sandbox(true);
-  assert.equal(h.select('docs2').childNodes[0].textContent, 'pi default');
+  assert.equal(h.posts.length, 1, 'a role without an agent default is no reason to refuse Docker');
+  assert.equal(h.posts[0].body.sandbox, 'docker');
+  assert.equal(h.posts[0].body.models, undefined);
+  await h.open();
   await h.pick({ docs2: GPT });
   assert.deepEqual(JSON.parse(h.storage.map.get('scranton.models')), { docs2: PICK }, 'the custom choice is kept like the others');
   await h.$('run-form').fire('submit');
-  assert.equal(h.posts.length, 1);
-  assert.deepEqual(h.posts[0].body.models, { docs2: PICK });
+  assert.equal(h.posts.length, 2);
+  assert.equal(h.posts[1].body.sandbox, 'docker');
+  assert.deepEqual(h.posts[1].body.models, { docs2: PICK });
 });
 
 test('models: the server 400 for a custom gate marks its select', async (t) => {
@@ -220,7 +214,10 @@ test('a custom agent with the id constructor is an agent like any other, never t
   await h.open();
   assert.equal(h.row('constructor').stage.value, '1');
   assert.equal(h.$('f-gates-summary').textContent, 'Connie, after each developer turn');
-  assert.equal(h.select('constructor').childNodes[0].textContent, 'No agent default');
+  assert.equal(h.select('constructor').childNodes[0].textContent, 'Automatic');
   assert.equal(h.select('toString'), null);
-  assert.match(h.$('models-need-text').textContent, /Michael, Dwight and Connie have none\./);
+  await h.pick({ constructor: GPT });
+  await h.$('run-form').fire('submit');
+  assert.deepEqual(h.posts[0].body.models, { constructor: PICK });
+  assert.equal(Object.getPrototypeOf(h.posts[0].body.models), Object.prototype);
 });

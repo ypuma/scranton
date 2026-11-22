@@ -330,16 +330,20 @@ test('parseRunDoc reads a run that never started, and launchText says what faile
   assert.equal(parseRunDoc({ status: runStatus(), live: true, events: [] }).launchError, null, 'absent on an older server');
 });
 
-// finding 6: models offered through pi are marked, unsupported ones keep their reason (reverting the via suffix fails this)
-test('modelGroups marks models answered through pi and keeps unsupported ones disabled with the reason', () => {
+// finding 6: models offered through Scranton's bridge are marked, unsupported ones keep their reason (reverting the via
+// suffix fails this). A server from before the own runtime still says via: 'pi' for the same bridge.
+test('modelGroups marks models answered through the bridge as via Scranton and keeps unsupported ones disabled with the reason', () => {
   const info = parseEngineInfo({ available: true, models: [
     { provider: 'anthropic', label: 'Anthropic', supported: true, via: 'pi', reason: null, models: [{ id: 'claude', label: 'Claude' }] },
+    { provider: 'openai', label: 'OpenAI', supported: true, via: 'bridge', reason: null, models: [{ id: 'gpt', label: 'GPT' }] },
+    { provider: 'other', label: 'Other', supported: true, via: 'carrier-pigeon', reason: null, models: [{ id: 'x', label: 'X' }] },
     { provider: 'groq', label: 'Groq', supported: true, via: 'direct', reason: null, models: [{ id: 'llama', label: 'Llama' }] },
     { provider: 'odd', label: 'Odd', supported: false, reason: 'pi reports no model', models: [] },
   ] });
   assert.deepEqual(modelGroups(info.providers).map((g) => [g.label, g.disabled]), [
-    ['Anthropic · via pi', false], ['Groq', false], ['Odd - pi reports no model', true],
+    ['Anthropic · via Scranton', false], ['OpenAI · via Scranton', false], ['Other', false], ['Groq', false], ['Odd - pi reports no model', true],
   ]);
+  assert.deepEqual(info.providers.map((p) => p.via), ['bridge', 'bridge', null, 'direct', null], 'pi and bridge read as the one bridge');
 });
 
 test('buildDecision passes the pending digest through and refuses a gate that is not pending', () => {

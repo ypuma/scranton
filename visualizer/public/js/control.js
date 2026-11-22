@@ -25,13 +25,20 @@ export const EXIT_SETTLE_MS = 1500;
 // Events older than this are history even when they arrive outside the replay window.
 export const NOTIFY_MAX_AGE_MS = 60000;
 export const PARALLEL_MAX = 32;
-export const SANDBOX_NETWORKS = ['bridge', 'none'];
+// 'bridge' is the older name of 'allow' (.enma/run-options-contract.md)
+export const SANDBOX_NETWORKS = ['allow', 'none', 'bridge'];
+export const SANDBOX_MODES = ['scranton', 'docker', 'host'];
+// what "Ask before" turns on: the tool names a role's approvals take
+export const APPROVAL_TOOLS = Object.freeze({ shell: Object.freeze(['bash', 'powershell']), files: Object.freeze(['write', 'edit']) });
+export const APPROVAL_TIMEOUT = 600;
+export const APPROVAL_TIMEOUT_MIN = 10;
+export const APPROVAL_TIMEOUT_MAX = 86400;
 // Same pattern the server applies to sandboxImage.
 export const IMAGE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/;
 // The engine defaults (contract) for a server that does not report defaults.execution yet. trustedHost stays false:
-// the host is preselected, but its acknowledgement is only ever given by the human.
+// the host acknowledgement is only ever given by the human.
 export const EXECUTION_DEFAULTS = Object.freeze({
-  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'host', image: 'scranton-sandbox:1.5.2-r1', network: 'bridge' }),
+  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'scranton', image: 'scranton-tools:24-r1', network: 'allow' }),
   persistentSessions: true, simulated: false, trustedHost: false,
 });
 
@@ -351,15 +358,29 @@ export function recoveryTimes(orphan, now = Date.now()) {
   };
 }
 
-// What a new run starts with when the form is left alone. Docker only when the configuration names it.
+const networkOf = (v) => (v === 'bridge' ? 'allow' : v);
+
+// What a new run starts with when the form is left alone: the configured sandbox, else Scranton's own.
 export function executionDefaults(control) {
   const x = control?.execution;
   return {
     maxParallel: x?.maxParallel ?? EXECUTION_DEFAULTS.maxParallel,
-    sandbox: x?.sandbox?.mode === 'docker' ? 'docker' : EXECUTION_DEFAULTS.sandbox.mode,
+    sandbox: SANDBOX_MODES.includes(x?.sandbox?.mode) ? x.sandbox.mode : EXECUTION_DEFAULTS.sandbox.mode,
     image: x?.sandbox?.image || EXECUTION_DEFAULTS.sandbox.image,
-    network: SANDBOX_NETWORKS.includes(x?.sandbox?.network) ? x.sandbox.network : EXECUTION_DEFAULTS.sandbox.network,
+    network: SANDBOX_NETWORKS.includes(x?.sandbox?.network) ? networkOf(x.sandbox.network) : EXECUTION_DEFAULTS.sandbox.network,
   };
+}
+
+// The "Ask before" choice: { shell, files, timeout } as the inputs hold it. -> { approvals } (null: nothing asked)
+// or { error, field }
+export function buildApprovals({ shell = false, files = false, timeout = '' } = {}) {
+  const tools = [...(shell === true ? APPROVAL_TOOLS.shell : []), ...(files === true ? APPROVAL_TOOLS.files : [])];
+  if (!tools.length) return { approvals: null };
+  const t = intIn(timeout, APPROVAL_TIMEOUT_MIN, APPROVAL_TIMEOUT_MAX);
+  if (t.bad) {
+    return { error: `The approval wait must be a whole number of seconds from ${APPROVAL_TIMEOUT_MIN} to ${APPROVAL_TIMEOUT_MAX}.`, field: 'approvalTimeout' };
+  }
+  return { approvals: { tools, timeoutSeconds: t.empty ? APPROVAL_TIMEOUT : t.value } };
 }
 
 export function isAbsolutePath(p) {
@@ -374,12 +395,13 @@ function intIn(raw, min, max) {
   return n >= min && n <= max ? { value: n } : { bad: true };
 }
 
-// form: { request, workspace, maxCycles, noPlan, demo, scenario, delayMs,
-//         maxParallel, sandbox: 'docker' | 'host', trustedHost, sandboxImage, sandboxNetwork } as read from the inputs,
+// form: { request, workspace, maxCycles, noPlan, demo, scenario, delayMs, maxParallel,
+//         sandbox: 'scranton' | 'docker' | 'host', trustedHost, sandboxImage, sandboxNetwork: 'allow' | 'none',
+//         approveShell, approveFiles, approvalTimeout } as read from the inputs,
 //         models: { role: { provider, model } } already checked against the catalog (accounts.js buildModels),
 //         workflow: { stages } (none: an older form, the engine default stays in charge).
-// Host execution is only ever sent with the explicit confirmation; a demo sends no sandbox fields because the
-// fake pi runs on the host and must not look sandboxed. Every run this page starts is a conversation run
+// Host execution is only ever sent with the explicit confirmation; a demo sends no sandbox or approval fields because
+// its scripted model runs on the host and must not look sandboxed. Every run this page starts is a conversation run
 // (.enma/chat-view-contract.md section 1), a demo too. -> { body } or { error, field }
 export function buildRunRequest(form, control = DISABLED) {
   const request = raw(form.request).trim();
@@ -409,25 +431,31 @@ export function buildRunRequest(form, control = DISABLED) {
     const sandbox = form.sandbox;
     if (sandbox === 'host') {
       if (form.trustedHost !== true) {
-        return { error: 'Confirm that the agents may run commands directly on this computer, or pick the Docker sandbox.', field: 'trustedHost' };
+        return { error: 'Confirm that the agents may run commands directly on this computer, or pick a sandbox.', field: 'trustedHost' };
       }
       body.sandbox = 'host';
       body.trustedHost = true;
-    } else if (sandbox === 'docker') {
-      body.sandbox = 'docker';
-      const image = raw(form.sandboxImage).trim();
+    } else if (sandbox === 'scranton' || sandbox === 'docker') {
+      body.sandbox = sandbox;
+      const image = sandbox === 'docker' ? raw(form.sandboxImage).trim() : '';
       if (image) {
-        if (!IMAGE_RE.test(image)) return { error: 'The sandbox image must be a Docker image reference such as scranton-sandbox:1.5.2-r1.', field: 'sandboxImage' };
+        if (!IMAGE_RE.test(image)) return { error: `The sandbox image must be a Docker image reference such as ${executionDefaults(control).image}.`, field: 'sandboxImage' };
         body.sandboxImage = image;
       }
       const network = raw(form.sandboxNetwork);
       if (network) {
-        if (!SANDBOX_NETWORKS.includes(network)) return { error: 'The sandbox network must be bridge or none.', field: 'sandboxNetwork' };
-        if (network !== executionDefaults(control).network) body.sandboxNetwork = network;
+        if (!SANDBOX_NETWORKS.includes(network)) return { error: 'The sandbox network must be allow or none.', field: 'sandboxNetwork' };
+        if (networkOf(network) !== executionDefaults(control).network) body.sandboxNetwork = networkOf(network);
       }
     } else {
-      return { error: 'Pick the Docker sandbox or trusted host execution.', field: 'sandbox' };
+      return { error: 'Pick the Scranton sandbox, Docker or trusted host execution.', field: 'sandbox' };
     }
+  }
+
+  if (!demo) {
+    const a = buildApprovals({ shell: form.approveShell, files: form.approveFiles, timeout: form.approvalTimeout });
+    if (a.error) return a;
+    if (a.approvals) body.approvals = a.approvals;
   }
 
   // a demo replays its scripted agents, whatever gates are picked
@@ -437,7 +465,7 @@ export function buildRunRequest(form, control = DISABLED) {
     body.workflow = { gates: w.gates };
   }
 
-  // the fake pi of a demo uses no model
+  // the scripted model of a demo is no model to pick
   if (!demo && form.models && typeof form.models === 'object' && Object.keys(form.models).length) body.models = form.models;
 
   if (demo) {
@@ -593,7 +621,7 @@ export function exitHint(le) {
     return 'Another run still owns this hive. Stop that run, or recover ownership as described in docs/CONTROL.md, before starting a new one.';
   }
   if (/docker|sandbox|container engine|\bwsl\b|image .*not (found|available)|pull access denied/i.test(t)) {
-    return 'The Docker sandbox is not usable here. Run "scranton doctor", install and start Docker and build the sandbox image, or start the run again with trusted host execution.';
+    return 'The sandbox is not usable here. Run "scranton doctor" to see why: with Docker, install and start it and build the sandbox image, or start the run again in the Scranton sandbox or with trusted host execution.';
   }
   return '';
 }
@@ -637,10 +665,10 @@ export function documentTitle({ enabled, pending, live, hitl, gone = false }) {
 const ERROR_FIELDS = {
   request: 'request', workspace: 'workspace', maxcycles: 'maxCycles', scenario: 'scenario', delayms: 'delayMs',
   maxparallel: 'maxParallel', trustedhost: 'trustedHost', sandboximage: 'sandboxImage', sandboxnetwork: 'sandboxNetwork', sandbox: 'sandbox',
-  models: 'models', workflow: 'workflow', gates: 'workflow',
+  models: 'models', workflow: 'workflow', gates: 'workflow', approvals: 'approvals',
 };
 
-// "Docker requires an explicit provider and model for dwight, angela; ..." -> ['dwight', 'angela'].
+// "... requires an explicit provider and model for dwight, angela; ..." -> ['dwight', 'angela'].
 // roles: the roles that have a select (roleIds), in their order.
 export function modelErrorRoles(message, roles = MODEL_ROLES) {
   const m = /\bprovider and model for ([a-z0-9, ]+)/i.exec(typeof message === 'string' ? message : '');
@@ -653,7 +681,9 @@ export function errorField(message, roles = MODEL_ROLES) {
   if (named.length) return `models.${named[0]}`;
   const role = /\bmodels\.([a-z][a-z0-9]{1,19})\b/i.exec(text);
   if (role && roles.includes(role[1].toLowerCase())) return `models.${role[1].toLowerCase()}`;
-  const m = /\b(request|workspace|maxcycles|scenario|delayms|maxparallel|trustedhost|sandboximage|sandboxnetwork|sandbox|models|workflow|gates)\b/i.exec(text);
+  // "approvals.timeoutSeconds ..." is about the wait, not the boxes
+  if (/\btimeoutseconds\b/i.test(text)) return 'approvalTimeout';
+  const m = /\b(request|workspace|maxcycles|scenario|delayms|maxparallel|trustedhost|sandboximage|sandboxnetwork|sandbox|models|workflow|gates|approvals)\b/i.exec(text);
   return m ? ERROR_FIELDS[m[1].toLowerCase()] : null;
 }
 

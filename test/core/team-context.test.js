@@ -21,8 +21,8 @@ async function run(t, { developerContext, runContext, threadContext, noPlan = fa
   const inputs = [], counts = {};
   const orchestrator = new Orchestrator({ config, noPlan, threadContext, developerContext,
     hitl: async () => ({ decision: 'feedback', feedback: 'Try again' }),
-    startRunner: ({ agentId, hive }) => {
-      const message = parseMessage(fs.readFileSync(hive.inboxPath(agentId), 'utf8'));
+    startRunner: ({ agentId, instanceId, hive }) => {
+      const message = parseMessage(fs.readFileSync(hive.inboxPath(instanceId), 'utf8'));
       inputs.push({ agent: agentId, kind: message.header.kind, body: message.body });
       counts[agentId] = (counts[agentId] ?? 0) + 1;
       const failing = retries && agentId === (gates ? 'oscar' : 'angela') && counts[agentId] <= 2;
@@ -54,7 +54,7 @@ for (const gates of [false, true]) test(`${gates ? 'multi-gate' : 'legacy'}: abs
   const dwight = inputs.filter((i) => i.agent === 'dwight');
   assert.deepEqual(dwight.map((i) => i.kind), ['task', 'bug_report', 'feedback']);
   for (let i = 0; i < inputs.length; i++) {
-    assert.equal(inputs[i].body, baseline[i].body + (inputs[i].agent === 'dwight' ? section('Prior task -> outcome') : ''));
+    assert.equal(inputs[i].body, inputs[i].agent === 'dwight' ? baseline[i].body.replace('\n\n## Instance coordination', section('Prior task -> outcome') + '\n\n## Instance coordination') : baseline[i].body);
   }
 });
 
@@ -78,10 +78,10 @@ test('run override normalizes non-strings and clamps developer context at whole-
   const text = 'a'.repeat(3999) + '\r\n' + 'b'.repeat(4000);
   const inputs = await run(t, { developerContext: 'Wrong history', runContext: text + '\n' + 'DROP'.repeat(26), retries: false });
   const body = inputs.find((i) => i.agent === 'dwight').body;
-  assert.ok(body.endsWith(section(text.replace(/\r\n/g, '\n'))));
+  assert.ok(body.split('\n\n## Instance coordination')[0].endsWith(section(text.replace(/\r\n/g, '\n'))));
   assert.doesNotMatch(body, /Wrong history|DROP/);
   const oversized = await run(t, { developerContext: 'Keep\n' + 'x'.repeat(8101), retries: false });
-  assert.ok(oversized.find((i) => i.agent === 'dwight').body.endsWith(section('Keep')));
+  assert.ok(oversized.find((i) => i.agent === 'dwight').body.split('\n\n## Instance coordination')[0].endsWith(section('Keep')));
 });
 
 // Revert #plan's 800100 limit to 24000 to fail the intact-pack assertion.

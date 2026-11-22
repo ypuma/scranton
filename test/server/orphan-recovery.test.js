@@ -1,3 +1,4 @@
+import './runtime-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -16,7 +17,7 @@ function fixture(t) {
   const dir = fs.mkdtempSync(path.join(root, 'r-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const hive = path.join(dir, 'h'), workspace = path.join(dir, 'w'); fs.mkdirSync(workspace);
-  const env = { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(dir, 'i'), PI_CODING_AGENT_DIR: path.join(dir, 'pi') };
+  const env = { ...process.env, SCRANTON_DATA: '', SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), SCRANTON_FAKE_MODE: '1', SCRANTON_ISOLATION_ROOT: path.join(dir, 'i'), PI_CODING_AGENT_DIR: path.join(dir, 'pi') };
   return { dir, hive, workspace, env };
 }
 const auth = { close() {} };
@@ -190,7 +191,7 @@ function fixFixture(t) {
   const dir = fs.mkdtempSync(path.join(root, 'server-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const workspace = path.join(dir, 'w'); fs.mkdirSync(workspace);
-  return { dir, hive: path.join(dir, 'h'), workspace, env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(dir, 'i'), PI_CODING_AGENT_DIR: path.join(dir, 'pi') } };
+  return { dir, hive: path.join(dir, 'h'), workspace, env: { ...process.env, SCRANTON_DATA: '', SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), SCRANTON_FAKE_MODE: '1', SCRANTON_ISOLATION_ROOT: path.join(dir, 'i'), PI_CODING_AGENT_DIR: path.join(dir, 'pi') } };
 }
 function deadHeartbeat(f, runId) {
   fs.writeFileSync(path.join(f.hive, 'control', 'heartbeat.json'), JSON.stringify({ v: 1, runId, pid: 2147483647, at: new Date().toISOString() }));

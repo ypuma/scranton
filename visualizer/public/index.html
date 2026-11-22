@@ -85,7 +85,7 @@
         <select id="run-picker" aria-describedby="thread-status"></select>
       </div>
     </div>
-    <p class="thread-empty" id="thread-empty" hidden><strong id="thread-empty-title">No chat yet</strong> <span id="thread-empty-detail"></span> <button type="button" class="btn btn-small" id="thread-empty-action"></button> <span class="thread-empty-accounts" id="thread-empty-accounts" hidden>No account is signed in and no API key was found, so the agents have no model to use unless pi finds a key in the environment. <button type="button" class="link-btn" id="thread-empty-accounts-open">Open Accounts</button></span></p>
+    <p class="thread-empty" id="thread-empty" hidden><strong id="thread-empty-title">No chat yet</strong> <span id="thread-empty-detail"></span> <button type="button" class="btn btn-small" id="thread-empty-action"></button> <span class="thread-empty-accounts" id="thread-empty-accounts" hidden>No account is signed in and no API key was found, so the agents have no model to use unless an API key is set in the environment. <button type="button" class="link-btn" id="thread-empty-accounts-open">Open Accounts</button></span></p>
     <div class="replay" id="replay-banner" role="status" hidden>
       <span class="replay-mark" aria-hidden="true">◐</span>
       <strong class="replay-title">Viewing earlier run</strong>
@@ -213,6 +213,11 @@
       </div>
     </form>
     <div class="hitl-status" id="hitl-status" role="status" aria-live="polite" tabindex="-1"></div>
+  </section>
+
+  <section class="approvals" id="approvals" hidden aria-labelledby="approvals-title">
+    <h2 class="sr-only" id="approvals-title" tabindex="-1">Tool calls waiting for your approval</h2>
+    <ul class="approval-list" id="approvals-list"></ul>
   </section>
 
   <section class="exit-panel" id="exit-panel" hidden aria-labelledby="exit-title">
@@ -548,6 +553,7 @@
             <label for="prefs-sandbox">Sandbox</label>
             <select id="prefs-sandbox" aria-describedby="prefs-sandbox-hint">
               <option value="">The project's configuration</option>
+              <option value="scranton">Scranton sandbox</option>
               <option value="docker">Docker container</option>
               <option value="host">Trusted host</option>
             </select>
@@ -662,20 +668,26 @@
           </div>
           <div class="field" role="radiogroup" aria-labelledby="f-sandbox-label" id="f-sandbox">
             <span class="field-label" id="f-sandbox-label">Sandbox</span>
-            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker"><span>Docker container <span class="hint">requires Docker and a local sandbox image</span></span></label>
-            <label class="check"><input type="radio" name="sandbox" value="host" id="f-sandbox-host" checked><span>Trusted host <span class="hint">no sandbox: agent commands run on this computer with your user rights</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="scranton" id="f-sandbox-scranton" checked><span>Scranton sandbox <span class="hint">default: agent commands run in Scranton's own sandbox on this computer</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="docker" id="f-sandbox-docker"><span>Docker container <span class="hint">optional: agent commands run in a container; requires Docker and a local sandbox image</span></span></label>
+            <label class="check"><input type="radio" name="sandbox" value="host" id="f-sandbox-host"><span>Trusted host <span class="hint">no sandbox: agent commands run on this computer with your user rights</span></span></label>
           </div>
-          <div class="field-row" id="docker-fields">
-            <div class="field">
-              <label for="f-image">Image <span class="hint">optional</span></label>
-              <input id="f-image" name="sandboxImage" class="mono" type="text" spellcheck="false" autocomplete="off" maxlength="256">
-            </div>
-            <div class="field">
-              <label for="f-network">Network</label>
-              <select id="f-network" name="sandboxNetwork">
-                <option value="bridge">bridge</option>
-                <option value="none">none (offline)</option>
-              </select>
+          <div class="field" id="docker-fields">
+            <label for="f-image">Docker image <span class="hint">optional</span></label>
+            <input id="f-image" name="sandboxImage" class="mono" type="text" spellcheck="false" autocomplete="off" maxlength="256">
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="f-network" name="sandboxNetwork" aria-describedby="f-network-note"><span>Block network <span class="hint">agent commands get no network access</span></span></label>
+            <span class="hint" id="f-network-note">On Windows the default Scranton sandbox cannot block the network: a run that asks for it does not start there. Docker can block it.</span>
+          </div>
+          <div class="field" role="group" aria-labelledby="f-approve-label" id="f-approve">
+            <span class="field-label" id="f-approve-label">Ask before</span>
+            <label class="check"><input type="checkbox" id="f-approve-shell" name="approveShell"><span>Shell commands <span class="hint">bash and PowerShell</span></span></label>
+            <label class="check"><input type="checkbox" id="f-approve-files" name="approveFiles"><span>File changes <span class="hint">write and edit</span></span></label>
+            <div class="approve-wait" id="f-approve-wait">
+              <label for="f-approve-timeout">Wait up to</label>
+              <input id="f-approve-timeout" name="approvalTimeout" class="mono narrow" type="text" inputmode="numeric" maxlength="5" value="600" aria-describedby="f-approve-hint">
+              <span class="hint" id="f-approve-hint">seconds for your answer; no answer in time denies the call</span>
             </div>
           </div>
           <details class="form-help">
@@ -714,11 +726,10 @@
               <span class="hint" id="f-model-angela-note" hidden></span>
             </div>
           </div>
-          <p class="models-need" id="models-need" hidden><span id="models-need-text"></span> <button type="button" class="link-btn" id="models-agents" hidden>Open Agents</button></p>
           <p class="hint" id="models-plan" hidden></p>
           <details class="form-help">
             <summary>Model selection help</summary>
-            <p class="hint" id="models-note">Only models of signed-in accounts and configured API keys can be picked. pi default uses the model from the agent configuration.</p>
+            <p class="hint" id="models-note">Only models of signed-in accounts and configured API keys can be picked. Automatic uses the agent's configured model, otherwise the first signed-in account in this order: Claude, ChatGPT, Gemini, Google Antigravity.</p>
           </details>
           <p class="hint" id="models-docker-note" hidden></p>
         </fieldset>
@@ -730,8 +741,8 @@
             <span class="hint" id="f-cycles-hint">Failed test cycles before the circuit breaker asks you (1-10).</span>
           </div>
           <label class="check"><input type="checkbox" id="f-noplan" name="noPlan"><span>Skip planning <span class="hint">one milestone for the whole request</span></span></label>
-          <label class="check" id="f-demo-row"><input type="checkbox" id="f-demo" name="demo"><span>Demo with fake pi <span class="hint">scripted agents, no model or API key</span></span></label>
-          <p class="hint" id="f-demo-none" hidden>Demo with fake pi: this server lists no demo scenarios here. Start it from a team chat.</p>
+          <label class="check" id="f-demo-row"><input type="checkbox" id="f-demo" name="demo"><span>Demo (scripted model) <span class="hint">scripted agents, no model or API key</span></span></label>
+          <p class="hint" id="f-demo-none" hidden>Demo (scripted model): this server lists no demo scenarios here. Start it from a team chat.</p>
           <div class="field-row" id="demo-fields">
             <div class="field">
               <label for="f-scenario">Scenario</label>
@@ -744,7 +755,7 @@
           </div>
         </details>
         </details>
-        <p class="models-signin team-only" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use unless pi finds a key in the environment.</span> <button type="button" class="link-btn" id="models-accounts">Open Accounts</button></p>
+        <p class="models-signin team-only" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use unless an API key is set in the environment.</span> <button type="button" class="link-btn" id="models-accounts">Open Accounts</button></p>
         <label class="check trust team-only" id="f-trust-row"><input type="checkbox" id="f-trusted" name="trustedHost"><span>I trust this request and workspace, and accept that the agents run without a sandbox <span class="hint" id="f-trust-kept" hidden>accepted for this chat</span></span></label>
         <div class="pf" id="pipeline-fields" hidden>
           <p class="form-error" id="pf-unavailable" role="alert" hidden></p>
@@ -823,7 +834,7 @@
                 <select id="pf-model-reviewer" data-role="reviewer"></select>
               </div>
             </div>
-            <p class="hint" id="pf-models-note">Every model of a signed-in account or API key can be used. Models marked via pi are answered by pi with its own sign-in.</p>
+            <p class="hint" id="pf-models-note">Every model of a signed-in account or API key can be used. Models marked via Scranton are answered through Scranton's own sign-in on this computer.</p>
           </fieldset>
           <fieldset class="exec" id="pf-exec-set">
             <legend>Execution</legend>
@@ -894,7 +905,7 @@
         <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
       </header>
       <div class="drawer-body">
-        <p class="hint accounts-intro">Sign in with your Claude Pro/Max or ChatGPT subscription or your Google account (Google Antigravity), or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers. Everything is stored in pi's own credential store on this computer; this page never shows a stored sign-in or key.</p>
+        <p class="hint accounts-intro">Sign in with your Claude Pro/Max or ChatGPT subscription or your Google account (Google Antigravity), or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers. Everything is stored with Scranton's credentials on this computer; this page never shows a stored sign-in or key.</p>
         <p class="form-error" id="accounts-error" role="alert" hidden></p>
         <p class="accounts-status" id="accounts-status" role="status" aria-live="polite" tabindex="-1"></p>
         <p class="hint" id="accounts-empty">Loading accounts...</p>
@@ -959,7 +970,7 @@
             <h3 class="keyform-title" id="provider-title">Add custom provider</h3>
             <button type="button" class="btn btn-small" id="provider-preset">abliteration.ai preset</button>
           </div>
-          <p class="hint keyform-note">A server that speaks the OpenAI or Anthropic API. Scranton adds it to pi's models.json and stores the key in pi's credential store, never in models.json.</p>
+          <p class="hint keyform-note">A server that speaks the OpenAI or Anthropic API. Scranton adds it to Scranton's provider configuration and keeps the key with Scranton's credentials on this computer, never in that configuration.</p>
           <div class="field-row">
             <div class="field">
               <label for="provider-label">Name</label>

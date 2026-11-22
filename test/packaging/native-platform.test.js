@@ -14,7 +14,7 @@ const json = (name) => JSON.parse(read(name));
 // macos/app.rs, linux/debian.rs and linux/appimage/linuxdeploy.rs.
 test('native platform overlays preserve staging and least-privilege window capabilities', () => {
   const base = json('tauri.conf.json');
-  assert.deepEqual(base.bundle.externalBin, ['binaries/scranton-node']);
+  assert.deepEqual(base.bundle.externalBin, ['binaries/scranton-node', 'binaries/scranton-sandbox-helper']);
   assert.deepEqual(base.bundle.resources, { 'staged/app/': 'app/' });
   assert.deepEqual(json('tauri.windows.conf.json').bundle.targets, ['nsis']);
   assert.deepEqual(json('tauri.macos.conf.json').bundle.targets, ['app', 'dmg']);

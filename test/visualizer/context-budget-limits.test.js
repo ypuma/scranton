@@ -1,3 +1,4 @@
+import '../core/isolation-test-root.js';
 // The input limits of context budget v2 (.enma/context-budget-contract.md sections 11 and 12): the composer and the
 // New run request take 32768 chars, a Pipeline chat's shared composer counts and refuses in UTF-8 bytes, the user's
 // own request is shown in full, a message to a running agent and HITL feedback take 16000. The last tests hold the
@@ -107,7 +108,7 @@ test('the stored Pipeline planner pick is read from the Pipeline form\'s models,
   }
 });
 
-const provider = (id, model) => ({ provider: id, label: id, supported: true, via: 'pi', reason: null, models: [{ id: model, label: model }] });
+const provider = (id, model) => ({ provider: id, label: id, supported: true, via: 'bridge', reason: null, models: [{ id: model, label: model }] });
 const value = (p, m) => JSON.stringify([p, m]);
 
 // The Pipeline form and the context panel wired as main.js wires them, on one fake DOM; the server answers

@@ -16,6 +16,7 @@ import { loadConfig, PACKAGE_ROOT } from '../core/config.js';
 import { createModelWindows } from '../core/model-windows.js';
 import { createContext } from '../core/context/index.js';
 import { UNKNOWN_RECIPIENT } from '../core/context/limits.js';
+import { createAgentRoutes } from './agent-routes.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 function authorize(req) {
@@ -50,6 +51,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
   if (legacyWorkspace) registry?.importLegacy(legacyWorkspace);
   registry?.listProjects();
   const chatContext = registry ? createContext({ dataDir, registry }) : null;
+  const agentRoutes = createAgentRoutes();
   const contexts = new Map();
   const completed = new Map(), dreams = new Map(), nextDream = new Map();
   function dreaming(projectId) {
@@ -231,6 +233,12 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     }
     if (chat.engine === 'pipeline' && req.method === 'POST' && ['/runs', '/chat', '/hitl', '/stop', '/release', '/runs/stop', '/runs/release'].includes(suffix)) throw fail(409, 'This chat uses the pipeline engine');
     if (chat.engine === 'pipeline') return json(res, 404, { error: 'Not found' });
+    if (suffix === '/approvals') {
+      if (req.method === 'POST' && single && !single.controller) throw fail(404, 'Not found');
+      return agentRoutes.approvals(req, res, chat.hiveDir, registry ? { projectId: project.id, chatId: chat.id } : undefined);
+    }
+    const agentStream = /^\/runs\/([^/]+)\/agents\/([^/]+)\/stream$/.exec(suffix);
+    if (agentStream && req.method === 'GET') return agentRoutes.stream(req, res, chat.hiveDir, agentStream[1], agentStream[2], registry ? { projectId: project.id, chatId: chat.id } : undefined);
     if (suffix === '/runs' && req.method === 'GET') { json(res, 200, { runs: runsFor(chat.hiveDir) }); return; }
     const archive = /^\/runs\/([^/]+)\/events$/.exec(suffix);
     if (archive && req.method === 'GET') { json(res, 200, { events: replay(chat.hiveDir, archive[1]) }); return; }
@@ -280,15 +288,17 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       const scopedPath = /^\/api\/projects\/([^/]+)\/chats\/([^/]+)(\/.*)$/.exec(pathname);
       const chatRoute = /^\/api\/projects\/([^/]+)\/chats(?:\/(rename|remove))?$/.exec(pathname);
       const projectsRoute = ['/api/projects', '/api/projects/rename', '/api/projects/remove'].includes(pathname);
-      const alias = registry && ['/events', '/api/live', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname);
+      const agentPath = pathname === '/api/approvals' || /^\/api\/runs\/[^/]+\/agents\/[^/]+\/stream$/.test(pathname);
+      const alias = registry && (agentPath || ['/events', '/api/live', '/api/state', '/api/runs', '/api/chat', '/api/hitl', '/api/stop', '/api/runs/stop', '/api/runs/release', '/api/control'].includes(pathname));
       const dreamPath = /^\/api\/projects\/([^/]+)\/dreaming(?:\/(preview|sweep|settings|rollback|proposal|propose|proposal\/apply|proposal\/reject|cancel))?$/.exec(pathname);
       const contextPath = /^\/api\/projects\/([^/]+)\/context(?:\/(.*))?$/.exec(pathname);
       const detectPath = /^\/api\/projects\/([^/]+)\/pipeline\/detect$/.exec(pathname);
-      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath && !dreamPath && !contextPath) return false;
+      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !agentPath && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath && !dreamPath && !contextPath) return false;
       if (!registry && (contextPath || scopedPath?.[3] === '/context' || scopedPath?.[3].startsWith('/context/'))) throw fail(404, 'Not found');
       if (!registry && !scopedPath && !chatRoute && !projectsRoute && pathname === '/api/runs' && req.method !== 'GET') return false;
       authorize(req);
       if (!registry && pathname === '/api/runs' && req.method === 'GET') { json(res, 200, { runs: runsFor(defaultChat().hiveDir) }); return true; }
+      if (!registry && agentPath) { await scoped(req, res, defaultProject(), defaultChat(), pathname.slice(4)); return true; }
       if (closing) throw fail(409, 'Server is closing');
       recoverGone();
       if (contextPath) {
@@ -390,6 +400,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
     },
     async close() {
       closing = true; clearInterval(reaper); clearInterval(dreamTimer);
+      agentRoutes.close();
       const errors = [];
       const drain = async (closers) => {
         const results = await Promise.allSettled(closers.map((close) => Promise.resolve().then(close)));

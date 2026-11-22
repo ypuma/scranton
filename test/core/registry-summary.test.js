@@ -24,9 +24,9 @@ function fixture(t) {
   const context = path.join(dir, 'context.json');
   fs.writeFileSync(context, JSON.stringify({ v: 1, text: '' }));
   const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
-    PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_ISOLATION_ROOT: path.join(dir, 'isolation'),
-    SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pi.js')]),
-    FAKE_PI_DELAY_MS: '0', FAKE_PI_DETERMINISTIC: '1', FAKE_PI_SCENARIO: 'happy' };
+    PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), SCRANTON_ISOLATION_ROOT: path.join(dir, 'isolation'),
+    SCRANTON_FAKE_MODE: '1',
+    SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1', SCRANTON_FAKE_SCENARIO: 'happy' };
   const io = { cwd: dir, env, out: '', err: '', stdout: { write(s) { io.out += s; } }, stderr: { write(s) { io.err += s; } } };
   return { dir, ws, hive, context, io };
 }

@@ -10,13 +10,13 @@ import { reduceAll, normalizeExecution } from '../../visualizer/public/js/state.
 import { executionBadges } from '../../visualizer/public/js/lanes.js';
 
 const RUN = { pid: 42, mode: 'run', request: 'Todo', workspace: 'C:\\ws', startedAt: '2026-11-08T12:00:00.000Z', runId: 'r1', exitCode: null };
-const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-sandbox:1.5.2-r1', network: 'none' } } };
+const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-tools:24-r1', network: 'none' } } };
 
 function doc(fields = {}) {
   return { v: 1, enabled: true, workspace: 'C:\\ws', scenarios: ['happy'], run: null, lastExit: null, pendingHuman: null, ...fields };
 }
 
-const form = (fields = {}) => ({ request: 'Build it', workspace: '', maxCycles: '', noPlan: false, demo: false, maxParallel: '3', sandbox: 'docker', trustedHost: false, sandboxImage: '', sandboxNetwork: 'bridge', ...fields });
+const form = (fields = {}) => ({ request: 'Build it', workspace: '', maxCycles: '', noPlan: false, demo: false, maxParallel: '3', sandbox: 'docker', trustedHost: false, sandboxImage: '', sandboxNetwork: 'allow', ...fields });
 
 function maker(runId) {
   let seq = 0;
@@ -63,14 +63,16 @@ test('parseControl reads defaults.execution, instances and recovery', () => {
   assert.equal(parseControl(null).recoveryRequired, false);
 });
 
-test('executionDefaults: the server defaults, else the engine defaults; Docker only when the configuration names it', () => {
-  assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-sandbox:1.5.2-r1', network: 'none' });
-  assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'host', image: EXECUTION_DEFAULTS.sandbox.image, network: 'bridge' });
+test('executionDefaults: the server defaults, else the engine defaults; the Scranton sandbox unless the configuration names another', () => {
+  assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-tools:24-r1', network: 'none' });
+  assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'scranton', image: 'scranton-tools:24-r1', network: 'allow' });
   const host = { execution: { ...DEFAULTS.execution, sandbox: { mode: 'host' } } };
   assert.equal(executionDefaults(parseControl(doc({ defaults: host }))).sandbox, 'host');
+  const own = { execution: { ...DEFAULTS.execution, sandbox: { mode: 'scranton', network: 'bridge' } } };
+  assert.deepEqual([executionDefaults(parseControl(doc({ defaults: own }))).sandbox, executionDefaults(parseControl(doc({ defaults: own }))).network], ['scranton', 'allow'], 'bridge is the older name of allow');
   for (const mode of [undefined, '', 'vm', 7]) {
     const odd = { execution: { maxParallel: 2, sandbox: mode === undefined ? undefined : { mode } } };
-    assert.equal(executionDefaults(parseControl(doc({ defaults: odd }))).sandbox, 'host', `mode ${String(mode)}`);
+    assert.equal(executionDefaults(parseControl(doc({ defaults: odd }))).sandbox, 'scranton', `mode ${String(mode)}`);
   }
   assert.equal(EXECUTION_DEFAULTS.trustedHost, false, 'the acknowledgement is never a default');
   // what a run reported stays as reported: an execution without a sandbox mode is not read as the host
@@ -95,16 +97,53 @@ test('buildRunRequest: parallelism and the docker sandbox by default', () => {
   for (const bad of ['0', '33', '1.5', 'x']) assert.equal(buildRunRequest(form({ maxParallel: bad }), c).field, 'maxParallel', bad);
   assert.equal(buildRunRequest(form({ maxParallel: '32' }), c).body.maxParallel, 32);
   assert.equal(buildRunRequest(form({ sandboxImage: '-rm -rf' }), c).field, 'sandboxImage');
+  assert.match(buildRunRequest(form({ sandboxImage: '-rm -rf' }), c).error, /such as scranton-tools:24-r1\.$/);
+  const own = parseControl(doc({ defaults: { execution: { ...DEFAULTS.execution, sandbox: { mode: 'docker', image: 'my/tools:9' } } } }));
+  assert.match(buildRunRequest(form({ sandboxImage: '-rm -rf' }), own).error, /such as my\/tools:9\.$/, 'the example is the configured image');
   assert.equal(buildRunRequest(form({ sandboxNetwork: 'host' }), c).field, 'sandboxNetwork');
   assert.equal(buildRunRequest(form({ sandbox: 'vm' }), c).field, 'sandbox');
+  assert.equal(buildRunRequest(form({ sandbox: 'vm' }), c).error, 'Pick the Scranton sandbox, Docker or trusted host execution.');
   // an older form without a sandbox choice sends none
   assert.deepEqual(buildRunRequest({ request: 'x' }, c), { body: { request: 'x', conversation: true } });
+});
+
+test('buildRunRequest: the Scranton sandbox is sent as itself, its network block too; an image is Docker only', () => {
+  const c = parseControl(doc());
+  assert.deepEqual(buildRunRequest(form({ sandbox: 'scranton' }), c).body, { request: 'Build it', maxParallel: 3, sandbox: 'scranton', conversation: true });
+  assert.deepEqual(buildRunRequest(form({ sandbox: 'scranton', sandboxNetwork: 'none', sandboxImage: 'x:1' }), c).body,
+    { request: 'Build it', maxParallel: 3, sandbox: 'scranton', sandboxNetwork: 'none', conversation: true });
+  assert.equal(buildRunRequest(form({ sandbox: 'scranton', sandboxNetwork: 'bridge' }), c).body.sandboxNetwork, undefined, 'bridge is allow, the default');
+  // a configuration that blocks the network: allowing it is a choice to send
+  const blocked = parseControl(doc({ defaults: { execution: { sandbox: { mode: 'scranton', network: 'none' } } } }));
+  assert.equal(buildRunRequest(form({ sandbox: 'scranton', sandboxNetwork: 'allow' }), blocked).body.sandboxNetwork, 'allow');
+  assert.equal(buildRunRequest(form({ sandbox: 'scranton', sandboxNetwork: 'none' }), blocked).body.sandboxNetwork, undefined);
+  assert.equal(buildRunRequest(form({ sandbox: 'scranton', sandboxNetwork: 'off' }), c).error, 'The sandbox network must be allow or none.');
+});
+
+test('buildRunRequest: Ask before sends approvals with the tools and the wait, never for a demo or with nothing ticked', () => {
+  const c = parseControl(doc());
+  const sb = { sandbox: 'scranton' };
+  assert.equal(buildRunRequest(form(sb), c).body.approvals, undefined, 'no approvals by default');
+  assert.deepEqual(buildRunRequest(form({ ...sb, approveShell: true, approvalTimeout: '' }), c).body.approvals, { tools: ['bash', 'powershell'], timeoutSeconds: 600 });
+  assert.deepEqual(buildRunRequest(form({ ...sb, approveFiles: true, approvalTimeout: '600' }), c).body.approvals, { tools: ['write', 'edit'], timeoutSeconds: 600 });
+  assert.deepEqual(buildRunRequest(form({ ...sb, approveShell: true, approveFiles: true, approvalTimeout: ' 90 ' }), c).body.approvals,
+    { tools: ['bash', 'powershell', 'write', 'edit'], timeoutSeconds: 90 });
+  for (const bad of ['5', '86401', '1.5', 'soon']) {
+    assert.deepEqual(buildRunRequest(form({ ...sb, approveShell: true, approvalTimeout: bad }), c),
+      { error: 'The approval wait must be a whole number of seconds from 10 to 86400.', field: 'approvalTimeout' }, bad);
+  }
+  assert.equal(buildRunRequest(form({ ...sb, approveShell: 'true' }), c).body.approvals, undefined, 'only a real true counts');
+  assert.equal(buildRunRequest(form({ ...sb, approvalTimeout: 'soon' }), c).body.approvals, undefined, 'the wait is not checked when nothing is asked');
+  const demo = buildRunRequest(form({ demo: true, request: '', scenario: 'happy', approveShell: true, approveFiles: true }), c);
+  assert.equal(demo.body.approvals, undefined);
+  assert.equal(errorField('Invalid approvals.timeoutSeconds'), 'approvalTimeout');
+  assert.equal(errorField('Invalid approvals'), 'approvals');
 });
 
 test('buildRunRequest: trusted host needs the explicit confirmation and drops docker options', () => {
   const c = parseControl(doc());
   assert.deepEqual(buildRunRequest(form({ sandbox: 'host' }), c), {
-    error: 'Confirm that the agents may run commands directly on this computer, or pick the Docker sandbox.', field: 'trustedHost',
+    error: 'Confirm that the agents may run commands directly on this computer, or pick a sandbox.', field: 'trustedHost',
   });
   assert.deepEqual(buildRunRequest(form({ sandbox: 'host', trustedHost: 'true' }), c).field, 'trustedHost', 'only a real true counts');
   assert.deepEqual(buildRunRequest(form({ sandbox: 'host', trustedHost: true, sandboxImage: 'x:1', sandboxNetwork: 'none' }), c).body,
@@ -142,7 +181,7 @@ test('control gates: an orphaned owner disables New run; a stop request needs it
 
 test('exitHint names the missing prerequisite without claiming anything works', () => {
   assert.match(exitHint({ outputTail: 'error: docker: command not found' }), /scranton doctor/);
-  assert.match(exitHint({ outputTail: 'Sandbox image scranton-sandbox:1.5.2-r1 not found' }), /trusted host/);
+  assert.match(exitHint({ outputTail: 'Sandbox image scranton-tools:24-r1 not found' }), /Scranton sandbox or with trusted host/);
   assert.match(exitHint({ outputTail: 'Hive is owned by another run' }), /recover ownership/);
   assert.equal(exitHint({ outputTail: 'TypeError: x is undefined' }), '');
   assert.equal(exitHint(null), '');

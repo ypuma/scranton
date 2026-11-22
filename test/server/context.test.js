@@ -169,13 +169,13 @@ test('Pipeline start writes context unchanged, siblings only in other_chats, res
   const changes = { SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.resolve('.scratch/context-system/lane-s/workspaces') };
   const previous = Object.fromEntries(Object.keys(changes).map((k) => [k, process.env[k]])); Object.assign(process.env, changes);
   t.after(() => { for (const [k, v] of Object.entries(previous)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
-  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], listModels: () => ({ providers: [{ id: 'openai', models: [{ id: 'fake' }] }] }), resolveDockerCredential: () => ({ value: 'fixture-credential' }), close() {} };
+  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], listModels: () => ({ providers: [{ id: 'openai', models: [{ id: 'gpt-4o' }] }] }), resolveAuth: () => ({ key: 'fixture-credential' }), close() {} };
   const f = await server(t, { auth });
   f.teamRun(f.sibling, 'sibold', 'SIBLING-PREVIOUS'); f.teamRun(f.stranger, 'foreignt', 'FOREIGN-SECRET');
   for (let i = 1; i <= 5; i++) f.pipelineRun('pipe000' + i, 'OWN-TURN-' + i, i);
   await f.req(f.projectRoute + '/notes', { text: 'Project notes Grüße 😀' });
   const route = `/api/projects/${f.project.id}/chats/${f.pipeline.id}/pipeline/runs`, root = f.pipeRoot();
-  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'fake' }]));
+  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
   const body = { task: 'NEW-TASK', models, sandbox: { mode: 'host', trustHost: true } };
   const memory = seedMemory(f);
   const context = createContext({ dataDir: f.dataDir, registry: f.registry }), expected = context.forPipeline(f.project.id, f.pipeline.id, { projectMemory: memory.structured });

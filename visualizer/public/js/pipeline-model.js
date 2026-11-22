@@ -148,7 +148,8 @@ export function parseEngineInfo(doc, httpStatus = 200) {
     const models = list(o.models).map((m) => (obj(m) && typeof m.id === 'string' && m.id ? { id: m.id, label: str(m.label) || str(m.id) } : null)).filter(Boolean);
     return {
       provider: o.provider, label: str(o.label) || str(o.provider), supported: o.supported === true,
-      reason: str(o.reason) || null, via: o.via === 'pi' || o.via === 'direct' ? o.via : null, models,
+      // 'pi' is what a server from before Scranton's own runtime sends for the same Node bridge
+      reason: str(o.reason) || null, via: o.via === 'pi' || o.via === 'bridge' ? 'bridge' : o.via === 'direct' ? 'direct' : null, models,
     };
   }).filter(Boolean);
   return {
@@ -199,7 +200,7 @@ export function sandboxView(sb, { buildError = '' } = {}) {
 // The option groups of a role's model select. value = JSON [provider, model]; unsupported providers are listed, disabled.
 export function modelGroups(providers) {
   return list(providers).map((p) => ({
-    label: p.supported ? `${p.label}${p.via === 'pi' ? ' · via pi' : ''}` : `${p.label} - ${p.reason || 'not supported by the Pipeline engine'}`,
+    label: p.supported ? `${p.label}${p.via === 'bridge' || p.via === 'pi' ? ' · via Scranton' : ''}` : `${p.label} - ${p.reason || 'not supported by the Pipeline engine'}`,
     disabled: !p.supported,
     // an empty group still shows its provider and reason
     options: p.models.length

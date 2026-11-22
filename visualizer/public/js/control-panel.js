@@ -20,6 +20,7 @@ const NOTIFY_KEY = 'scranton.notify';
 const DISMISS_KEY = 'scranton.exitDismissed';
 const REFRESH_ON = new Set(['run_started', 'run_finished', 'hitl_request', 'hitl_response']);
 const MOVED = 'Another chat is on screen now. Nothing was sent.';
+const SANDBOX_TEXT = { scranton: 'Scranton sandbox', docker: 'Docker sandbox', host: 'no sandbox' };
 
 const $ = (id) => document.getElementById(id);
 
@@ -82,8 +83,9 @@ export function createControlPanel({
     advanced: $('run-advanced'), options: $('run-options'), optionsSummary: $('run-options-summary'), trustKept: $('f-trust-kept'), fRequest: $('f-request'), fRequestOpt: $('f-request-opt'), fRequestCount: $('f-request-count'),
     fWorkspace: $('f-workspace'), fCycles: $('f-cycles'), fNoPlan: $('f-noplan'), fDemo: $('f-demo'),
     fScenario: $('f-scenario'), fDelay: $('f-delay'), demoFields: $('demo-fields'), fDemoRow: $('f-demo-row'), demoNone: $('f-demo-none'),
-    exec: $('exec-fields'), fParallel: $('f-parallel'), fDocker: $('f-sandbox-docker'), fHost: $('f-sandbox-host'),
+    exec: $('exec-fields'), fParallel: $('f-parallel'), fScranton: $('f-sandbox-scranton'), fDocker: $('f-sandbox-docker'), fHost: $('f-sandbox-host'),
     trustRow: $('f-trust-row'), fTrusted: $('f-trusted'), dockerFields: $('docker-fields'), fImage: $('f-image'), fNetwork: $('f-network'),
+    fApproveShell: $('f-approve-shell'), fApproveFiles: $('f-approve-files'), fApproveTimeout: $('f-approve-timeout'), approveWait: $('f-approve-wait'),
     execNote: $('exec-note'), exitHint: $('exit-hint'), configError: $('config-error'),
     fModelMichael: $('f-model-michael'), fModelDwight: $('f-model-dwight'), fModelOscar: $('f-model-oscar'), fModelHank: $('f-model-hank'),
     fModelAngela: $('f-model-angela'),
@@ -116,7 +118,7 @@ export function createControlPanel({
   let releaseNote = '';
   let workspaceTouched = false;
   let parallelTouched = false;
-  // the human picked Docker or Trusted host; the configured default no longer moves the radio buttons
+  // the human picked a sandbox; the configured default no longer moves the radio buttons
   let sandboxTouched = false;
   let recoveryKey = '';
   // the orphan and its owner status: a heartbeat moving on is not news worth announcing
@@ -806,24 +808,30 @@ export function createControlPanel({
     e.fRequestOpt.hidden = !demo;
     e.exec.dataset.demo = String(demo);
     if (demo) {
-      e.execNote.textContent = 'A demo runs the scripted fake pi on this computer. It is simulated: no model, and no sandbox boundary is created or claimed.';
+      e.execNote.textContent = 'A demo runs a scripted model on this computer. It is simulated: no model, no approvals, and no sandbox boundary is created or claimed.';
     } else {
       e.execNote.replaceChildren(...execNoteDefault.map((n) => n.cloneNode(true)));
     }
     syncSandbox();
   }
 
+  const sandboxPick = () => (e.fHost.checked ? 'host' : e.fDocker.checked ? 'docker' : 'scranton');
+
   function syncSandbox() {
     const demo = e.fDemo.checked;
     const host = e.fHost.checked;
-    e.fDocker.disabled = demo;
-    e.fHost.disabled = demo;
+    for (const r of [e.fScranton, e.fDocker, e.fHost]) r.disabled = demo;
     e.trustRow.hidden = demo || !host;
     if (!host) e.fTrusted.checked = false;
     e.trustKept.hidden = !(keptTrust && host);
-    e.fImage.disabled = demo || host;
+    e.fImage.disabled = demo || !e.fDocker.checked;
+    e.dockerFields.dataset.disabled = String(e.fImage.disabled);
+    // the trusted host has no boundary that could hold the network back
     e.fNetwork.disabled = demo || host;
-    e.dockerFields.dataset.disabled = String(demo || host);
+    e.fApproveShell.disabled = demo;
+    e.fApproveFiles.disabled = demo;
+    e.fApproveTimeout.disabled = demo || !(e.fApproveShell.checked || e.fApproveFiles.checked);
+    e.approveWait.dataset.disabled = String(e.fApproveTimeout.disabled);
     syncWorkflow();
   }
 
@@ -847,19 +855,20 @@ export function createControlPanel({
     e.gatesConfig.hidden = !note;
     if (built.field !== 'workflow') firstGate()?.removeAttribute('aria-invalid');
     for (const [id, row] of gateRows) if (built.field !== `stage.${id}`) row.stage.removeAttribute('aria-invalid');
-    models?.sync({ demo, host: e.fHost.checked, noPlan: e.fNoPlan.checked, configured: control.models, gates: stages, agents: control.agents, names });
+    models?.sync({ demo, sandbox: sandboxPick(), noPlan: e.fNoPlan.checked, configured: control.models, gates: stages, agents: control.agents, names });
     syncOptions(demo ? null : bad ? 'Checks: the workflow needs a fix' : `Checks: ${stages.map((stage) => workflowText([stage], names)).join(', then ')}`);
   }
 
-  // What the closed Options fold holds, in words a first run can read: the checks, the sandbox, how many milestones
-  // at once.
+  // What the closed Options fold holds, in words a first run can read: the checks, the sandbox, what is asked first,
+  // how many milestones at once.
   let gatesLine = '';
   function syncOptions(gatesText = gatesLine) {
     gatesLine = gatesText;
     const n = Number(e.fParallel.value.trim() || e.fParallel.placeholder);
+    const ask = [e.fApproveShell.checked && 'commands', e.fApproveFiles.checked && 'file changes'].filter(Boolean).join(' and ');
     e.optionsSummary.textContent = gatesText === null ? `Demo with scripted agents${e.fScenario.value ? `: ${e.fScenario.value}` : ''}` : [
-      gatesText, e.fHost.checked ? 'no sandbox' : 'Docker sandbox', n > 1 ? `up to ${n} milestones at once` : 'one milestone at a time',
-      e.fNoPlan.checked && 'no planning',
+      gatesText, SANDBOX_TEXT[sandboxPick()], !e.fHost.checked && e.fNetwork.checked && 'no network', ask && `asks before ${ask}`,
+      n > 1 ? `up to ${n} milestones at once` : 'one milestone at a time', e.fNoPlan.checked && 'no planning',
     ].filter(Boolean).join(' \u00b7 ');
   }
 
@@ -875,6 +884,7 @@ export function createControlPanel({
     if (!sandboxTouched) {
       e.fHost.checked = d.sandbox === 'host';
       e.fDocker.checked = d.sandbox === 'docker';
+      e.fScranton.checked = !e.fHost.checked && !e.fDocker.checked;
       // the acknowledgement belongs to a host the human sees; it is never given here
       if (!e.fHost.checked) e.fTrusted.checked = false;
     }
@@ -885,7 +895,7 @@ export function createControlPanel({
     if (keptTrust && e.fHost.checked) e.fTrusted.checked = true;
     e.trustKept.hidden = !(keptTrust && e.fHost.checked);
     e.fImage.placeholder = d.image;
-    if (!e.fNetwork.dataset.touched) e.fNetwork.value = d.network;
+    if (!e.fNetwork.dataset.touched) e.fNetwork.checked = d.network === 'none';
     e.configError.textContent = control.configurationError
       ? `The server could not load its configuration: ${clip(control.configurationError, 300)}. Fix scranton.config.json in the workspace first; a run there fails until then.`
       : '';
@@ -915,7 +925,8 @@ export function createControlPanel({
 
   const FIELD = {
     request: 'fRequest', workspace: 'fWorkspace', maxCycles: 'fCycles', scenario: 'fScenario', delayMs: 'fDelay',
-    maxParallel: 'fParallel', sandbox: 'fDocker', trustedHost: 'fTrusted', sandboxImage: 'fImage', sandboxNetwork: 'fNetwork',
+    maxParallel: 'fParallel', sandbox: 'fScranton', trustedHost: 'fTrusted', sandboxImage: 'fImage', sandboxNetwork: 'fNetwork',
+    approvals: 'fApproveShell', approvalTimeout: 'fApproveTimeout',
     models: 'fModelMichael', 'models.michael': 'fModelMichael', 'models.dwight': 'fModelDwight', 'models.oscar': 'fModelOscar',
     'models.hank': 'fModelHank', 'models.angela': 'fModelAngela',
   };
@@ -937,13 +948,11 @@ export function createControlPanel({
     if (!input) return;
     input.setAttribute('aria-invalid', 'true');
     // everything but the request lives in the Options fold or is answered there: a missing acknowledgement opens
-    // it too, so the Docker sandbox its message offers is on screen
+    // it too, so the sandboxes its message offers are on screen
     if (input !== e.fRequest) e.options.open = true;
     if (e.advanced.contains(input)) e.advanced.open = true;
     if (!input.disabled) return input.focus();
-    // a select locked to its agent default (Docker) cannot take focus: Agents fixes it, else the message is read
-    const fix = models?.fix?.();
-    if (fix) return fix.focus();
+    // a disabled input cannot take focus: the message is read instead
     e.runError.setAttribute('tabindex', '-1');
     e.runError.focus();
   }
@@ -1017,13 +1026,19 @@ export function createControlPanel({
     syncOptions();
   });
   e.fScenario.addEventListener('change', () => syncOptions());
-  e.fNetwork.addEventListener('change', () => { e.fNetwork.dataset.touched = '1'; });
+  e.fNetwork.addEventListener('change', () => {
+    e.fNetwork.dataset.touched = '1';
+    syncOptions();
+  });
+  for (const box of [e.fApproveShell, e.fApproveFiles]) box.addEventListener('change', syncSandbox);
   e.fDemo.addEventListener('change', syncDemo);
   e.fNoPlan.addEventListener('change', syncSandbox);
-  e.fDocker.addEventListener('change', () => {
-    sandboxTouched = true;
-    syncSandbox();
-  });
+  for (const r of [e.fScranton, e.fDocker]) {
+    r.addEventListener('change', () => {
+      sandboxTouched = true;
+      syncSandbox();
+    });
+  }
   e.fHost.addEventListener('change', () => {
     sandboxTouched = true;
     syncSandbox();
@@ -1042,8 +1057,9 @@ export function createControlPanel({
   function executionForm() {
     return {
       maxCycles: e.fCycles.value, noPlan: e.fNoPlan.checked, maxParallel: e.fParallel.value,
-      sandbox: e.fHost.checked ? 'host' : 'docker', trustedHost: e.fTrusted.checked,
-      sandboxImage: e.fImage.value, sandboxNetwork: e.fNetwork.value, workflow: workflowChoice(),
+      sandbox: sandboxPick(), trustedHost: e.fTrusted.checked,
+      sandboxImage: e.fImage.value, sandboxNetwork: e.fNetwork.checked ? 'none' : 'allow', workflow: workflowChoice(),
+      approveShell: e.fApproveShell.checked, approveFiles: e.fApproveFiles.checked, approvalTimeout: e.fApproveTimeout.value,
     };
   }
 
@@ -1063,7 +1079,7 @@ export function createControlPanel({
     const workflow = e.fDemo.checked ? { gates: undefined } : buildWorkflow(workflowChoice(), gateOrder(), customNames(control));
     if (workflow.error) return runError(workflow.error, workflow.field);
     const picked = models?.selection({
-      demo: e.fDemo.checked, host: e.fHost.checked, noPlan: e.fNoPlan.checked, configured: control.models, gates: workflow.gates,
+      demo: e.fDemo.checked, noPlan: e.fNoPlan.checked, configured: control.models, gates: workflow.gates,
       names: customNames(control),
     }) ?? { models: {} };
     if (picked.error) return runError(picked.error, picked.field, picked.fields);
@@ -1182,7 +1198,7 @@ export function createControlPanel({
     if (workflow.error) return { error: workflow.error, field: workflow.field, fields: [], options: true };
     // a follow-up runs in the chat on screen, the workspace defaults.models describe
     const picked = models?.selection({
-      demo: false, host: execution.sandbox === 'host', noPlan: execution.noPlan, configured: control.models, gates: workflow.gates,
+      demo: false, noPlan: execution.noPlan, configured: control.models, gates: workflow.gates,
       names: customNames(control),
     }) ?? { models: {} };
     const built = picked.error ? picked : buildFollowUp({ goal, models: picked.models, execution }, control);

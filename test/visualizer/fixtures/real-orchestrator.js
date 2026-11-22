@@ -1,4 +1,4 @@
-// Runs the real orchestrator (RPC, worktrees, trusted host) against a scripted pi in project-local scratch,
+// Runs the real orchestrator and own durable agent against scripted LLM turns in project-local scratch,
 // so the UI tests check combinations the producer really emits instead of hand-written fixtures.
 import '../../core/isolation-test-root.js';
 import fs from 'node:fs';
@@ -7,10 +7,12 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../../../src/core/config.js';
 import { Orchestrator } from '../../../src/core/orchestrator.js';
+import { startAgent } from '../../../src/core/agent/index.js';
+import { createScriptedProvider, getModel } from '../../../src/core/llm/index.js';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 export const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-export const SCRIPTED_PI = fileURLToPath(new URL('./scripted-pi.js', import.meta.url));
-export const FAKE_PI = path.join(ROOT, 'tools', 'fake-pi.js');
 const SCRATCH = path.join(ROOT, '.scratch', 'fix-ui');
 
 export function scratchDir(t) {
@@ -20,20 +22,43 @@ export function scratchDir(t) {
   return dir;
 }
 
-// transport 'json' is the legacy serial mode: shared workspace, no instances.
-export function createRun(dir, { command = [process.execPath, SCRIPTED_PI], env = {}, hitl, onBreaker = 'ask', maxParallel = 2, maxFailedCycles = 3, transport = 'rpc', simulated = false } = {}) {
+export function createRun(dir, { env = {}, hitl, onBreaker = 'ask', maxParallel = 2, maxFailedCycles = 3, simulated = false } = {}) {
   const config = loadConfig({
     cwd: dir, env: {}, hasBash: true,
     fileConfig: {
       workspace: path.join(dir, 'workspace'), hiveDir: path.join(dir, 'hive'), maxFailedCycles,
       execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } },
-      pi: { command, transport },
     },
   });
-  if (transport === 'rpc') config.execution = { ...config.execution, maxParallel, isolation: 'worktree', sandbox: { mode: 'host' } };
+  config.execution = { ...config.execution, maxParallel, isolation: 'worktree', sandbox: { mode: 'host' } };
   if (simulated) config.execution.simulated = true;
   const orchestrator = new Orchestrator({
-    config, onBreaker, hitl, stdin: { isTTY: false }, stdout: { isTTY: false, write() {} }, extraEnv: env,
+    config, onBreaker, hitl, stdin: { isTTY: false }, stdout: { isTTY: false, write() {} }, extraEnv: {...env, SCRANTON_FAKE_MODE: '0'},
+    startRunner: options => {
+      if (env.SCRANTON_FAKE_FAIL && options.agentId === env.SCRANTON_FAKE_FAIL_ROLE) return startAgent({...options, scripted: {scenario: 'happy', fail: env.SCRANTON_FAKE_FAIL}});
+      const {agentId, instanceId, milestone, cycle} = options;
+      const call = (name, args) => ({text: 'Using ' + name, toolCalls: [{id: name, name, arguments: args}]});
+      let turns;
+      if (agentId === 'michael') {
+        const milestones = [
+          {id: 'm1', title: 'Todo storage module', description: 'Implement storage.', dependsOn: []},
+          {id: 'm2', title: 'Command line interface', description: 'Implement CLI.', dependsOn: []},
+          {id: 'm3', title: 'Tests and README', description: 'Document and test.', dependsOn: ['m1', 'm2']}
+        ];
+        turns = [call('ls', {path: '.'}), {text: '\x60\x60\x60json\n' + JSON.stringify({milestones}) + '\n\x60\x60\x60\n[PLAN_READY]'}];
+      } else if (agentId === 'dwight') {
+        turns = [call('ls', {path: '.'})];
+        if (env.SCRIPTED_CRASH === instanceId) turns.push({error: {message: 'Scripted agent crash'}});
+        else if (env.SCRIPTED_MODE === 'hang') turns.push({text: 'Never reached', delayMs: 2147483647});
+        else if (env.SCRIPTED_MODE === 'hang-tool') turns.push(call('bash', {command: 'node --test --watch'}));
+        else turns.push(call('write', {path: milestone + '.txt', content: milestone}), {text: '[TASK_COMPLETE]'});
+      } else turns = [{text: env.SCRIPTED_FLAKY === milestone && cycle === 1 ? '[TEST_FAILED]' : '[TEST_PASSED]'}];
+      return startAgent({...options, llm: createScriptedProvider(turns), model: getModel('openai', 'gpt-4o'), spawn() {
+        const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        child.kill = () => { queueMicrotask(() => {child.stdout.end(); child.stderr.end(); child.emit('close', 1);}); return true; };
+        return child;
+      }});
+    },
   });
   return { config, orchestrator, hive: config.hiveDir };
 }

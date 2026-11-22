@@ -1,19 +1,19 @@
 import { createInterface } from 'node:readline';
-import { mkdirSync, readFileSync, statSync, openSync, closeSync, lstatSync, fstatSync, readSync, constants } from 'node:fs';
+import { readFileSync, statSync, openSync, closeSync, lstatSync, fstatSync, readSync, constants } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, parseEnv, stripVTControlCharacters } from 'node:util';
 import { ConfigError, PACKAGE_ROOT, loadConfig, loadDotEnv } from './config.js';
 import { runDoctor } from './doctor.js';
+import { DEFAULT_DOCKER_IMAGE } from './sandbox.js';
 import { createTerminalLog, styler } from './log.js';
 import { saveAgent } from './agents-config.js';
 import { agentCatalog } from './prompts.js';
-import { KEYWORDS } from './keywords.js';
-import { Hive } from './hive.js';
 import { Orchestrator } from './orchestrator.js';
-import { PiNotFoundError, resolvePiCommand } from './pi-command.js';
-import { startPi, writeSystemPrompt } from './pi-runner.js';
-import { acquireRunLease, readRunLease, releaseRunLease, startRunHeartbeat, guardParent, registerParentStartup, cliRecoveryStatus } from './run-lease.js';
+import * as agentRuntime from './agent/index.js';
+import { createDurableClient } from './durable/index.js';
+import { startCliLive, streamAnswer, pendingApproval, safeTerminal } from './cli-live.js';
+import { acquireRunLease, readRunLease, releaseRunLease, startRunHeartbeat, guardParent, registerParentStartup, cliRecoveryStatus, runOwnerStatus } from './run-lease.js';
 import { orphanSnapshot, recoverOrphan } from './run-recovery.js';
 import { formatRunSummary, quotePathArgument, formatCommandScope } from './run-summary.js';
 import { listRestorePoints, undoRun, workspaceState } from './restore-points.js';
@@ -21,8 +21,6 @@ import { randomUUID } from 'node:crypto';
 import { AGENT_IDS } from './state.js';
 import { isLoopbackAddress } from './network.js';
 import { createAuthService } from './auth.js';
-import { validateDockerModels } from './sandbox.js';
-import { activeRoles } from './workflow.js';
 import os from 'node:os';
 import { dreamingCap, teamDreamingCohort, teamDreamingContext } from './dreaming-sources.js';
 import { createProjectRegistry, derivedChatTitle } from './projects.js';
@@ -38,9 +36,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
 const POLICIES = ['ask', 'abort', 'skip', 'hive'];
-const SUCCESS_KEYWORDS = new Set(['PLAN_READY', 'TASK_COMPLETE', 'TEST_PASSED', 'REVIEW_APPROVED', 'SECURITY_PASSED', 'ANSWER_READY', 'REPORT_READY']);
 
-export const HELP = `Project Scranton - multi-agent harness around the pi coding agent
+export const HELP = `Project Scranton - durable multi-agent harness
 
 Usage:
   scranton run "<request>" [options]       Plan, build and test a request (Michael, Dwight, Angela)
@@ -50,8 +47,11 @@ Usage:
                                            Inspect ownership; recover gone runs (confirm stopped for unknown/cleanup warnings)
   scranton undo [--hive DIR | --data DIR --project ID --chat ID] [--run ID] [--force] [--list]
                                            Restore pre-run files; --force overwrites later edits; --list inspects points
+  scranton approve <workflowId> <callId> --yes|--no [scope flags]
+  scranton watch <workflowId> [scope flags]  Stream until the workflow ends
+  Scope flags: --hive DIR | --data DIR --project ID --chat ID
   scranton demo [--scenario S] [--delay MS] [options]
-                                           Full run with the fake pi (S: happy|flaky|breaker|blocked, default flaky)
+                                           Full run with the scripted model (S: happy|flaky|breaker|blocked, default flaky)
   scranton dashboard [--once] [--ascii]    Live terminal dashboard (second terminal)
   scranton visualize [--port N] [--host H] Web dashboard in the browser (default http://127.0.0.1:1725)
   scranton app-server [--port N]           Controlled server for desktop (default port 0)
@@ -80,17 +80,20 @@ Usage:
   scranton agents                          List agents and effective settings
   scranton agent set-model <id> --provider P --model M [--thinking T]
   scranton agent remove-model <id>          Clear saved model and thinking
-  scranton doctor                          Check Node, pi, credentials and folders
+  scranton doctor                          Check Node, sandbox, credentials and folders
   scranton help
 
 Options:
   --conversation       Publish agent messages and a final reply (--no-conversation disables)
   --gates STAGES       Ordered gates, e.g. oscar+hank,angela
   --parallel N         Maximum concurrent milestone pipelines (default 3)
-  --trusted-host       Explicitly run outside Docker (worktrees remain isolated)
-  --sandbox MODE       host (default, no OS isolation); explicit host requires --trusted-host
-  --sandbox-image IMG  Docker image (default scranton-sandbox:1.5.2-r1)
-  --sandbox-network N  none | bridge (default bridge)
+  --trusted-host       Explicitly trust host execution (worktrees remain isolated)
+  --sandbox MODE       scranton (default) | docker | host (requires --trusted-host)
+  --sandbox-image IMG  Docker image (config execution.sandbox.image; default ${DEFAULT_DOCKER_IMAGE})
+  --sandbox-network N  allow (default) | none (bridge is an alias for allow)
+  --approve TOOLS      Comma-separated tools requiring human approval
+  --approval-timeout S Approval deadline, integer 1..86400 seconds (default 600)
+  --quiet              Suppress live agent answer text
   --workspace DIR      Where the agents work (default ./workspace; demo: ./demo-workspace)
   --hive DIR           Mailbox + event directory (default ./hive)
   --data DIR           Project registry directory (or SCRANTON_DATA)
@@ -112,6 +115,11 @@ Environment and .env: see .env.example. Precedence: flags > env > scranton.confi
 `;
 
 const OPTIONS = {
+  yes: { type: 'boolean' },
+  no: { type: 'boolean' },
+  quiet: { type: 'boolean' },
+  approve: { type: 'string' },
+  'approval-timeout': { type: 'string' },
   json: { type: 'boolean' },
   'confirm-stopped': { type: 'boolean' },
   run: { type: 'string' },
@@ -193,6 +201,21 @@ function toFlags(values) {
   };
 }
 
+function runOptions(config, values) {
+  if (values['sandbox-image'] !== undefined && config.execution.sandbox.mode !== 'docker') throw new UsageError('--sandbox-image requires --sandbox docker');
+  if (values.approve !== undefined) {
+    const tools = values.approve === '' ? [] : values.approve.split(',').map(t => t.trim());
+    if (tools.some(t => !['read', 'write', 'edit', 'bash', 'powershell', 'grep', 'find', 'ls', 'agent_chat'].includes(t))) throw new UsageError('--approve requires a comma-separated list of known tools');
+    config.approvals = { ...config.approvals, tools: [...new Set(tools)] };
+  }
+  if (values['approval-timeout'] !== undefined) {
+    const seconds = Number(values['approval-timeout']);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400) throw new UsageError('--approval-timeout must be an integer from 1 to 86400 seconds');
+    config.approvals = { ...config.approvals, timeoutSeconds: seconds };
+  }
+  return config;
+}
+
 function policyOf(values, config) {
   const policy = values['on-breaker'] ?? config.onBreaker;
   if (!POLICIES.includes(policy)) throw new UsageError(`--on-breaker must be one of: ${POLICIES.join(', ')}`);
@@ -222,6 +245,8 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
     if (values['confirm-stopped'] && command !== 'recover') throw new UsageError('--confirm-stopped is only valid for recover');
     if (values['request-file'] !== undefined && command !== 'run') throw new UsageError('--request-file is only valid for run');
     if (['run', 'force', 'list'].some((key) => values[key] !== undefined) && command !== 'undo') throw new UsageError('--run, --force and --list are only valid for undo');
+    if ((values.yes !== undefined || values.no !== undefined) && command !== 'approve') throw new UsageError('--yes and --no are only valid for approve');
+    if (command === 'approve' || command === 'watch') return await cmdDurable(command, rest, values, { stdout, stderr, stdin, env, cwd });
     if (command === 'recover') return await cmdRecover(rest, values, { stdout, stderr, env, cwd });
     if (command === 'undo') return await cmdUndo(rest, values, { stdout, stderr, env, cwd });
     if (command === 'run' && values['request-file'] !== undefined && rest.length) throw new UsageError('Use either a positional request or --request-file, not both');
@@ -234,11 +259,11 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
     if (['accounts', 'login', 'logout', 'provider'].includes(command)) {
       return await cmdAuth(command, rest, values, { stdout, stderr, stdin, auth: auth ?? createAuthService({ env }) });
     }
-    const config = loadConfig({ validateWorkflow: !['doctor', 'agents', 'agent', 'visualize', 'app-server'].includes(command), cwd: registryRun ? PACKAGE_ROOT : cwd, env, flags: { ...toFlags(values), ...(registryRun ? { data: path.resolve(cwd, values.data || env.SCRANTON_DATA), config: undefined } : {}) } });
+    const config = runOptions(loadConfig({ validateWorkflow: !['doctor', 'agents', 'agent', 'visualize', 'app-server'].includes(command), cwd: registryRun ? PACKAGE_ROOT : cwd, env, flags: { ...toFlags(values), ...(registryRun ? { data: path.resolve(cwd, values.data || env.SCRANTON_DATA), config: undefined } : {}) } }), values);
     if (command === 'run' && config.dataDir && !registryRun) throw new UsageError('Registry runs require --data or inherited SCRANTON_DATA; workspace configuration is not trusted');
     if (command === 'agents') {
       stdout.write('ID | Name | Title | Kind | Model | Model Source | Prompt Source\n');
-      for (const r of agentCatalog(config).roles) stdout.write(`${r.id} | ${r.name} | ${r.title} | ${r.kind} | ${r.model.value ? r.model.value.provider + '/' + r.model.value.model : 'pi default'} | ${r.model.source} | ${r.prompt.source}\n`);
+      for (const r of agentCatalog(config).roles) stdout.write(`${r.id} | ${r.name} | ${r.title} | ${r.kind} | ${r.model.value ? r.model.value.provider + '/' + r.model.value.model : 'Automatic'} | ${r.model.source} | ${r.prompt.source}\n`);
       return 0;
     }
     if (command === 'agent' && ['set-model', 'remove-model'].includes(rest[0])) {
@@ -248,8 +273,7 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
       stdout.write('Agent settings saved.\n'); return 0;
     }
     if (command === 'agent' && !AGENT_IDS.includes(rest[0])) throw new UsageError(`agent must be one of: ${AGENT_IDS.join(', ')}`);
-    if (command === 'run' || command === 'agent') validateDockerModels(config, command === 'agent' ? [rest[0]] : activeRoles(config, values['no-plan']));
-    const io = { stdout, stderr, env, cwd, begin };
+    const io = { stdout, stderr, stdin, env, cwd, begin };
     switch (command) {
       case 'projects':
       case 'chats':
@@ -272,12 +296,12 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
         throw new UsageError(`unknown command "${command}"`);
     }
   } catch (err) {
-    if (err.status || err instanceof UsageError || err instanceof ConfigError || err instanceof PiNotFoundError || err?.code?.startsWith?.('ERR_PARSE_ARGS')) {
+    if (err.status || err instanceof UsageError || err instanceof ConfigError || err?.code?.startsWith?.('ERR_PARSE_ARGS')) {
       const message = err?.code?.startsWith?.('ERR_PARSE_ARGS') && ['login', 'provider'].includes(argv[0])
         ? 'Invalid authentication options; enter keys through hidden prompt or stdin, never argv'
         : err.message;
       stderr.write(`${c.red('scranton:')} ${message}\n`);
-      if (!(err instanceof ConfigError) && !(err instanceof PiNotFoundError)) stderr.write('Run "scranton help" for usage.\n');
+      if (!(err instanceof ConfigError)) stderr.write('Run "scranton help" for usage.\n');
       return 2;
     }
     throw err;
@@ -298,7 +322,7 @@ function onInterrupt(handler, repeated = () => process.exit(130)) {
   return () => process.off('SIGINT', listener);
 }
 
-async function execute(orchestrator, request, { stderr, env = process.env, acquire = acquireRunLease, scope }) {
+async function execute(orchestrator, request, { stderr, stdout = orchestrator.stdout, stdin = process.stdin, quiet = false, env = process.env, acquire = acquireRunLease, scope }) {
   const hiveDir = orchestrator.config.hiveDir;
   const dispose = guardParent({ hiveDir, env, abort: (reason) => orchestrator.abort(reason) });
   let lease;
@@ -336,6 +360,13 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
     orchestrator.abort();
   }, () => stderr.write('Still stopping - waiting for agent process-tree cleanup before exiting.\n'));
   const started = Date.now();
+  const live = startCliLive({ openClient: () => createDurableClient({ hiveDir, env }),
+    workflows: async client => {
+      const prefix = agentRuntime.agentHiveScopePrefix(hiveDir);
+      const rows = (await client.listWorkflows({ executorId: `run:${orchestrator.runId}` })).filter(row => row.name === 'scranton.agent.v1' && row.workflowId.startsWith(prefix));
+      return rows.map(row => ({ ...row, agent: Object.keys(orchestrator.rec.state.instances ?? {}).find(instanceId => row.workflowId.startsWith(agentRuntime.agentWorkflowId({ hiveDir, runId: orchestrator.runId, instanceId, invocationKey: '' }))) ?? 'agent' }));
+    },
+    stdout, stderr, stdin, quiet, scope: formatCommandScope(hiveDir, scope) });
   try {
     if (env.SCRANTON_PARENT_GUARD !== '1') {
       const shared = orchestrator.config.execution?.isolation !== 'worktree';
@@ -357,6 +388,7 @@ async function execute(orchestrator, request, { stderr, env = process.env, acqui
     if (result.status === 'success') return 0;
     return result.status === 'aborted' && result.signaled ? 130 : 1;
   } finally {
+    await live.stop();
     off();
     stopHeartbeat(clean ? undefined : orchestrator.cleanupReason ?? cleanupReason);
     dispose({ clean });
@@ -380,6 +412,54 @@ function maintenanceHive(command, values, { env, cwd }, siblings = []) {
     hiveDir = loadConfig({ cwd, env, flags: { ...toFlags(values), singleHive: true }, validateWorkflow: false }).hiveDir;
   }
   return { hiveDir, scope };
+}
+
+async function cmdDurable(command, args, values, io) {
+  if (args.length !== (command === 'approve' ? 2 : 1)) throw new UsageError(`${command} requires ${command === 'approve' ? '<workflowId> <callId> --yes|--no' : '<workflowId>'}`);
+  if (command === 'approve' && Boolean(values.yes) === Boolean(values.no)) throw new UsageError('approve requires exactly one of --yes or --no');
+  const { hiveDir } = maintenanceHive(command, values, io);
+  const client = await createDurableClient({ hiveDir, env: io.env });
+  let off = () => {}, watchdog;
+  try {
+    const workflowId = args[0];
+    const workflows = await client.listWorkflows();
+    const workflow = workflows.find(row => row.workflowId === workflowId && row.name === 'scranton.agent.v1');
+    if (!workflow || !workflowId.startsWith(agentRuntime.agentHiveScopePrefix(hiveDir))) throw Error('Unknown workflow in this Hive');
+    if (command === 'approve') {
+      const detail = await pendingApproval(client, workflowId, args[1]);
+      await agentRuntime.approveToolCall(client, workflowId, detail, Boolean(values.yes), 'human-cli');
+      io.stdout.write(`${values.yes ? 'Approved' : 'Denied'} tool call ${safeTerminal(args[1])}.\n`);
+      return 0;
+    }
+    let interrupted = false, deadRun = false, checking = false;
+    off = onInterrupt(() => { interrupted = true; void client.shutdown(); });
+    const runId = decodeURIComponent(workflowId.slice(4).split('/')[2]);
+    watchdog = setInterval(async () => {
+      if (checking || interrupted || deadRun) return;
+      checking = true;
+      try {
+        const lease = readRunLease(hiveDir);
+        let gone = lease?.runId === runId && runOwnerStatus(hiveDir, lease) === 'gone';
+        try {
+          const state = JSON.parse(readFileSync(path.join(hiveDir, 'state.json'), 'utf8'));
+          gone ||= state.runId !== runId || ['finished', 'aborted', 'failed'].includes(state.status);
+        } catch { /* Missing state is not evidence of interruption. */ }
+        if (gone) {
+          const current = await client.retrieveWorkflow(workflowId).getStatus();
+          if (!['SUCCESS', 'ERROR', 'CANCELLED'].includes(current?.status)) { deadRun = true; await client.shutdown(); }
+        }
+      } catch { /* The stream reader owns transport errors. */ }
+      finally { checking = false; }
+    }, 100);
+    try { await streamAnswer(client, workflowId, { stdout: io.stdout, agent: workflowId }); }
+    catch (error) { if (!interrupted && !deadRun) throw error; }
+    if (interrupted) return 130;
+    if (deadRun) { io.stderr.write('Workflow ended: interrupted\n'); return 1; }
+    const status = await client.retrieveWorkflow(workflowId).getStatus();
+    io.stderr.write(`Workflow ended: ${status?.status ?? 'unknown'}\n`);
+    return status?.status === 'SUCCESS' ? 0 : 1;
+  } catch (error) { io.stderr.write(`scranton: ${safeTerminal(error.message)}\n`); return 1; }
+  finally { clearInterval(watchdog); off(); if (!client.closed) await client.shutdown(); }
 }
 
 async function cmdUndo(args, values, io) {
@@ -576,7 +656,7 @@ function contextModel(value) {
 }
 
 function contextBudgetLine(label, budget, model) {
-  return `${label}: ≈${budget.used}/${budget.tokens} tokens (${pct(budget.used, budget.tokens)}% of budget, ${pct(budget.used, model.window)}% of the ${model.window}-token window of ${model.id ?? 'pi default'})${model.known ? '' : ' [window assumed]'}${budget.capped ? ` [capped: ${budget.capped}]` : ''}`;
+  return `${label}: ≈${budget.used}/${budget.tokens} tokens (${pct(budget.used, budget.tokens)}% of budget, ${pct(budget.used, model.window)}% of the ${model.window}-token window of ${model.id ?? 'Automatic'})${model.known ? '' : ' [window assumed]'}${budget.capped ? ` [capped: ${budget.capped}]` : ''}`;
 }
 
 function contextSummary(doc) {
@@ -689,7 +769,7 @@ function readRequestFile(file) {
   } finally { closeSync(fd); }
 }
 
-async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin }) {
+async function cmdRun(request, values, config, { stdout, stderr, stdin, env, cwd, begin }) {
   if (values['request-file'] !== undefined) {
     try {
       const file = path.resolve(cwd, values['request-file']);
@@ -735,7 +815,7 @@ async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin
     if (chat.engine === 'pipeline') throw new UsageError('This chat uses the pipeline engine');
     scope = { dataDir: registry.dataDir, projectId: project.id, chatId: chat.id };
     stderr.write(`Project: ${project.id}; chat: ${chat.id}; continue: scranton run "<request>" --data ${quotePathArgument(config.dataDir)} --project ${project.id} --chat ${chat.id}\n`);
-    config = loadConfig({ cwd: PACKAGE_ROOT, env, flags: { ...toFlags(values), config: undefined, workspace: project.workspace, hive: chat.hiveDir } });
+    config = runOptions(loadConfig({ cwd: PACKAGE_ROOT, env, flags: { ...toFlags(values), config: undefined, workspace: project.workspace, hive: chat.hiveDir } }), values);
     let memory = '';
     try {
       const dream = registry.dreaming(project.id);
@@ -774,31 +854,29 @@ async function cmdRun(request, values, config, { stdout, stderr, env, cwd, begin
     stdout
   });
   await begin();
-  return execute(orchestrator, request, { stderr, env, acquire, scope });
+  return execute(orchestrator, request, { stderr, stdout, stdin, quiet: values.quiet, env, acquire, scope });
 }
 
-async function cmdDemo(values, { stdout, stderr, env, cwd, begin }) {
+async function cmdDemo(values, { stdout, stderr, stdin, env, cwd, begin }) {
   const scenario = values.scenario ?? 'flaky';
   if (!SCENARIOS.includes(scenario)) throw new UsageError(`--scenario must be one of: ${SCENARIOS.join(', ')}`);
   const delay = Number(values.delay ?? 600);
   if (!Number.isFinite(delay) || delay < 0) throw new UsageError('--delay must be a number of milliseconds');
   const flags = { ...toFlags(values), workspace: values.workspace ?? 'demo-workspace' };
-  const config = loadConfig({ cwd, env, flags });
-  config.pi = { ...config.pi, command: [process.execPath, path.join(PACKAGE_ROOT, 'tools', 'fake-pi.js')], commandSource: 'config' };
+  const config = runOptions(loadConfig({ cwd, env, flags }), values);
   config.execution.sandbox.mode = 'host';
   config.execution.simulated = true;
-  config.pi.transport = 'rpc';
-  stdout.write(`Simulated trusted-host demo with the fake pi - scenario "${scenario}", ${delay} ms between steps.\n`);
+  stdout.write(`Simulated trusted-host demo with the scripted model - scenario "${scenario}", ${delay} ms between steps.\n`);
   const orchestrator = new Orchestrator({
     config,
     noPlan: Boolean(values['no-plan']),
     onBreaker: policyOf(values, config),
     listener: createTerminalLog({ stream: stdout, env, ascii: Boolean(values.ascii) }),
-    extraEnv: { ...env, FAKE_PI_SCENARIO: scenario, FAKE_PI_DELAY_MS: String(delay) },
+    extraEnv: { ...env, SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario, SCRANTON_FAKE_DELAY_MS: String(delay) },
     stdout
   });
   await begin();
-  return execute(orchestrator, scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI', { stderr, env });
+  return execute(orchestrator, scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI', { stderr, stdout, stdin, quiet: values.quiet, env });
 }
 
 async function cmdAgent(agentId, task, config, { stdout, stderr, env, begin }) {

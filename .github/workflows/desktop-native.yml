@@ -76,7 +76,7 @@ jobs:
           JS
       - run: npm ci
       - name: Portable core and runtime contracts (serial)
-        run: node --test --test-concurrency=1 test/core/keywords.test.js test/core/plan.test.js test/core/pipeline-command.test.js test/core/sandbox-posix.test.js test/core/worktree-platform.test.js test/core/pipeline-pi-process.test.js test/server/desktop-csp.test.js
+        run: node --test --test-concurrency=1 test/core/keywords.test.js test/core/plan.test.js test/core/pipeline-command.test.js test/core/sandbox-posix.test.js test/core/worktree-platform.test.js test/core/pipeline-bridge.test.js test/server/desktop-csp.test.js
       - name: Python portable filesystem and sandbox gates (serial)
         run: |
           python -m pip install -e "engine[dev]"

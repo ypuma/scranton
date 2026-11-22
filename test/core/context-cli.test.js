@@ -122,7 +122,7 @@ test('context show prints project/chat documents, counters, exact sections, brie
   assert.match(output, /Sharing: on; notes: 0\/16000 chars/); assert.match(output, new RegExp(`${f.chat.id} \\| First chat \\| team \\| 1 turns`));
   const doc = json(await f.command(['show', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, f.context.inspect(f.project.id, f.chat.id));
   const text = ok(await f.command(['show', '--chat', f.chat.id])).output;
-  assert.match(text, /Turns: 1 total; 1 visible; 1 detailed; 0 condensed; 0 omitted/); assert.match(text, /Budget: ≈\d+\/12800 tokens \(.*128000-token window of pi default\) \[window assumed\]/);
+  assert.match(text, /Turns: 1 total; 1 visible; 1 detailed; 0 condensed; 0 omitted/); assert.match(text, /Budget: ≈\d+\/12800 tokens \(.*128000-token window of Automatic\) \[window assumed\]/);
   for (const section of doc.sections) { assert.ok(text.includes(`${section.title} (${section.chars} chars; ≈${section.tokens} tokens)`)); assert.ok(text.includes(section.text)); }
   assert.ok(text.includes(`Developer brief: ≈${doc.developer.tokens}/1280 tokens`)); assert.ok(text.includes(doc.developer.text));
   assert.equal(project.v, 2); assert.equal(doc.v, 2);
@@ -238,10 +238,10 @@ test('every context mutation supports raw --json results', async (t) => {
 });
 
 async function declaredModels(t, f) {
-  const agentDir = path.join(f.dir, 'pi');
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
+  const agentDir = path.join(f.dir, 'credentials');
+  const previous = process.env.SCRANTON_CREDENTIALS_DIR;
+  process.env.SCRANTON_CREDENTIALS_DIR = agentDir;
+  t.after(() => { if (previous === undefined) delete process.env.SCRANTON_CREDENTIALS_DIR; else process.env.SCRANTON_CREDENTIALS_DIR = previous; });
   await createProviderStore(agentDir).add({ id: 'cli-budget', baseUrl: 'https://example.invalid/v1', api: 'openai-completions', models: [
     { id: 'small', contextWindow: 32000 }, { id: 'large', contextWindow: 1000000 }
   ] });
@@ -313,8 +313,8 @@ test('context budget refuses a 33rd model override but permits replacement and r
 test('context show prints exact known, assumed and capped Team budget lines from configured recipients', async (t) => {
   const f = fixture(t);
   let lines = ok(await f.command(['show', '--chat', f.chat.id])).output.split('\n');
-  assert.ok(lines.includes('Budget: ≈0/12800 tokens (0% of budget, 0% of the 128000-token window of pi default) [window assumed]'));
-  assert.ok(lines.includes('Developer brief: ≈0/1280 tokens (0% of budget, 0% of the 128000-token window of pi default) [window assumed]'));
+  assert.ok(lines.includes('Budget: ≈0/12800 tokens (0% of budget, 0% of the 128000-token window of Automatic) [window assumed]'));
+  assert.ok(lines.includes('Developer brief: ≈0/1280 tokens (0% of budget, 0% of the 128000-token window of Automatic) [window assumed]'));
   await declaredModels(t, f);
   lines = ok(await f.command(['show', '--chat', f.chat.id, '--model', 'ignored/pick'])).output.split('\n');
   assert.ok(lines.includes('Budget: ≈0/3200 tokens (0% of budget, 0% of the 32000-token window of cli-budget/small)'));
@@ -351,7 +351,7 @@ test('context show uses the Pipeline planner pick and reports engine caps and un
 });
 
 // Regression: cmdRun's `const recipients = await teamRecipients(config)` and `forTeam(..., { memory, recipients })`.
-test('registry run budgets the generated pack for the models actually loaded, not pi default', async (t) => {
+test('registry run budgets the generated pack for the models actually loaded, not Automatic', async (t) => {
   const f = fixture(t); f.mockRun(); await declaredModels(t, f);
   for (let i = 0; i < 14; i++) {
     f.turn(f.chat, 'turn' + i, 'Task ' + i);
@@ -362,7 +362,7 @@ test('registry run budgets the generated pack for the models actually loaded, no
   const expected = f.context.forTeam(f.project.id, f.chat.id, { recipients });
   const env = { SCRANTON_MICHAEL_PROVIDER: 'cli-budget', SCRANTON_MICHAEL_MODEL: 'large', SCRANTON_DWIGHT_PROVIDER: 'cli-budget', SCRANTON_DWIGHT_MODEL: 'small' };
   const read = fs.readFileSync; let resolutions = 0;
-  t.mock.method(fs, 'readFileSync', (file, ...args) => { if (file === path.join(f.dir, 'pi/models.json')) resolutions++; return read(file, ...args); });
+  t.mock.method(fs, 'readFileSync', (file, ...args) => { if (file === path.join(f.dir, 'credentials/store.json')) resolutions++; return read(file, ...args); });
   ok(await f.invoke(['run', 'Current goal', ...f.flags, '--chat', f.chat.id, '--trusted-host'], env));
   assert.equal(resolutions, 2, 'one window lookup per effective recipient');
   assert.equal(f.calls[0].text, expected.text); assert.equal(f.calls[0].developer, expected.developer);

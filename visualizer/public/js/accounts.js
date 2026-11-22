@@ -16,9 +16,9 @@ export const AUTH_METHODS = ['oauth', 'api_key'];
 const DEFAULT_METHODS = { anthropic: ['oauth'], openai: ['oauth'], 'google-antigravity': ['oauth'], google: ['api_key'] };
 export const GEMINI_NOTE = 'Gemini uses an API key from Google AI Studio.';
 export const ANTIGRAVITY = 'google-antigravity';
-// the Google sign-in; what it may use is up to Google, so nothing here promises models or quota. The refresh
-// credential stays on the host; a Docker run reaches it through a per-run host broker with temporary access.
-export const ANTIGRAVITY_SCOPE = 'Usable in trusted-host, Pipeline and Docker runs. The sign-in stays on this computer and is refreshed here; a Docker run only gets temporary access for that run.';
+// the Google sign-in; what it may use is up to Google, so nothing here promises models or quota. Model calls are made
+// on the host in every sandbox, so the credential never leaves it.
+export const ANTIGRAVITY_SCOPE = 'Usable in Team and Pipeline runs, whatever the sandbox. The sign-in stays on this computer and is refreshed here; the model calls are made from this computer.';
 export const ANTIGRAVITY_NOTE = `Sign in with your Google account, no API key needed. ${ANTIGRAVITY_SCOPE} Which models you can use depends on that account.`;
 export const KEY_MAX = 4096;
 export const LOGIN_STATES = ['starting', 'waiting_browser', 'waiting_code', 'completing', 'done', 'failed', 'cancelled'];
@@ -33,12 +33,12 @@ export const REOPEN_MS = 2000;
 export const MODEL_ROLES = AGENT_IDS;
 export const ROLE_LABEL = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela' };
 export const MODELS_KEY = 'scranton.models';
-// Claude and ChatGPT get a minted token; Antigravity only a run-scoped broker capability (.enma/antigravity-contract.md)
-export const DOCKER_NOTE = 'Claude and ChatGPT sign-ins are passed to containers as short-lived access tokens. A Google Antigravity sign-in stays on this computer; the agents in a container get a temporary permission to make model calls through it until that permission expires.';
-export const DOCKER_KEY_NOTE = 'API keys are passed as they are, so the agents in a container can read them.';
-export const DOCKER_MODELS_NOTE = 'The Docker sandbox runs every agent on its agent default, and this server does not report them. Set a model for each agent in Agents.';
-export const DOCKER_DEFAULTS_NOTE = 'In the Docker sandbox every agent runs on its agent default from Agents. Models picked here are kept for trusted-host runs.';
-export const PI_DEFAULT_NOTE = 'Agent default is the model set for the agent in the Agents drawer, scranton.config.json or SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL. A role without one uses pi default, pi\'s own model, which only works on the trusted host.';
+// Scranton's own runtime calls the models on the host; a container only runs the agents' commands
+export const DOCKER_NOTE = 'In Docker only the agents\' commands run in the container. Model calls, sign-ins and API keys stay on this computer and are never passed into it.';
+export const AUTOMATIC = 'Automatic';
+// the fixed order of .enma/agent-stream-contract.md (Model and compaction policy)
+export const AUTOMATIC_ORDER = 'Claude, ChatGPT, Gemini, Google Antigravity';
+export const AUTOMATIC_NOTE = `Agent default is the model set for the agent in the Agents drawer, scranton.config.json or SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL. A role without one runs on Automatic: the first signed-in account in this order: ${AUTOMATIC_ORDER}.`;
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const str = (v) => (typeof v === 'string' ? stripBidi(v) : '');
@@ -67,7 +67,7 @@ function parseAccount(a) {
     baseUrl: typeof a.baseUrl === 'string' && /^https?:\/\/[^\s]+$/i.test(a.baseUrl) ? stripBidi(a.baseUrl) : null,
     api: str(a.api) || null,
     expiresAt: str(a.expiresAt) || null,
-    // pi renews an expired access token with the refresh token on the next model call
+    // Scranton renews an expired access token with the refresh token on the next model call
     renewsOnUse: typeof a.renewsOnUse === 'boolean' ? a.renewsOnUse : null,
     renewFailedAt: date(a.renewFailedAt),
     detail: str(a.detail) || null,
@@ -202,13 +202,13 @@ export function accountView(a, { busy = false } = {}) {
     detail,
     signIn: methods.includes('oauth') && !(a.status === 'signed_in' && oauth),
     signInLabel: a.status === 'expired' ? 'Sign in again' : 'Sign in',
-    // a refresh token pi cannot use any more still reads as renewable until the next model call: no sign-out needed
+    // a refresh token that cannot be used any more still reads as renewable until the next model call: no sign-out needed
     signInAgain: a.status === 'signed_in' && oauth && a.renewsOnUse === true && methods.includes('oauth'),
     signInDisabled: busy,
     signOut: oauth && a.status !== 'signed_out',
     addKey: methods.includes('api_key'),
     keyLabel: keyed ? 'Replace key' : 'Add API key',
-    // a key pi does not store (e.g. from the environment) is reported without api_key in methods: nothing to remove
+    // a key Scranton does not store (e.g. from the environment) is reported without api_key in methods: nothing to remove
     removeKey: keyed && !a.custom && methods.includes('api_key'),
     removeProvider: Boolean(a.custom),
   };
@@ -219,7 +219,7 @@ export function accountsSummary(accounts) {
 }
 
 export function signOutConfirm(a, { runActive = false } = {}) {
-  const detail = `Removes the ${a.label} sign-in from pi's credential store on this computer. Runs need a new sign-in${methodsOf(a).includes('api_key') ? ' or an API key' : ''} to use it again.`;
+  const detail = `Removes the ${a.label} sign-in from Scranton's credentials on this computer. Runs need a new sign-in${methodsOf(a).includes('api_key') ? ' or an API key' : ''} to use it again.`;
   return {
     title: `Sign out of ${a.label}?`,
     detail: runActive ? `${detail} A run is in progress: its agents that use ${a.label} fail at their next model call.` : detail,
@@ -228,7 +228,7 @@ export function signOutConfirm(a, { runActive = false } = {}) {
 }
 
 export function removeKeyConfirm(a, { runActive = false } = {}) {
-  const detail = `Removes the ${a.label} API key from pi's credential store on this computer. A key set in an environment variable is not affected.`;
+  const detail = `Removes the ${a.label} API key from Scranton's credentials on this computer. A key set in an environment variable is not affected.`;
   return {
     title: `Remove the ${a.label} API key?`,
     detail: runActive ? `${detail} A run is in progress: its agents that use ${a.label} fail at their next model call.` : detail,
@@ -237,7 +237,7 @@ export function removeKeyConfirm(a, { runActive = false } = {}) {
 }
 
 export function removeProviderConfirm(a, { runActive = false } = {}) {
-  const detail = `Removes ${a.label} from pi's models.json and deletes its stored API key. Providers Scranton did not add are never touched.`;
+  const detail = `Removes ${a.label} from Scranton's provider configuration and deletes its stored API key.`;
   return {
     title: `Remove provider ${a.label}?`,
     detail: runActive ? `${detail} A run is in progress: its agents that use ${a.label} fail at their next model call.` : detail,
@@ -454,7 +454,7 @@ export function parseModels(doc) {
   return { providers };
 }
 
-// A select value: '' is pi default. JSON so model ids with any punctuation round-trip.
+// A select value: '' is the role's default (its agent default, else Automatic). JSON so model ids with any punctuation round-trip.
 export function modelKey(provider, model) {
   return JSON.stringify([provider, model]);
 }
@@ -520,7 +520,7 @@ export function resolveChoices(stored, catalog, roles = MODEL_ROLES) {
 }
 
 export function missingNote(missing) {
-  return missing ? `Saved choice ${missing.model} is not available right now (signed out or no longer offered); pi default is used.` : '';
+  return missing ? `Saved choice ${missing.model} is not available right now (signed out or no longer offered); the default is used.` : '';
 }
 
 // The stored choices after a select changed.
@@ -542,40 +542,12 @@ export function runRoles({ noPlan = false, gates = LEGACY_GATES } = {}) {
 
 const roleLabel = (role, names) => own(ROLE_LABEL, role) ?? (names ? own(names, role) : undefined) ?? role;
 
-// A Docker run uses the agent defaults (GET /api/control defaults.models) and never a model picked in the drawer:
-// a stored pick is for the trusted host. A demo uses no model at all.
-export function usesAgentDefaults({ demo = false, host = false } = {}) {
-  return !demo && !host;
-}
-
-// The roles a Docker run would start without an agent default, which the server refuses
-// (src/core/sandbox.js validateDockerModels). A demo and the trusted host are not checked.
-// configured = GET /api/control defaults.models, which hold for every workspace: null (an older server: every
-// role is a gap) or { role: { provider, model } | null }, custom agents included.
-// run = { demo, host, noPlan, configured, gates } -> [role]
-export function dockerGaps({ demo = false, host = false, noPlan = false, configured = null, gates } = {}) {
-  if (!usesAgentDefaults({ demo, host })) return [];
-  return runRoles({ noPlan, gates }).filter((role) => !own(configured ?? {}, role));
-}
-
-// The default option of a role select: what that role will actually use. docker: pi default is no option there.
-export function piDefaultLabel(configured, role, docker = false) {
+// The default option of a role select: what that role will actually use. configured = GET /api/control
+// defaults.models (null: not reported); a role without an agent default runs on Automatic, in every sandbox.
+export function defaultLabel(configured, role) {
   const c = configured ? own(configured, role) : null;
-  if (c) return `Agent default (${c.provider}/${c.model})`;
-  if (docker) return configured ? 'No agent default' : 'Agent default';
-  return 'pi default';
+  return c ? `Agent default (${c.provider}/${c.model})` : AUTOMATIC;
 }
-
-// What the drawer says about the roles dockerGaps names; an older server keeps DOCKER_MODELS_NOTE.
-// labels: { id: name } of custom agents
-export function dockerNote(gaps, configured = null, labels = null) {
-  if (!gaps.length) return '';
-  if (!configured) return DOCKER_MODELS_NOTE;
-  const who = names(gaps.map((r) => roleLabel(r, labels)));
-  return `The Docker sandbox runs every agent on its agent default, and ${who} ${gaps.length > 1 ? 'have none. Set one for each' : 'has none. Set one'} in Agents.`;
-}
-
-const names = (list) => (list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : list[0] ?? '');
 
 // A subscription lists every model of its provider, but a plan may not include them all.
 export function planNote(catalog, accounts) {
@@ -586,16 +558,11 @@ export function planNote(catalog, accounts) {
   return `Not every listed model is included in every ${plans.join(' or ')} plan. If a run reports a permission error, pick another model.`;
 }
 
-// values = { role: select value }, run = { demo, host, noPlan, configured, gates, names } of the run to start (none:
-// execution not checked). -> { models } (only the roles that are not pi default; with gates, only the roles the run
-// uses; none for Docker) or { error, field, fields }
+// values = { role: select value }, run = { demo, noPlan, gates, names } of the run to start (none: every role).
+// The model calls stay on this computer in every sandbox, so a pick holds for each of them.
+// -> { models } (only the roles that are not on their default; with gates, only the roles the run uses) or { error, field }
 export function buildModels(values, catalog, run = null) {
   if (run?.demo) return { models: {} };
-  if (run && usesAgentDefaults(run)) {
-    const gaps = dockerGaps(run);
-    if (!gaps.length) return { models: {} };
-    return { error: dockerNote(gaps, run.configured, run.names), field: `models.${gaps[0]}`, fields: gaps.map((r) => `models.${r}`) };
-  }
   const models = {};
   const roles = run?.gates ? runRoles({ noPlan: run.noPlan, gates: run.gates }) : MODEL_ROLES;
   for (const role of roles) {
@@ -604,7 +571,7 @@ export function buildModels(values, catalog, run = null) {
     const c = parseModelKey(v);
     const hit = c ? findModel(catalog, c) : null;
     if (!hit || !hit.provider.signedIn) {
-      return { error: `${roleLabel(role, run?.names)}'s model is not available any more. Pick another one or pi default.`, field: `models.${role}` };
+      return { error: `${roleLabel(role, run?.names)}'s model is not available any more. Pick another one or the default.`, field: `models.${role}` };
     }
     models[role] = { provider: c.provider, model: c.model };
   }

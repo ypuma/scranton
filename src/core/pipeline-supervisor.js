@@ -4,12 +4,12 @@ import { buildPipelineHistory } from './pipeline-history.js';
 import { pipelineUsage, pipelineSteps } from './pipeline-activity.js';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { PROVIDER_ENV_NAMES } from './providers.js';
+import { createCredentials, PROVIDER_ENV_NAMES } from './credentials/index.js';
+import { models as llmModels } from './llm/index.js';
 import { createModelWindows } from './model-windows.js';
-import { getAuthService } from './auth.js';
 import { validateId } from './projects.js';
 import { writeFileAtomicSync, withFsRetry } from './util.js';
-import { killTree } from './pi-command.js';
+import { killTree } from './process-tree.js';
 import { PACKAGE_ROOT } from './config.js';
 import { probePipeline, resolvePipelineCommand, execPipeline, spawnPipeline, pipelineChildEnv, probePipelineSandbox } from './pipeline-command.js';
 
@@ -44,7 +44,7 @@ const readJson = (file) => JSON.parse(withFsRetry(() => fs.readFileSync(file, 'u
 const writeJson = (file, value) => writeFileAtomicSync(file, JSON.stringify(value, null, 2) + '\n');
 const optional = (file) => { try { return readJson(file); } catch (e) { if (e.code === 'ENOENT') return null; throw fail(409, 'Unreadable Pipeline metadata'); } };
 
-export function createPipelineSupervisor({ dataDir, env = process.env, auth = getAuthService(), checkCapacity = () => {}, onStarting = () => {}, dreaming, context, modelWindows = createModelWindows() } = {}) {
+export function createPipelineSupervisor({ dataDir, env = process.env, auth, checkCapacity = () => {}, onStarting = () => {}, dreaming, context, modelWindows = createModelWindows() } = {}) {
   const children = new Map(), starting = new Set(), diagnostics = new Map(), secrets = new Set(), normalizing = new Map();
   let closing = false, sandboxProbe = null, buildEntry = null, buildStarting = false;
   const sandboxFlights = new Map();
@@ -110,17 +110,19 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     if (!result.available) throw fail(503, `Pipeline engine is not available: ${result.reason}`);
     return resolvePipelineCommand({ env });
   }
+  let credentialService;
+  const ownCredentials = () => credentialService ??= createCredentials({ env });
+  const accountsService = () => auth ?? ownCredentials();
   async function modelCatalog() {
-    const accounts = await auth.listAccounts();
-    let catalog = { providers: [] };
-    try { catalog = await auth.listModels(); } catch {}
-    const entries = [...accounts, ...catalog.providers.filter((p) => !accounts.some((a) => a.id === p.id)).map((p) => ({ id: p.id, label: p.label ?? p.id }))];
-    return entries.map((a) => {
-      const baseUrl = a.custom && a.api === 'openai-completions' ? a.baseUrl : a.id === 'openai' ? 'https://api.openai.com/v1' : null;
-      const models = catalog.providers.find((p) => p.id === a.id)?.models ?? [];
-      const via = a.kind === 'api_key' && a.status === 'signed_in' && baseUrl ? 'direct' : 'pi';
-      const reason = models.length ? null : 'No available Pi models';
-      return { provider: a.id, label: a.label, supported: !reason, reason, via, models: models.map((m) => ({ id: m.id, label: m.name ?? m.id })), baseUrl };
+    const service = await accountsService(), accounts = await service.listAccounts();
+    const custom = service.store?.read().providers ?? (accounts.some((a) => a.custom) ? (await ownCredentials()).store.read().providers : {});
+    return accounts.map((a) => {
+      const definition = custom[a.id];
+      const baseUrl = definition?.api === 'openai-completions' ? definition.baseUrl : a.id === 'openai' ? 'https://api.openai.com/v1' : null;
+      const models = definition?.models ?? llmModels.filter((m) => m.provider === a.id);
+      const via = a.kind === 'api_key' && a.status === 'signed_in' && baseUrl ? 'direct' : 'bridge';
+      const reason = a.status !== 'signed_in' ? 'Provider credentials are not available' : models.length ? null : 'No available Scranton models';
+      return { provider: a.id, label: a.label ?? a.id, supported: !reason, reason, via, models: models.map((m) => ({ id: m.id, label: m.name ?? m.id })), baseUrl };
     });
   }
   const sandboxText = (text) => {
@@ -179,15 +181,19 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
       const p = catalog.find((p) => p.provider === choice.provider && p.supported);
       if (!modelValue(choice.provider) || !modelValue(choice.model)) throw fail(400, `models.${role}: Invalid provider or model`);
       if (!p || !p.models.some((m) => m.id === choice.model)) throw fail(400, 'Unsupported Pipeline model selection');
-      if (p.via === 'pi') {
+      if (p.via === 'bridge') {
         for (const name of PROVIDER_ENV_NAMES[choice.provider] ?? []) {
           if (env[name]) { extra[name] = env[name]; secrets.add(env[name]); }
         }
-        models[role] = { provider: 'command', model: choice.model, command: [process.execPath, path.join(PACKAGE_ROOT, 'tools/pipeline-pi-complete.js'), '--provider', choice.provider, '--model', choice.model], structured_output: 'json_text' };
+        models[role] = { provider: 'command', model: choice.model, command: [process.execPath, path.join(PACKAGE_ROOT, 'tools/pipeline-complete.js'), '--provider', choice.provider, '--model', choice.model], structured_output: 'json_text' };
         continue;
       }
       let credential;
-      try { credential = await auth.resolveDockerCredential(choice.provider); }
+      try {
+        const service = auth?.resolveAuth ? auth : await ownCredentials();
+        credential = { value: (await service.resolveAuth(choice.provider)).key };
+        if (typeof credential.value !== 'string' || !credential.value) throw Error();
+      }
       catch { throw fail(400, 'Pipeline API key is not available'); }
       secrets.add(credential.value);
       const name = `SCRANTON_PIPELINE_KEY_${role.toUpperCase()}`;
@@ -440,6 +446,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth = ge
     async detect(project, body) { pipelineFields(body, []); const spec = await available(); const r = await execPipeline(spec, ['detect', '--source', project.workspace], { env }); if (r.code !== 0 || !r.value) throw fail(503, 'Pipeline detection failed'); return { git: r.value.git, languages: r.value.languages, ...Object.fromEntries(['checks', 'setup'].map((name) => [name, (r.value[name] ?? []).map(({ argv, ...v }) => ({ ...v, command: formatPipelineCommand(argv) }))])) }; },
     async close() {
       closing = true;
+      if (credentialService) await (await credentialService).close();
       const buildClosing = buildEntry;
       if (buildClosing) await killTree(buildClosing.child);
       await buildClosing?.done;

@@ -3,12 +3,6 @@
   "hiveDir": "./hive",
   "maxFailedCycles": 3,
   "agentTimeoutMinutes": 20,
-  "pi": {
-    "command": null,
-    "extraArgs": [],
-    "minimalContext": true,
-    "transport": "rpc"
-  },
   "agents": {
     "michael": {
       "provider": null,
@@ -30,11 +24,15 @@
     "maxParallel": 3,
     "isolation": "worktree",
     "sandbox": {
-      "mode": "host",
-      "image": "scranton-sandbox:1.5.2-r1",
-      "network": "bridge"
+      "mode": "scranton",
+      "image": "scranton-tools:24-r1",
+      "network": "allow"
     },
     "persistentSessions": true,
     "maxReplans": 0
+  },
+  "approvals": {
+    "tools": [],
+    "timeoutSeconds": 600
   }
 }

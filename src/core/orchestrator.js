@@ -6,15 +6,15 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runDag } from './scheduler.js';
 import { ChatRouter } from './chat-router.js';
-import { PACKAGE_ROOT } from './config.js';
-import { prepareSandbox, validateDockerModels } from './sandbox.js';
+import { createDurableRuntime } from './durable/index.js';
+import { createSandbox, createOwnedDirectory, credentialLocations, hardenCredentials } from './sandbox-native/index.js';
+import { createSandbox as createDockerSandbox } from './sandbox-docker/index.js';
 import { pollStop, rejectResponse, waitForResponse } from './file-control.js';
 import { EventRecorder } from './events.js';
 import { HITL_OPTIONS, createTerminalHitl, isInteractive } from './hitl.js';
 import { Hive } from './hive.js';
 import { dwightMessage, gateBugReport, handoffBody, humanNote, planRequestBody, summaryLine } from './messages.js';
-import { resolvePiCommand } from './pi-command.js';
-import { startPi } from './pi-runner.js';
+import { startAgent, agentAppVersion } from './agent/index.js';
 import { fallbackPlan, parsePlan, planToMarkdown } from './plan.js';
 import { clip, excerpt, oneLine } from './util.js';
 import { safePath } from './worktree.js';
@@ -32,10 +32,10 @@ class RunAborted extends Error {
  * counts failed cycles, trips the circuit breaker and asks the human.
  *
  * Options: config, request handling flags (noPlan, onBreaker 'ask'|'abort'|'skip'), `hitl(ctx, {signal})`
- * to inject decisions, `listener(event)` for live output, `extraEnv` for the pi children, stdin/stdout.
+ * to inject decisions, `listener(event)` for live output, `extraEnv` for the agent invocations, stdin/stdout.
  */
 export class Orchestrator {
-  constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startPi, prepareExecution = prepareSandbox, threadContext = '', developerContext = '' }) {
+  constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startAgent, sandboxFactory = createSandbox, dockerSandboxFactory = createDockerSandbox, runtimeFactory = createDurableRuntime, protectCredentials = hardenCredentials, threadContext = '', developerContext = '' }) {
     this.config = config;
     this.conversation = config.execution?.conversation === true;
     this.roles = structuredClone(config.roles ?? BUILTIN_ROLES);
@@ -51,7 +51,11 @@ export class Orchestrator {
     this.threadContext = threadContext;
     this.developerContext = developerContext;
     this.startRunner = startRunner;
-    this.prepareExecution = prepareExecution;
+    this.sandboxFactory = sandboxFactory;
+    this.dockerSandboxFactory = dockerSandboxFactory;
+    this.runtimeFactory = runtimeFactory;
+    this.protectCredentials = protectCredentials;
+    this.invocations = new Map();
     this.noPlan = noPlan;
     this.onBreaker = onBreaker;
     this.hitl = hitl;
@@ -74,7 +78,7 @@ export class Orchestrator {
     return this.rec.runId;
   }
 
-  /** Ctrl+C: kill the active pi child and unwind; run() then emits run_finished(aborted). */
+  /** Ctrl+C: kill the active agent and unwind; run() then emits run_finished(aborted). */
   abort(reason = 'Interrupted by the user (Ctrl+C)') {
     this.aborting ??= reason;
     this.rec.live?.close();
@@ -105,7 +109,6 @@ export class Orchestrator {
 
   async run(request, { threadContext = this.threadContext, developerContext = this.developerContext } = {}) {
     const { config } = this;
-    validateDockerModels(config, this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan));
     let result = { status: 'failed', summary: '', signaled: false };
     this.request = String(request).trim();
     this.threadContext = typeof threadContext === 'string' ? threadContext : '';
@@ -124,6 +127,7 @@ export class Orchestrator {
     }
     let started = false, stopTimer;
     try {
+    try {
       const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan);
       this.promptSnapshot = Object.fromEntries(roles.map((id) => [id, resolvePrompt(config, id)]));
       if (this.conversation && this.promptSnapshot.michael) this.promptSnapshot.michael.text += '\n\n## Conversation mode\n\nThe "Required answer" section of each request decides between a plan ([PLAN_READY]), a direct answer ([ANSWER_READY]) and a report ([REPORT_READY]). This overrides any earlier rule to always reply with a plan.';
@@ -132,6 +136,7 @@ export class Orchestrator {
       stopTimer = pollStop(this.hive.dir, this.runId, (reason) => this.abort(reason), (level, message) => this.log(level, message));
       for (const w of config.warnings ?? []) this.log('warn', w);
       this.#prepare();
+      this.runtime = await this.runtimeFactory({ hiveDir: this.hive.dir, markerDir: path.join(this.hive.dir, 'agent-step-markers'), executorId: `run:${this.runId}`, appVersion: await agentAppVersion() });
       if (config.execution?.isolation === 'worktree') {
         const { WorktreeManager } = await import('./worktree.js');
         this.worktrees = new WorktreeManager({ workspace: config.workspace, hiveDir: this.hive.dir, runId: this.runId });
@@ -149,7 +154,7 @@ export class Orchestrator {
       } else {
       const plan = this.noPlan ? this.#planWithoutMichael() : await this.#plan();
       this.chat.finish('michael');
-      this.setStatus('michael', 'done', 'Planning complete', this.config.pi.transport === 'rpc' && this.instances.has('michael') ? 'michael' : undefined);
+      this.setStatus('michael', 'done', 'Planning complete', this.instances.has('michael') ? 'michael' : undefined);
       if (plan.answer !== undefined) {
         this.reply = this.#reply('michael', 'answer', plan.answer);
         result = { status: 'success', summary: 'Answered by Michael' };
@@ -203,11 +208,18 @@ export class Orchestrator {
     if (this.conversation && this.rec.state.execution?.conversation === true) this.emit('run_reply', this.reply ?? this.#reply('system', 'summary', this.#digest(result)));
     this.emit('run_finished', { status: result.status, summary: result.summary });
     return { runId: this.runId, signaled: false, ...result, cleanupComplete: this.cleanupComplete };
+    } finally {
+      clearInterval(stopTimer); clearInterval(this.chatTimer);
+      await Promise.allSettled([...this.active.values()].map(async runner => { await runner.kill('user'); await runner.done; }));
+      try { await this.chat?.close(); }
+      finally { try { await this.worktrees?.close(); } finally { await this.runtime?.shutdown(); } }
+    }
   }
 
   #prepare() {
-    if (this.config.execution?.isolation !== 'worktree' && this.config.execution?.sandbox?.mode === 'docker') throw new Error('Docker requires worktree isolation');
-    this.spec = resolvePiCommand({ config: this.config });
+    const mode = this.config.execution?.sandbox?.mode ?? 'scranton';
+    if (!['scranton', 'docker', 'host'].includes(mode)) throw new Error('Unsupported execution sandbox mode');
+    if (mode === 'scranton' && this.config.execution?.isolation !== 'worktree') throw new Error('Scranton sandbox requires private worktree isolation');
     for (const id of Object.keys(this.promptSnapshot)) {
       this.prompts[id] = stagePrompt(this.config, this.hive, id, id, this.promptSnapshot[id]);
     }
@@ -519,36 +531,51 @@ export class Orchestrator {
   #deliver({ to, from, kind, body, summary, milestone = null, cycle = null }) {
     this.#checkAbort();
     const instanceId = milestone && ['dwight', ...this.workflow.gates.flat()].includes(to) ? `${to}-${milestone}` : to;
-    if (this.config.pi.transport === 'rpc' && to !== 'human' && kind !== 'report_request') body += `\n\n## Instance coordination\n\nYou are ${instanceId}. Exact recipient IDs: ${[...(this.chat?.instances.keys() ?? [])].join(', ')}. Use agent_chat for short coordination; queued is not delivered.\n`;
-    const file = this.hive.deliver({ to: this.config.pi.transport === 'rpc' ? instanceId : to, from, kind, runId: this.runId, milestone, cycle, body });
+    if (to !== 'human' && kind !== 'report_request') body += `\n\n## Instance coordination\n\nYou are ${instanceId}. Exact recipient IDs: ${[...(this.chat?.instances.keys() ?? [])].join(', ')}. Use agent_chat for short coordination; queued is not delivered.\n`;
+    const file = this.hive.deliver({ to: instanceId, from, kind, runId: this.runId, milestone, cycle, body });
     this.emit('hive_write', { from, to, file, kind, summary, instanceId, milestoneId: milestone, cycle });
   }
 
-  /** Runs one pi process; always emits agent_finished and a final agent_status. */
+  /** Runs one agent invocation; always emits agent_finished and a final agent_status. */
   async #runAgent(agentId, { milestone, cycle, report = false }) {
     this.#checkAbort();
-    const rpc = this.config.pi.transport === 'rpc';
+
     const instanceId = milestone ? `${agentId}-${milestone}` : agentId;
     let instance = this.instances.get(instanceId);
     if (!instance) {
       const worktree = this.worktrees
         ? !this.standaloneAgent && this.gates.includes(agentId) && milestone ? { dir: this.legacyGates ? this.qaDirs.get(milestone) : this.gateDirs.get(instanceId) } : await this.worktrees.createWorktree({ agent: agentId, milestoneId: milestone ?? 'plan' })
         : { dir: this.config.workspace };
-      instance = { id: instanceId, agent: agentId, milestoneId: milestone, sessionId: randomUUID(), worktree: worktree.dir, sandbox: this.config.execution?.sandbox?.mode ?? 'host' };
+      instance = { id: instanceId, agent: agentId, milestoneId: milestone, sessionId: randomUUID(), worktree: worktree.dir, sandbox: this.config.execution?.sandbox?.mode ?? 'scranton' };
       this.instances.set(instanceId, instance);
     }
-    if (rpc) {
-      fs.mkdirSync(this.hive.sessionDir(instanceId), { recursive: true });
-      this.prompts[instanceId] = stagePrompt(this.config, this.hive, agentId, instanceId, this.promptSnapshot[agentId]);
-      this.emit('instance_started', { ...instance, instanceId, worktree: this.worktrees ? instance.worktree : null });
+    this.prompts[instanceId] = stagePrompt(this.config, this.hive, agentId, instanceId, this.promptSnapshot[agentId]);
+    const purpose = report ? 'report' : this.standaloneAgent ? 'conversation' : agentId === 'michael' ? 'plan' : this.gates.includes(agentId) ? 'gate' : 'work';
+    const baseKey = `${milestone ?? 'run'}/cycle-${cycle ?? 0}/${agentId}/${purpose}`;
+    const attempt = (this.invocations.get(baseKey) ?? 0) + 1;
+    this.invocations.set(baseKey, attempt);
+    const invocationKey = `${baseKey}/${attempt > 1 && purpose === 'plan' ? 'plan-retry/' : ''}attempt-${attempt}`;
+    this.emit('instance_started', { ...instance, instanceId, invocationKey, worktree: this.worktrees ? instance.worktree : null });
+    let sandbox, tempDir;
+    try {
+    if (instance.sandbox === 'scranton') {
+      if (process.platform === 'win32' && !this.credentialsProtected) {
+        const credentialsDir = credentialLocations({ env: { ...process.env, ...this.extraEnv } })[0];
+        fs.mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+        const backups = path.join(this.hive.dir, 'credential-label-backups');
+        fs.mkdirSync(backups, { recursive: true, mode: 0o700 });
+        this.credentialProtection ??= Promise.resolve().then(() => this.protectCredentials(credentialsDir, { backup: path.join(backups, `${this.runId}-${randomUUID()}.json`), env: { ...process.env, ...this.extraEnv } }));
+        await this.credentialProtection;
+        this.credentialsProtected = true;
+      }
+      tempDir = createOwnedDirectory(path.join(path.dirname(instance.worktree), `temp-${randomUUID()}`));
+      sandbox = this.sandboxFactory({ worktree: instance.worktree, tempDir, network: this.config.execution.sandbox.network !== 'none', env: { ...process.env, ...this.extraEnv } });
+      await sandbox.prepare();
+    } else if (instance.sandbox === 'docker') {
+      tempDir = createOwnedDirectory(path.join(path.dirname(instance.worktree), `temp-${randomUUID()}`));
+      sandbox = this.dockerSandboxFactory({ ...this.config.execution.sandbox, worktree: instance.worktree, tempDir, runId: this.runId, env: { ...process.env, ...this.extraEnv } });
+      await sandbox.prepare();
     }
-    const execution = this.worktrees ? async (staged) => {
-      return this.prepareExecution({ sandbox: this.config.execution.sandbox, workspace: instance.worktree,
-        sessionDir: this.hive.sessionDir(instanceId), systemPromptFile: this.prompts[instanceId],
-        extensionFile: staged?.extensionFile ?? path.join(PACKAGE_ROOT, 'tools', 'pi-agent-chat.js'),
-        env: staged.env, provider: this.config.agents[agentId].provider,
-        agentTimeoutMinutes: this.config.agentTimeoutMinutes, instanceId, runId: this.runId });
-    } : undefined;
     let pending = '';
     const message = (text, final) => {
       if (!this.conversation || !text.trim()) return;
@@ -560,19 +587,18 @@ export class Orchestrator {
         pending = text;
         if (tools) { message(pending, false); pending = ''; }
       } : undefined,
-      transport: this.config.pi.transport,
-      instanceId, sessionId: instance.sessionId, execution,
+      instanceId, sessionId: instance.sessionId, invocationKey, runtime: this.runtime, sandbox,
+      approvals: this.config.approvals, scripted: this.extraEnv.SCRANTON_FAKE_SCENARIO ? undefined : this.config.scripted,
+      message: fs.readFileSync(this.hive.inboxPath(instanceId), 'utf8'),
       onMessage: (message) => this.chat.send(instanceId, message),
-      spec: this.spec,
       agentId,
       agentConfig: { ...this.config.agents[agentId], id: agentId, kind: this.roleMap[agentId].kind, keywords: this.roleMap[agentId].keywords },
-      pi: this.config.pi,
       cwd: instance.worktree,
       hive: this.hive,
       runId: this.runId,
       milestone,
       cycle,
-      systemPromptFile: this.prompts[rpc ? instanceId : agentId],
+      systemPromptFile: this.prompts[instanceId],
       extraEnv: { ...this.extraEnv, SCRANTON_CONVERSATION: this.conversation ? '1' : '0', SCRANTON_AGENT: agentId, SCRANTON_ROLE_KIND: this.roleMap[agentId].kind, SCRANTON_PASS_KEYWORD: this.roleMap[agentId].passKeyword ?? '', SCRANTON_FAIL_KEYWORD: this.roleMap[agentId].failKeyword ?? '', SCRANTON_INSTANCE_ID: instanceId, SCRANTON_RUN_ID: this.runId, SCRANTON_MILESTONE: milestone ?? '', SCRANTON_CYCLE: cycle == null ? '' : String(cycle) },
       timeoutMs: report ? 120000 : Math.round(this.config.agentTimeoutMinutes * 60000),
       onLive: (record) => this.rec.live?.update(instanceId, agentId, record),
@@ -580,14 +606,14 @@ export class Orchestrator {
       onTool: ({ tool, activity, detail, targetFile = null, command = null }) => {
         if (pending) { message(pending, false); pending = ''; }
         this.emit('agent_tool', { agent: agentId, instanceId, tool, detail, targetFile, command });
-        this.setStatus(agentId, 'working', activity, rpc ? instanceId : undefined);
+        this.setStatus(agentId, 'working', activity, instanceId);
       },
-      onToolEnd: () => this.setStatus(agentId, 'thinking', 'Thinking...', rpc ? instanceId : undefined)
+      onToolEnd: () => this.setStatus(agentId, 'thinking', 'Thinking...', instanceId)
     });
     this.active.set(instanceId, runner);
-    if (rpc) void this.chat.attach(instanceId, runner).catch((err) => this.log('warn', err.message));
+    void this.chat.attach(instanceId, runner).catch((err) => this.log('warn', err.message));
     if (this.aborting) void runner.kill('user');
-    if (agentId !== 'michael') this.setStatus(agentId, 'thinking', 'Thinking...', rpc ? instanceId : undefined);
+    if (agentId !== 'michael') this.setStatus(agentId, 'thinking', 'Thinking...', instanceId);
     const settled = await runner.done;
     const result = this.conversation && !settled.text && pending ? { ...settled, text: pending } : settled;
     if (result.cleanupComplete === false || result.failure?.kind === 'cleanup') {
@@ -603,24 +629,31 @@ export class Orchestrator {
     if (result.text && milestone) this.reports.set(`${agentId}-${milestone}`, result.text);
     if (result.text) {
       const to = { michael: 'dwight', dwight: 'angela', oscar: 'dwight', hank: 'dwight', angela: 'dwight' }[agentId] ?? 'dwight';
-      this.hive.writeOutbox({ agent: rpc ? instanceId : agentId, to, runId: this.runId, milestone, cycle, keyword: result.keyword, body: result.text });
+      this.hive.writeOutbox({ agent: instanceId, to, runId: this.runId, milestone, cycle, keyword: result.keyword, body: result.text });
     }
     this.rec.live?.remove(instanceId);
-    const finished = { agent: agentId, ...(rpc ? { instanceId } : {}), milestoneId: milestone, cycle, keyword: result.keyword, exitCode: result.exitCode, durationMs: result.durationMs };
+    const finished = { agent: agentId, instanceId, milestoneId: milestone, cycle, keyword: result.keyword, exitCode: result.exitCode, durationMs: result.durationMs };
     if (result.usage) finished.usage = { input: result.usage.input, output: result.usage.output, cost: result.usage.cost };
     this.emit('agent_finished', finished);
 
     if (result.failure) {
-      this.setStatus(agentId, 'error', `Failed: ${result.failure.message.split('\n')[0]}`, rpc ? instanceId : undefined);
+      this.setStatus(agentId, 'error', `Failed: ${result.failure.message.split('\n')[0]}`, instanceId);
       this.log('error', `${agentId}: ${result.failure.message}`);
       if (!report && result.failure.kind === 'interrupted') this.#checkAbort();
     } else if (result.keyword === 'BLOCKED') {
-      this.setStatus(agentId, 'blocked', `Blocked: ${summaryLine(result.text, 300)}`, rpc ? instanceId : undefined);
+      this.setStatus(agentId, 'blocked', `Blocked: ${summaryLine(result.text, 300)}`, instanceId);
     } else {
-      this.setStatus(agentId, 'idle', 'Idle', rpc ? instanceId : undefined);
+      this.setStatus(agentId, 'idle', 'Idle', instanceId);
     }
     if (!report) this.#checkAbort();
     return result;
+    } finally {
+      this.active.delete(instanceId); this.chat.detach(instanceId);
+      try {
+        await sandbox?.dispose();
+        if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch (error) { this.cleanupComplete = false; this.cleanupReason = error.message; throw error; }
+    }
   }
 
   // ---- human in the loop ----------------------------------------------------------------

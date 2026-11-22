@@ -8,10 +8,11 @@ import { loadConfig } from '../../src/core/config.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const FAKE_PI = path.join(ROOT, 'tools', 'fake-pi.js');
+process.env.SCRANTON_FAKE_MODE = '1';
 
 export function tempDir(t, prefix = 'scranton-test-') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const root = path.resolve('.scratch/switch-core/tmp'); fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, prefix));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -28,35 +29,32 @@ export function readLog(file) {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
 }
 
-/** Config for the fake pi in a temp dir (never the real ./hive). */
-export function fakeConfig(dir, { command = [process.execPath, FAKE_PI], maxFailedCycles = 3, timeoutMin, pi = {} } = {}) {
-  return loadConfig({
-    cwd: dir,
-    env: {},
-    hasBash: true,
-    fileConfig: {
-      workspace: path.join(dir, 'workspace'),
-      hiveDir: path.join(dir, 'hive'),
-      maxFailedCycles,
-      ...(timeoutMin ? { agentTimeoutMinutes: timeoutMin } : {}),
-      execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } },
-      pi: { command, transport: 'json', ...pi }
-    }
-  });
+/** Deterministic own-runtime configuration. */
+export function fakeConfig(dir, options = {}) { return scriptedConfig(dir, options); }
+
+/** Own-runtime config for migration tests; set SCRANTON_FAKE_SCENARIO on the runner/child. */
+export function scriptedConfig(dir, { maxFailedCycles = 3, timeoutMin } = {}) {
+  const config = loadConfig({ cwd: dir, env: {}, hasBash: true, fileConfig: {
+    workspace: path.join(dir, 'workspace'), hiveDir: path.join(dir, 'hive'), maxFailedCycles,
+    ...(timeoutMin ? { agentTimeoutMinutes: timeoutMin } : {}),
+    execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } },
+  } });
+  config.scripted = 'happy';
+  return config;
 }
 
 const NO_TTY = { isTTY: false };
 
-/** Runs a full orchestration against the fake pi and returns the result, events and the argv log. */
+/** Runs a full orchestration against the scripted runtime and returns results, events and invocation receipts. */
 export async function runFake(t, { scenario = 'happy', env = {}, request = 'Build a tiny todo CLI', config = {}, beforeRun, ...options } = {}) {
   const dir = tempDir(t);
-  const logFile = path.join(dir, 'fake-pi.log');
+  const logFile = path.join(dir, 'scripted-agent.log');
   const cfg = fakeConfig(dir, config);
   const orchestrator = new Orchestrator({
     config: cfg,
     stdin: NO_TTY,
     stdout: { ...NO_TTY, write() {} },
-    extraEnv: { FAKE_PI_SCENARIO: scenario, FAKE_PI_LOG: logFile, ...env },
+    extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario, SCRANTON_FAKE_LOG: logFile, ...env },
     ...options
   });
   beforeRun?.(orchestrator);

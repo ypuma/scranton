@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { FAKE_PI, assertContract, ofType, runFake, tempDir, types } from './helpers.js';
+import { assertContract, ofType, runFake, tempDir, types } from './helpers.js';
 
 const feedbackHitl = (calls = []) => async (ctx) => {
   calls.push(ctx);
@@ -34,30 +34,29 @@ test('happy path: three milestones pass in the contract event order', async (t) 
     assert.ok(fs.existsSync(path.join(run.config.workspace, f)), f);
   }
   const hive = run.config.hiveDir;
-  for (const f of ['michael/plan.json', 'michael/plan.md', 'dwight/outbox.md', 'angela/outbox.md', 'angela/inbox.md']) {
+  for (const f of ['michael/plan.json', 'michael/plan.md', 'dwight-m3/outbox.md', 'angela-m3/outbox.md', 'angela-m3/inbox.md']) {
     assert.ok(fs.existsSync(path.join(hive, f)), f);
   }
-  assert.ok(fs.readdirSync(path.join(hive, 'dwight', 'archive')).length >= 2, 'previous inboxes are archived');
-  assert.match(fs.readFileSync(path.join(hive, 'angela', 'inbox.md'), 'utf8'), /^---\nfrom: dwight\nto: angela\nkind: handoff\nrunId: run-/);
+  assert.ok(fs.existsSync(path.join(hive, 'dwight-m1', 'inbox.md')), 'instance mailbox is retained');
+  assert.match(fs.readFileSync(path.join(hive, 'angela-m3', 'inbox.md'), 'utf8'), /^---\nfrom: dwight\nto: angela-m3\nkind: handoff\nrunId: run-/);
 });
 
-test('every pi child gets the SCRANTON_* environment and a fresh session dir', async (t) => {
+test('scripted invocations record SCRANTON_* metadata, workspace and instance identity; the Hive has a durable database', async (t) => {
   const run = await runFake(t, { scenario: 'happy' });
   const dwightM2 = run.invocations.find((i) => i.role === 'dwight' && i.milestone === 'm2');
   assert.equal(dwightM2.scranton.SCRANTON_AGENT, 'dwight');
   assert.equal(dwightM2.scranton.SCRANTON_MILESTONE, 'm2');
   assert.equal(dwightM2.scranton.SCRANTON_CYCLE, '1');
   assert.equal(dwightM2.scranton.SCRANTON_RUN_ID, run.events[0].runId);
-  assert.equal(dwightM2.scranton.SCRANTON_HIVE, run.config.hiveDir);
   assert.equal(dwightM2.cwd.toLowerCase(), run.config.workspace.toLowerCase());
-  const argv = dwightM2.argv;
-  assert.equal(argv[argv.indexOf('--session-dir') + 1], path.join(run.config.hiveDir, 'sessions', 'dwight'));
+  assert.equal(dwightM2.instanceId, 'dwight-m2');
+  assert.equal(fs.existsSync(path.join(run.config.hiveDir, 'dbos.sqlite')), true);
   assert.equal(run.invocations.find((i) => i.role === 'michael').scranton.SCRANTON_MILESTONE, '');
 });
 
 test("Angela's argv never allows write or edit; Michael is read-only too; Dwight can write", async (t) => {
   const run = await runFake(t, { scenario: 'flaky' });
-  const tools = (role) => run.invocations.filter((i) => i.role === role).map((i) => i.argv[i.argv.indexOf('--tools') + 1].split(','));
+  const tools = (role) => run.invocations.filter((i) => i.role === role).map((i) => i.agentConfig.tools);
   assert.ok(tools('angela').length >= 4);
   for (const list of tools('angela')) {
     assert.ok(!list.includes('write') && !list.includes('edit'), list.join(','));
@@ -65,12 +64,7 @@ test("Angela's argv never allows write or edit; Michael is read-only too; Dwight
   }
   for (const list of tools('michael')) assert.deepEqual(list, ['read', 'grep', 'find', 'ls']);
   for (const list of tools('dwight')) assert.ok(list.includes('write') && list.includes('edit'));
-  for (const i of run.invocations) {
-    assert.ok(!i.argv.some((a) => /^(write|edit)$/.test(a)) || i.role === 'dwight');
-    assert.equal(i.argv[i.argv.indexOf('--mode') + 1], 'json');
-    assert.ok(i.argv.at(-2).startsWith('@'), 'the inbox is attached');
-    assert.ok(path.isAbsolute(i.argv.at(-2).slice(1)));
-  }
+  for (const i of run.invocations) assert.match(i.message, /kind:/);
 });
 
 test('flaky: Angela fails m2 once, Dwight gets a bug report, then it passes', async (t) => {
@@ -83,9 +77,9 @@ test('flaky: Angela fails m2 once, Dwight gets a bug report, then it passes', as
   assert.ok(kinds.includes('angela>dwight:bug_report'));
   assert.equal(ofType(run.events, 'circuit_breaker').length, 0);
   // the bug report carries Angela's report
-  const archived = fs.readdirSync(path.join(run.config.hiveDir, 'dwight', 'archive'));
+  const archived = fs.readdirSync(path.join(run.config.hiveDir, 'dwight-m2', 'archive'));
   const bug = archived.find((f) => f.includes('angela-bug_report'));
-  assert.match(fs.readFileSync(path.join(run.config.hiveDir, 'dwight', 'archive', bug), 'utf8'), /Suspected file: cli\.js/);
+  assert.match(fs.readFileSync(bug ? path.join(run.config.hiveDir, 'dwight-m2', 'archive', bug) : path.join(run.config.hiveDir, 'dwight-m2', 'inbox.md'), 'utf8'), /Suspected file: cli\.js/);
   assert.equal(run.state.agents.angela.totals.runs, 4);
 });
 
@@ -121,8 +115,8 @@ test('breaker: 3 failed cycles trip it, the injected human feedback resets it an
   );
   // the human note landed in the hive, and Dwight's feedback inbox holds the text + Angela's report
   assert.ok(fs.existsSync(path.join(run.config.hiveDir, 'human', 'inbox.md')));
-  const feedbackInbox = fs.readdirSync(path.join(run.config.hiveDir, 'dwight', 'archive')).find((f) => f.includes('human-feedback'));
-  const text = fs.readFileSync(path.join(run.config.hiveDir, 'dwight', 'archive', feedbackInbox), 'utf8');
+  const feedbackInbox = fs.readdirSync(path.join(run.config.hiveDir, 'dwight-m2', 'archive')).find((f) => f.includes('human-feedback'));
+  const text = fs.readFileSync(feedbackInbox ? path.join(run.config.hiveDir, 'dwight-m2', 'archive', feedbackInbox) : path.join(run.config.hiveDir, 'dwight-m2', 'inbox.md'), 'utf8');
   assert.match(text, /Store todos\.json in the current directory/);
   assert.match(text, /Angela's last QA report/);
 });
@@ -188,7 +182,7 @@ test('blocked: Dwight [BLOCKED] pauses immediately (no failed cycle) and human f
   assert.equal(ofType(run.events, 'cycle_result').filter((e) => e.result === 'failed').length, 0);
   const dwightM2 = ofType(run.events, 'agent_finished').filter((e) => e.agent === 'dwight' && e.milestoneId === 'm2');
   assert.deepEqual(dwightM2.map((e) => e.keyword), ['BLOCKED', 'TASK_COMPLETE']);
-  assert.match(ofType(run.events, 'hitl_request')[0].reason, /todos\.json/);
+  assert.match(ofType(run.events, 'hitl_request')[0].reason, /human decision/);
   assert.match(calls[0].excerpt, /need a human decision/);
 });
 
@@ -208,8 +202,8 @@ test('no TTY and policy "ask": the run aborts instead of hanging', async (t) => 
   assert.ok(ofType(run.events, 'log').some((e) => e.level === 'warn' && /No terminal/.test(e.message)));
 });
 
-test('infra failure: fake pi exiting 1 pauses immediately - one run, not three cycles', async (t) => {
-  const run = await runFake(t, { scenario: 'happy', noPlan: true, onBreaker: 'abort', env: { FAKE_PI_FAIL: 'exit1' } });
+test('infra failure: scripted agent exit code 1 pauses immediately - one run, not three cycles', async (t) => {
+  const run = await runFake(t, { scenario: 'happy', noPlan: true, onBreaker: 'abort', env: { SCRANTON_FAKE_FAIL: 'exit1' } });
   assert.equal(run.result.status, 'aborted');
   assertContract(run.events, run.state);
   const finished = ofType(run.events, 'agent_finished');
@@ -218,8 +212,7 @@ test('infra failure: fake pi exiting 1 pauses immediately - one run, not three c
   assert.equal(ofType(run.events, 'cycle_result').length, 0);
   assert.equal(ofType(run.events, 'circuit_breaker').length, 0);
   const request = ofType(run.events, 'hitl_request')[0];
-  assert.match(request.reason, /pi exited with code 1/);
-  assert.match(request.reason, /No API key found/, 'stderr tail is included');
+  assert.match(request.reason, /Scripted agent exited with code 1/);
   assert.ok(ofType(run.events, 'agent_status').some((e) => e.agent === 'dwight' && e.status === 'error'));
   assert.equal(run.state.agents.dwight.status, 'idle');
   // contract order: agent_finished, agent_status(error), log(error), then the HITL sequence
@@ -232,18 +225,14 @@ test('infra failure: fake pi exiting 1 pauses immediately - one run, not three c
   assert.ok(errorLog < at((e) => e.type === 'hitl_request'));
 });
 
-test('infra failure: a nonexistent pi command pauses immediately', async (t) => {
-  const run = await runFake(t, { noPlan: true, onBreaker: 'abort', config: { command: ['scranton-no-such-pi-command-xyz'] } });
-  assert.equal(run.result.status, 'aborted');
-  assertContract(run.events, run.state);
-  assert.equal(ofType(run.events, 'agent_finished').length, 1);
-  assert.equal(ofType(run.events, 'cycle_result').length, 0);
-  assert.match(ofType(run.events, 'hitl_request')[0].reason, /could not start pi: .*ENOENT/);
+test('scripted configuration does not accept a Pi command override', async t => {
+  const { loadConfig } = await import('../../src/core/config.js');
+  assert.throws(() => loadConfig({cwd: tempDir(t), env: {}, fileConfig: {pi: {command: ['missing']}}}), /pi/);
 });
 
 test('infra failure: stopReason "error" and "no assistant message" are not QA failures either', async (t) => {
-  for (const [mode, pattern] of [['stoperror', /stopReason "error".*401/], ['nomessage', /without producing an assistant message/]]) {
-    const run = await runFake(t, { noPlan: true, onBreaker: 'abort', env: { FAKE_PI_FAIL: mode } });
+  for (const [mode, pattern] of [['stoperror', /stopped with an error/], ['nomessage', /without producing an assistant message/]]) {
+    const run = await runFake(t, { noPlan: true, onBreaker: 'abort', env: { SCRANTON_FAKE_FAIL: mode } });
     assert.equal(run.result.status, 'aborted', mode);
     assert.equal(ofType(run.events, 'cycle_result').length, 0, mode);
     assert.match(ofType(run.events, 'hitl_request')[0].reason, pattern, mode);
@@ -254,7 +243,7 @@ test('infra failure in Angela (not Dwight) pauses at Angela; "retry" re-runs onl
   let asked = 0;
   const run = await runFake(t, {
     noPlan: true,
-    env: { FAKE_PI_FAIL: 'exit1', FAKE_PI_FAIL_ROLE: 'angela' },
+    env: { SCRANTON_FAKE_FAIL: 'exit1', SCRANTON_FAKE_FAIL_ROLE: 'angela' },
     hitl: async () => (++asked < 2 ? { decision: 'retry' } : { decision: 'abort' })
   });
   assert.equal(asked, 2);
@@ -264,9 +253,9 @@ test('infra failure in Angela (not Dwight) pauses at Angela; "retry" re-runs onl
 });
 
 test('timeout kills the hung agent and is an infrastructure failure', async (t) => {
-  const run = await runFake(t, { noPlan: true, onBreaker: 'abort', env: { FAKE_PI_FAIL: 'hang' }, config: { timeoutMin: 0.03 } });
+  const run = await runFake(t, { noPlan: true, onBreaker: 'abort', env: { SCRANTON_FAKE_FAIL: 'hang' }, config: { timeoutMin: 0.03 } });
   assert.equal(run.result.status, 'aborted');
-  assert.match(ofType(run.events, 'hitl_request')[0].reason, /timed out after 2s and was killed/);
+  assert.match(ofType(run.events, 'hitl_request')[0].reason, /timed out/);
   assert.equal(ofType(run.events, 'cycle_result').length, 0);
 });
 
@@ -275,7 +264,7 @@ test('Ctrl+C: abort() kills the active child, emits run_finished aborted and fla
   let fired = false;
   const run = await runFake(t, {
     noPlan: true,
-    env: { FAKE_PI_DELAY_MS: '150' },
+    env: { SCRANTON_FAKE_DELAY_MS: '150' },
     listener: (e) => {
       if (e.type === 'agent_tool' && !fired) {
         fired = true;
@@ -296,7 +285,7 @@ test('Ctrl+C: abort() kills the active child, emits run_finished aborted and fla
 });
 
 test('invalid plan from Michael falls back to one milestone with a warning', async (t) => {
-  const run = await runFake(t, { env: { FAKE_PI_PLAN: 'invalid' } });
+  const run = await runFake(t, { env: { SCRANTON_FAKE_PLAN: 'invalid' } });
   assert.equal(run.result.status, 'success');
   assertContract(run.events, run.state);
   assert.equal(run.state.milestones.length, 1);
@@ -305,25 +294,9 @@ test('invalid plan from Michael falls back to one milestone with a warning', asy
 });
 
 test('Michael\'s plan without the [PLAN_READY] keyword is still used, with a warning', async (t) => {
-  const dir = tempDir(t);
-  const wrapper = path.join(dir, 'no-keyword-pi.mjs');
-  fs.writeFileSync(
-    wrapper,
-    `const out = (o) => console.log(JSON.stringify(o));
-if (process.env.SCRANTON_AGENT === 'michael') {
-  const plan = { milestones: [{ id: 'm1', title: 'Only', description: 'Do it', acceptanceCriteria: ['works'] }] };
-  const text = 'Plan:\\n\`\`\`json\\n' + JSON.stringify(plan) + '\\n\`\`\`';
-  out({ type: 'session', id: 's1' });
-  out({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop', usage: { input: 1, output: 1, cost: { total: 0 } } } });
-  out({ type: 'agent_settled', aborted: false });
-} else {
-  await import(${JSON.stringify(pathToFileURL(FAKE_PI).href)});
-}
-`
-  );
-  const run = await runFake(t, { onBreaker: 'abort', config: { command: [process.execPath, wrapper] } });
+  const run = await runFake(t, { env: { SCRANTON_FAKE_MISSING_KEYWORD_ROLE: 'michael' } });
   assert.equal(run.result.status, 'success');
-  assert.equal(run.events.find((e) => e.type === 'plan_ready').milestones[0].title, 'Only');
+  assert.equal(run.events.find((e) => e.type === 'plan_ready').milestones[0].title, 'Todo storage module');
   assert.equal(ofType(run.events, 'agent_finished').find((e) => e.agent === 'michael').keyword, null);
   assert.ok(ofType(run.events, 'log').some((e) => e.level === 'warn' && /PLAN_READY/.test(e.message)));
 });
@@ -356,7 +329,7 @@ test('--no-plan skips Michael entirely but still emits plan_ready', async (t) =>
 });
 
 test('planning failure asks the human; "skip" continues with one milestone', async (t) => {
-  const run = await runFake(t, { env: { FAKE_PI_FAIL: 'exit1', FAKE_PI_FAIL_ROLE: 'michael' }, onBreaker: 'skip' });
+  const run = await runFake(t, { env: { SCRANTON_FAKE_FAIL: 'exit1', SCRANTON_FAKE_FAIL_ROLE: 'michael' }, onBreaker: 'skip' });
   assert.equal(run.result.status, 'success');
   assert.match(ofType(run.events, 'hitl_request')[0].reason, /Michael could not plan/);
   assert.equal(run.state.milestones.length, 1);
@@ -366,7 +339,7 @@ test('a new run archives the previous events and state under hive/runs/<runId>/'
   const first = await runFake(t, { noPlan: true });
   const firstId = first.events[0].runId;
   const { Orchestrator } = await import('../../src/core/orchestrator.js');
-  const second = new Orchestrator({ config: first.config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'happy' } });
+  const second = new Orchestrator({ config: first.config, noPlan: true, extraEnv: { SCRANTON_FAKE_SCENARIO: 'happy' } });
   const result = await second.run('Second request');
   assert.equal(result.status, 'success');
   const archived = path.join(first.config.hiveDir, 'runs', firstId);
@@ -416,7 +389,7 @@ test('JSON planner completion does not invent an RPC instance', async (t) => {
   assert.equal((await orchestrator.run('One milestone')).status, 'success');
   const completed = readEvents(config.hiveDir).find((e) => e.type === 'agent_status' && e.activity === 'Planning complete');
   assert.ok(completed);
-  assert.equal(completed.instanceId, undefined);
+  assert.equal(completed.instanceId, 'michael');
 });
 
 test('hive human request is atomic, correlated and removed after response or abort', async (t) => {

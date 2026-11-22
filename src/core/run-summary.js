@@ -2,7 +2,7 @@ import path from 'node:path';
 import { listRestorePoints } from './restore-points.js';
 
 export function quotePathArgument(value, platform = process.platform) {
-  value = String(value);
+  value = String(value).replace(/[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
   if (platform === 'win32') return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1') + '"';
   return "'" + value.replaceAll("'", "'\\''") + "'";
 }

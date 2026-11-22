@@ -202,8 +202,8 @@ test('execution overrides are validated and forwarded before request terminator'
   for (const options of [{ maxParallel: 0 }, { sandbox: 'host' }, { sandbox: 'unknown' }, { sandboxNetwork: 'host' }, { sandboxImage: '--help' }, { sandbox: 'docker', trustedHost: true }]) {
     assert.equal((await request(srv, '/api/runs', { request: 'test', ...options })).status, 400);
   }
-  assert.equal((await request(srv, '/api/runs', { request: '--test', maxParallel: 3, sandbox: 'host', trustedHost: true, sandboxImage: 'local/image:1', sandboxNetwork: 'none' })).status, 202);
-  assert.deepEqual(args.slice(args.indexOf('--parallel'), args.indexOf('--')), ['--parallel', '3', '--trusted-host', '--sandbox-image', 'local/image:1', '--sandbox-network', 'none']);
+  assert.equal((await request(srv, '/api/runs', { request: '--test', maxParallel: 3, sandbox: 'docker', sandboxImage: 'local/image:1', sandboxNetwork: 'none' })).status, 202);
+  assert.deepEqual(args.slice(args.indexOf('--parallel'), args.indexOf('--')), ['--parallel', '3', '--sandbox', 'docker', '--sandbox-image', 'local/image:1', '--sandbox-network', 'none']);
   assert.equal(args.at(-1), '--test');
 });
 
@@ -308,13 +308,13 @@ test('guardian refreshes heartbeat deadlines and aborts only once when stale', a
   assert.equal(aborted, 1);
 });
 
-test('Team control defaults to host without silently overriding an explicit Docker request', async (t) => {
+test('Team control defaults to Scranton without silently overriding an explicit Docker request', async (t) => {
   let args;
   const child = Object.assign(new EventEmitter(), { pid: 123 });
   t.after(() => child.emit('close', 0));
   const { srv } = await setup(t, { runner: (_exe, argv) => { args = argv; return child; } });
-  assert.equal((await request(srv, '/api/control')).value.defaults.execution.sandbox.mode, 'host');
-  assert.equal((await request(srv, '/api/runs', { request: 'default host' })).status, 202);
+  assert.equal((await request(srv, '/api/control')).value.defaults.execution.sandbox.mode, 'scranton');
+  assert.equal((await request(srv, '/api/runs', { request: 'default Scranton' })).status, 202);
   assert.ok(!args.includes('--sandbox') && !args.includes('--trusted-host'));
   child.emit('close', 0);
   // The fixture runner never publishes a heartbeat, so release its test lease explicitly.

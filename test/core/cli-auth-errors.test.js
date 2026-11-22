@@ -14,7 +14,8 @@ function fixture(t) {
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'errors-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const auth = createAuthService({ env: {}, authPath: path.join(dir, 'auth.json'), runtimeFactory: async () => { throw Error(`upstream diagnostic ${key}`); } });
+  fs.writeFileSync(path.join(dir, 'store.json'), JSON.stringify({ version: 1, credentials: {}, providers: {}, renewals: {}, deviceId: '00000000-0000-4000-8000-000000000000', import: { at: 'fixture' } }));
+  const auth = createAuthService({ env: { SCRANTON_CREDENTIALS_DIR: dir, PI_CODING_AGENT_DIR: path.join(dir, 'pi') } });
   t.after(() => auth.close());
   return { dir, auth };
 }
@@ -32,26 +33,17 @@ async function invoke(args, dir, auth) {
   return stderr;
 }
 
-test('CLI reports provider lock recovery instructions without printing the input key', async (t) => {
+test('CLI reports own credential conflicts without printing the input key', async (t) => {
   const { dir, auth } = fixture(t);
-  const lock = path.join(dir, 'models.json.scranton-lock');
-  fs.mkdirSync(lock);
-  fs.writeFileSync(path.join(lock, 'pid'), '2147483647');
-  t.mock.method(process, 'kill', (pid, signal) => {
-    assert.equal(pid, 2147483647);
-    assert.equal(signal, 0);
-    throw Object.assign(Error('dead fixture writer'), { code: 'ESRCH' });
-  });
-  assert.equal(await invoke(add, dir, auth), 'Provider configuration is locked; after verifying no Scranton writer is running, remove models.json.scranton-lock from the Pi agent directory\n');
+  await auth.setApiKey('google', key);
+  await auth.addProvider({ id: 'custom-test', baseUrl: 'https://example.test/v1', api: 'openai-completions', models: [{ id: 'model' }], key });
+  assert.equal(await invoke(add, dir, auth), 'Provider already exists\n');
 });
 
-test('CLI reports comments and unmanaged credential conflicts without printing the input key', async (t) => {
-  const { dir, auth } = fixture(t);
-  fs.writeFileSync(path.join(dir, 'models.json'), '{// keep this comment\n"providers":{}}');
-  assert.equal(await invoke(add, dir, auth), 'Provider configuration contains comments; refusing to rewrite or drop comments\n');
-  fs.unlinkSync(path.join(dir, 'models.json'));
-  fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify({ 'custom-test': { type: 'api_key', key } }));
-  assert.equal(await invoke(add, dir, auth), 'Provider ID already has a credential not managed by Scranton\n');
+test('CLI reports own credential locking without printing the input key', async (t) => {
+  const { dir } = fixture(t);
+  const fail = async () => { throw Object.assign(Error('Credential store is locked; verify the writer has stopped'), { status: 409 }); };
+  assert.equal(await invoke(add, dir, { addProvider: fail }), 'Credential store is locked; verify the writer has stopped\n');
 });
 
 test('CLI keeps unexpected provider, key and logout errors generic like HTTP control', async (t) => {

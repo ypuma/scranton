@@ -146,24 +146,42 @@ function teamAgent(state, x, id, tails, { name, role, gate, tailId = id, asRole 
   };
 }
 
-// One entry per instance in reading order; a serial run has no instances, its roles speak instead.
-export function teamAgents(state, tails = null) {
+// What the agent entries are made of: [{ x: an instance or a role aggregate, id, opts }] in reading order.
+function agentSources(state) {
   if (!state?.runId) return [];
   const lanes = lanesOf(state);
   if (lanes.length) {
-    return lanes.map((i) => teamAgent(state, i, i.id, tails, {
-      name: i.id, gate: laneGate(state, i),
-      role: [laneRole(i.agent, state), i.milestoneId && i.milestoneId !== 'plan' ? i.milestoneId : ''].filter(Boolean).join(' · '),
+    return lanes.map((i) => ({
+      x: i, id: i.id, opts: {
+        name: i.id, gate: laneGate(state, i),
+        role: [laneRole(i.agent, state), i.milestoneId && i.milestoneId !== 'plan' ? i.milestoneId : ''].filter(Boolean).join(' · '),
+      },
     }));
   }
   // JSON transport has role-only statuses, but live.json uses the same exact invocation ids as RPC.
   const current = state.currentMilestoneId;
   const milestone = state.activeMilestoneIds?.length === 1 && state.activeMilestoneIds[0] === current
     && state.milestones.some((m) => m.id === current && m.status === 'active') ? current : null;
-  return activeRoles(state).filter((id) => own(state.agents, id)).map((id) => teamAgent(state, state.agents[id], id, tails, {
-    name: displayName(id, state), role: laneRole(id, state), gate: isGate(state, id) ? gateView(state, id, null) : null, asRole: true,
-    tailId: id === 'michael' ? id : milestone ? `${id}-${milestone}` : current || state.activeMilestoneIds?.length ? null : id,
+  return activeRoles(state).filter((id) => own(state.agents, id)).map((id) => ({
+    x: state.agents[id], id, opts: {
+      name: displayName(id, state), role: laneRole(id, state), gate: isGate(state, id) ? gateView(state, id, null) : null, asRole: true,
+      tailId: id === 'michael' ? id : milestone ? `${id}-${milestone}` : current || state.activeMilestoneIds?.length ? null : id,
+    },
   }));
+}
+
+// One entry per instance in reading order; a serial run has no instances, its roles speak instead.
+export function teamAgents(state, tails = null) {
+  return agentSources(state).map(({ x, id, opts }) => teamAgent(state, x, id, tails, opts));
+}
+
+// The instances whose model output can be streamed now: [{ id, agent }] of every active agent, under the id its live
+// tail goes by (an instance id; a serial role only when that id is known).
+export function liveTargets(state) {
+  return agentSources(state)
+    .map(({ x, id, opts }) => ({ x, id: opts.tailId === undefined ? id : opts.tailId, agent: x.agent ?? id }))
+    .filter(({ x, id }) => id && ACTIVE.has(x.status))
+    .map(({ id, agent }) => ({ id, agent }));
 }
 
 // ------------------------------------------------------------ board: Team

@@ -1,3 +1,4 @@
+import { createOwnedDirectory } from './sandbox-native/index.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -8,7 +9,7 @@ import { prepareRestorePoint } from './restore-points.js';
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 
 const locks = new Map();
-const skipped = new Set(['.git', 'node_modules', '.scratch', '.pi', '.ssh', '.aws', '.azure', '.config', 'target', 'dist', 'build', 'out', '.next', 'coverage', '.enma', '.npmrc', '.netrc', '.git-credentials']);
+const skipped = new Set(['.scranton-sandbox-owned', '.git', 'node_modules', '.scratch', '.pi', '.ssh', '.aws', '.azure', '.config', 'target', 'dist', 'build', 'out', '.next', 'coverage', '.enma', '.npmrc', '.netrc', '.git-credentials']);
 const credential = (name) => /^\.env(?:\.|$)/i.test(name) && name !== '.env.example' || /^(?:credentials(?:\.json)?|auth\.json|id_(?:rsa|ed25519)|.*\.(?:pem|key|p12|pfx))$/i.test(name);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel === '' || !rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel); };
 const same = (a, b) => !a && !b || Boolean(a && b && a.mode === b.mode && a.data.equals(b.data));
@@ -414,7 +415,13 @@ export class WorktreeManager {
     const name = `w${randomUUID().replaceAll('-', '')}`;
     const ref = `refs/heads/${name}`;
     const dir = path.join(this.storage, name);
-    await this.git(['worktree', 'add', '--quiet', '--no-checkout', '-b', ref.slice(11), dir, base]);
+    createOwnedDirectory(dir);
+    // Git accepts an empty existing directory; retain the issued marker across registration.
+    const marker = path.join(dir, '.scranton-sandbox-owned');
+    const ownership = fs.readFileSync(marker);
+    fs.unlinkSync(marker);
+    try { await this.git(['worktree', 'add', '--quiet', '--no-checkout', '-b', ref.slice(11), dir, base]); }
+    finally { fs.writeFileSync(marker, ownership, { flag: 'wx', mode: 0o600 }); }
     const metadata = fs.readFileSync(path.join(dir, '.git'), 'utf8').trim().slice('gitdir: '.length);
     if (!inside(path.join(this.repo, '.git', 'worktrees'), path.resolve(metadata))) throw new Error('Unexpected private worktree metadata');
     await this.git(['read-tree', base], undefined, {}, { gitDir: metadata });

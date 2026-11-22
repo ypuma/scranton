@@ -26,7 +26,7 @@ const short = (id) => (id && id.length > 8 ? id.slice(0, 8) : id);
 // The run-wide execution line: what the engine reported in run_started, never what the form asked for.
 export function executionBadges(execution, { simulated = false } = {}) {
   const out = [];
-  if (simulated || execution?.simulated) out.push(['simulated', 'Demo run with the scripted fake pi; no model and no sandbox boundary', 'quiet']);
+  if (simulated || execution?.simulated) out.push(['simulated', 'Demo run with a scripted model; no model and no sandbox boundary', 'quiet']);
   if (!execution) return out;
   if (execution.maxParallel) out.push([`max ${execution.maxParallel} parallel`, 'Milestone pipelines that may run at the same time', '']);
   if (execution.isolation) out.push([execution.isolation === 'worktree' ? 'worktrees' : execution.isolation, 'Isolation of each instance', '']);
@@ -47,7 +47,7 @@ export function laneBadges(inst, { simulated = false } = {}) {
   else if (wt?.mode === 'shared') out.push(['shared', 'Works directly in the shared workspace', 'quiet']);
   const sb = inst.sandbox;
   if (simulated) {
-    out.push(['simulated', 'Demo instance: scripted fake pi, no sandbox boundary', 'quiet']);
+    out.push(['simulated', 'Demo instance: scripted model, no sandbox boundary', 'quiet']);
   } else if (sb?.mode === 'host') {
     out.push(['host', 'Trusted host: no sandbox boundary', 'loud']);
   } else if (sb?.mode) {

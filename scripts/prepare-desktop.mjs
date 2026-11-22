@@ -6,31 +6,12 @@ import { spawn, spawnSync } from 'node:child_process';
 import { desktopPlatform, assertNativeBuild, launchManifest, validateNodeDistribution } from './desktop-platform.mjs';
 import { bootstrap, runtimeFiles, validateRuntimeLock, runtimeCacheKey, runtimeFingerprint, runtimeCacheValid, lockedWheels } from './desktop-runtime.mjs';
 import { extractionScript } from './desktop-extract.mjs';
+import { stageTools } from './desktop-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tauri = path.join(root, 'src-tauri');
 const app = path.join(tauri, 'staged', 'app');
-const piPath = path.join('node_modules', '@earendil-works', 'pi-coding-agent');
 const json = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
-
-export async function fingerprint(directory) {
-  const hash = createHash('sha256');
-  let bytes = 0, files = 0;
-  async function visit(dir, prefix = '') {
-    for (const entry of (await fs.readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      const relative = prefix + entry.name;
-      if (entry.isSymbolicLink()) throw new Error(`Package link not allowed: ${relative}`);
-      if (entry.isDirectory()) await visit(path.join(dir, entry.name), `${relative}/`);
-      else if (entry.isFile()) {
-        const content = await fs.readFile(path.join(dir, entry.name));
-        hash.update(relative).update('\0').update(String(content.length)).update('\0').update(content);
-        bytes += content.length; files++;
-      } else throw new Error(`Unsupported package entry: ${relative}`);
-    }
-  }
-  await visit(directory);
-  return { sha256: hash.digest('hex'), bytes, files };
-}
 
 function run(exe, args, options) {
   return new Promise((resolve, reject) => {
@@ -197,15 +178,9 @@ export async function prepareDesktop() {
   try {
   const host = assertNativeBuild(desktopPlatform());
   if (process.env.SCRANTON_DESKTOP_STUB) throw new Error('Desktop stub builds are not distributable; unset SCRANTON_DESKTOP_STUB.');
-  const installed = await json(path.join(root, piPath, 'package.json'));
-  const lock = await json(path.join(root, 'package-lock.json'));
-  const entrypoint = typeof installed.bin === 'string' ? installed.bin : installed.bin?.pi;
-  if (installed.name !== '@earendil-works/pi-coding-agent' || installed.version !== '1.5.2' ||
-      lock.packages[piPath.replaceAll('\\', '/')]?.version !== installed.version || !entrypoint ||
-      path.isAbsolute(entrypoint) || entrypoint.split(/[\\/]/).includes('..')) throw new Error('Installed Pi identity/entrypoint does not match the supported lockfile.');
-  await fs.access(path.join(root, piPath, entrypoint));
   const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
-    'tools/fake-pi.js', 'tools/fake-pi-rpc.js', 'tools/pi-agent-chat.js', 'tools/pi-codex-compaction.js', 'tools/pipeline-pi-complete.js', 'tools/dreaming-pi-complete.js', 'scranton.config.json', 'package.json', 'package-lock.json'];
+    'tools/pipeline-complete.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
+    'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
   for (const input of inputs) {
     try { await fs.access(path.join(root, input)); }
     catch { throw new Error(`Required desktop input is missing: ${input}`); }
@@ -238,23 +213,32 @@ export async function prepareDesktop() {
   if (host.platform === 'win32') await run('cmd.exe', ['/d', '/s', '/c', 'npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund'], { cwd: app, stdio: 'inherit' });
   else await run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: app, stdio: 'inherit' });
   await fs.rm(path.join(tauri, 'staged', 'production-deps.sha256'), { force: true });
-  const actual = await fingerprint(path.join(root, piPath));
-  const bundled = await fingerprint(path.join(app, piPath));
-  if (actual.sha256 !== bundled.sha256) throw new Error('Bundled Pi differs from the actual installed Pi package; reinstall from the lockfile before building.');
+  const cargo = host.platform === 'win32' ? path.join(process.env.USERPROFILE, '.cargo/bin/cargo.exe') : 'cargo';
+  const rustc = host.platform === 'win32' ? path.join(process.env.USERPROFILE, '.cargo/bin/rustc.exe') : 'rustc';
+  const rustHost = spawnSync(rustc, ['-vV'], { encoding: 'utf8', windowsHide: true });
+  if (rustHost.status !== 0 || !rustHost.stdout.includes(`host: ${host.target}`)) throw new Error('Native Rust host must match desktop target');
+  const cargoTarget = path.join(root, '.scratch/packaging/sandbox-helper-target');
+  await run(cargo, ['build', '--release', '--locked', '--manifest-path', path.join(root, 'native/sandbox-helper/Cargo.toml'), '--target-dir', cargoTarget],
+    { cwd: root, stdio: 'inherit', env: { ...process.env, CARGO_BUILD_TARGET: host.target } });
+  const helperFile = `scranton-sandbox-helper-${host.target}${host.platform === 'win32' ? '.exe' : ''}`;
+  const helperBytes = await fs.readFile(path.join(cargoTarget, host.target, 'release', `scranton-sandbox-helper${host.platform === 'win32' ? '.exe' : ''}`));
+  await fs.writeFile(path.join(tauri, 'binaries', helperFile), helperBytes, { mode: 0o755 });
+  const sandboxHelper = { file: helperFile, sha256: sha256(helperBytes) };
+  const tools = await stageTools(root, app, host);
   const profile = path.join(root, '.scratch', 'packaging', 'empty-profile');
   await fs.mkdir(profile, { recursive: true });
-  await run(node, [path.join(app, piPath, entrypoint), '--help'], {
-    cwd: profile, stdio: ['ignore', 'ignore', 'inherit'],
-    env: { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, PI_CODING_AGENT_DIR: profile }
+  await run(node, [path.join(app, 'scripts/runtime-smoke.mjs')], {
+    cwd: profile, stdio: ['ignore', 'inherit', 'inherit'],
+    env: { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: profile }
   });
   const pipeline = await preparePipeline(host);
   await fs.writeFile(path.join(app, 'packaging-manifest.json'), JSON.stringify({
     platform: host.platform, arch: host.arch, target: host.target, pipeline,
-    node: process.version, nodeDistribution, pi: { name: installed.name, version: installed.version, entrypoint, ...bundled },
+    node: process.version, nodeDistribution, runtime: { engine: 'scranton', smoke: 'scripts/runtime-smoke.mjs' }, sandboxHelper, tools,
     lockSha256: createHash('sha256').update(await fs.readFile(path.join(app, 'package-lock.json'))).digest('hex'),
-    verification: 'Pi --help with bundled Node, empty PATH and isolated empty profile; no model request'
+    verification: 'Own runtime scripted completion smoke with bundled Node, empty PATH and isolated profile; no network or credentials'
   }, null, 2) + '\n');
-  console.log(`Desktop inputs prepared: ${app}\nPi ${installed.version}: ${entrypoint} (${bundled.files} files, ${bundled.bytes} bytes)\nBundled runtime: ${process.version}; empty-PATH Pi --help passed.`);
+  console.log(`Desktop inputs prepared: ${app}\nScranton runtime, completion helpers, sandbox helper and pinned rg/fd staged; offline smoke passed.`);
   } catch (error) {
     await fs.rm(path.join(app, 'engine-runtime', 'launch.json'), { force: true });
     await fs.rm(path.join(tauri, 'staged', 'pipeline-cache.json'), { force: true });

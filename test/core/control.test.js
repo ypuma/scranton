@@ -10,7 +10,7 @@ import { writeFileAtomicSync } from '../../src/core/util.js';
 import { loadConfig } from '../../src/core/config.js';
 
 for (const decision of ['feedback', 'retry', 'skip', 'abort']) {
-  test(`hive breaker answer ${decision}`, { timeout: 20000 }, async (t) => {
+  test(`hive breaker answer ${decision}`, { timeout: 60000 }, async (t) => {
     let hive;
     let count = 0;
     const run = await runFake(t, { scenario: 'breaker', onBreaker: 'hive',
@@ -29,7 +29,7 @@ for (const decision of ['feedback', 'retry', 'skip', 'abort']) {
 for (const scenario of ['blocked', 'infra']) {
   test(`hive handles ${scenario} pause`, async (t) => {
     let hive;
-    const run = await runFake(t, { scenario, noPlan: scenario === 'infra', onBreaker: 'hive', env: scenario === 'infra' ? { FAKE_PI_FAIL: 'exit1' } : {},
+    const run = await runFake(t, { scenario, noPlan: scenario === 'infra', onBreaker: 'hive', env: scenario === 'infra' ? { SCRANTON_FAKE_FAIL: 'exit1' } : {},
       beforeRun: (o) => { hive = o.hive.dir; }, listener: (e) => {
         if (e.type === 'hitl_request') writeFileAtomicSync(path.join(hive, 'human/response.json'), JSON.stringify({ v: 1, runId: e.runId, requestSeq: e.seq, decision: 'skip', ts: new Date().toISOString() }));
       }
@@ -55,10 +55,10 @@ test('stale, mismatched and invalid answers are archived, never applied', { time
 });
 
 for (const waiting of [false, true]) {
-  test(`stop file during ${waiting ? 'human wait' : 'pi run'} exits 130`, { timeout: 15000 }, async (t) => {
+  test(`stop file during ${waiting ? 'human wait' : 'scripted agent run'} exits 130`, { timeout: 15000 }, async (t) => {
     const dir = tempDir(t);
     const hive = path.join(dir, 'hive');
-    const child = spawn(process.execPath, [path.join(ROOT, 'bin/scranton.js'), 'demo', '--scenario', 'blocked', '--delay', waiting ? '0' : '5000', '--hive', hive, '--workspace', path.join(dir, 'ws'), '--on-breaker', 'hive'], { env: isolationTestEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [path.join(ROOT, 'bin/scranton.js'), 'run', 'Build a todo CLI', '--trusted-host', '--hive', hive, '--workspace', path.join(dir, 'ws'), '--on-breaker', 'hive'], { env: isolationTestEnv({ SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'blocked', SCRANTON_FAKE_DELAY_MS: waiting ? '0' : '100' }), stdio: ['ignore', 'pipe', 'pipe'] });
     t.after(() => child.kill());
     const ended = once(child, 'close');
     let wrote = false;

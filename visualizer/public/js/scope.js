@@ -29,8 +29,10 @@ export const ALIVE_STATUSES = new Set(['running', 'needs_human']);
 // The unscoped routes of a server without /api/projects (and of the single hive it serves).
 const LEGACY = {
   events: '/events', state: '/api/state', runs: '/api/runs', chat: '/api/chat', hitl: '/api/hitl', stop: '/api/runs/stop',
-  release: '/api/runs/release', control: '/api/control', live: '/api/live',
+  release: '/api/runs/release', control: '/api/control', live: '/api/live', approvals: '/api/approvals',
 };
+// the one run route a single hive has unscoped as well: an agent's live stream (.enma/run-options-contract.md)
+const STREAM_SUFFIX = /^runs\/[^/]+\/agents\/[^/]+\/stream$/;
 
 const str = (v) => (typeof v === 'string' ? stripBidi(v) : '');
 const raw = (v) => (typeof v === 'string' ? v : '');
@@ -67,10 +69,13 @@ export function sameScope(a, b) {
 // Where a chat-specific request goes. scope null = a server without projects: the unscoped routes of today.
 // A project without a chat has no chat routes at all -> null.
 export function scopedUrl(scope, suffix) {
-  if (!scope) return LEGACY[suffix] ?? null;
+  if (!scope) return LEGACY[suffix] ?? (STREAM_SUFFIX.test(suffix) ? `/api/${suffix}` : null);
   if (!scope.project || !scope.chat) return null;
   return `/api/projects/${enc(scope.project)}/chats/${enc(scope.chat)}/${suffix}`;
 }
+
+// suffix of an agent instance's live stream, for url() / scopedUrl
+export const streamSuffix = (runId, instanceId) => `runs/${enc(runId)}/agents/${enc(instanceId)}/stream`;
 
 export function runEventsUrl(scope, runId) {
   const base = scope ? scopedUrl(scope, 'runs') : null;
@@ -110,7 +115,7 @@ function parseChat(c) {
     status: CHAT_STATUSES.includes(c.status) ? c.status : 'idle',
     updatedAt: str(c.updatedAt) || null,
     runs: count(c.runs),
-    // absent = the pi team; the server already maps a pipeline chat's status (pipeline-contract section 9)
+    // absent = the agent team; the server already maps a pipeline chat's status (pipeline-contract section 9)
     ...(c.engine === 'pipeline' ? { engine: 'pipeline' } : {}),
   };
 }

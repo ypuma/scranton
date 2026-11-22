@@ -97,11 +97,12 @@ test('registry custom run and follow-up resolve shared settings and request > en
     child.emit('message', { type: 'scranton-startup-refused', token: launch.options.env.SCRANTON_RUN_LEASE }); child.emit('close', 2);
   }
   await call('/api/agents/seclint', 'PATCH', { model: null });
-  assert.equal((await call(route, 'POST', { request: 'Missing Docker model', sandbox: 'docker', noPlan: true, workflow: { gates: [['seclint']] } })).status, 400);
+  assert.equal((await call(route, 'POST', { request: 'Automatic Docker model', sandbox: 'docker', noPlan: true, workflow: { gates: [['seclint']] } })).status, 202);
+  child.emit('message', { type: 'scranton-startup-refused', token: launch.options.env.SCRANTON_RUN_LEASE }); child.emit('close', 2);
 });
 
 import { Orchestrator } from '../../src/core/orchestrator.js';
-import { startPi } from '../../src/core/pi-runner.js';
+import { startAgent } from '../../src/core/agent/index.js';
 
 test('review: broken configured workflows leave CRUD/control usable and refuse starts with the id', async (t) => {
   for (const registry of [false, true]) {
@@ -146,11 +147,11 @@ test('review: mid-run HTTP DELETE leaves running custom gate snapshot intact', a
   const started = new Promise((resolve) => { entered = resolve; });
   const { call } = await fixture(t, false, { acquire: () => ({ token: 'fake-lease' }), runner: (_exe, args, options) => {
     const hive = args[args.indexOf('--hive') + 1], workspace = args[args.indexOf('--workspace') + 1];
-    const config = loadConfig({ cwd: PACKAGE_ROOT, env: { SCRANTON_SETTINGS_DIR: options.env.SCRANTON_SETTINGS_DIR }, flags: { trustedHost: true, hive, workspace, gates: 'seclint' }, fileConfig: { pi: { command: [process.execPath, path.resolve('tools/fake-pi.js')] } } });
-    current = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { FAKE_PI_DELAY_MS: '0' }, startRunner: (opts) => {
-      if (opts.agentId !== 'dwight') { gatePrompt = fs.readFileSync(opts.systemPromptFile, 'utf8').trim(); return startPi(opts); }
+    const config = loadConfig({ cwd: PACKAGE_ROOT, env: { SCRANTON_SETTINGS_DIR: options.env.SCRANTON_SETTINGS_DIR }, flags: { trustedHost: true, hive, workspace, gates: 'seclint' } });
+    current = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy', SCRANTON_FAKE_DELAY_MS: '0' }, startRunner: (opts) => {
+      if (opts.agentId !== 'dwight') { gatePrompt = fs.readFileSync(opts.systemPromptFile, 'utf8').trim(); return startAgent(opts); }
       entered();
-      return { done: held.then(() => startPi(opts).done), kill: async () => { release(); } };
+      return { done: held.then(() => startAgent(opts).done), kill: async () => { release(); } };
     } });
     const child = new EventEmitter(); child.pid = 123; child.stdin = { on() {}, write() {} };
     completion = new Promise((resolve, reject) => setImmediate(() => current.run('snapshot survives deletion').then((r) => { child.emit('close', 0); resolve(r); }, reject)));

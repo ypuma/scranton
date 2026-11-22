@@ -33,7 +33,7 @@ test('Google Antigravity is a Google sign-in row: label, OAuth only, no API key,
   assert.equal(v.detail, ANTIGRAVITY_NOTE);
   assert.match(ANTIGRAVITY_NOTE, /Google account/);
   assert.match(ANTIGRAVITY_NOTE, /no API key/);
-  assert.equal(ANTIGRAVITY_SCOPE, 'Usable in trusted-host, Pipeline and Docker runs. The sign-in stays on this computer and is refreshed here; a Docker run only gets temporary access for that run.');
+  assert.equal(ANTIGRAVITY_SCOPE, 'Usable in Team and Pipeline runs, whatever the sandbox. The sign-in stays on this computer and is refreshed here; the model calls are made from this computer.');
   assert.ok(ANTIGRAVITY_NOTE.includes(ANTIGRAVITY_SCOPE), 'the row says where the sign-in can be used');
   assert.doesNotMatch(ANTIGRAVITY_NOTE, /not the Docker|not supported|trusted host only/i, 'Docker runs are no longer refused');
   assert.doesNotMatch(ANTIGRAVITY_NOTE, /free|unlimited|quota|every model|all models/i, 'no promise about what the account includes');
@@ -45,7 +45,7 @@ test('Google Antigravity states read as a Google account sign-in; expired and er
   const on = accountView({ ...base, status: 'signed_in', kind: 'oauth', renewsOnUse: false });
   assert.deepEqual([on.status, on.kind, on.tone, on.signIn, on.signOut, on.addKey], ['Signed in', 'OAuth', 'on', false, true, false]);
   assert.equal(on.detail, `Google account sign-in, refreshed automatically. ${ANTIGRAVITY_SCOPE}`);
-  assert.match(on.detail, /Docker runs/);
+  assert.match(on.detail, /whatever the sandbox/);
   assert.doesNotMatch(on.detail, /API key|not the Docker/, 'a signed-in row stays a Google sign-in, also for Docker');
   assert.equal(on.addKey, false, 'Docker support adds no key path to this row');
   const renew = accountView({ ...base, status: 'signed_in', kind: 'oauth', renewsOnUse: true });
@@ -91,12 +91,11 @@ test('the Antigravity manual step asks for the whole redirect address; Claude an
   }
 });
 
-test('the Docker credential note tells the token providers apart from the host-held Antigravity sign-in', () => {
-  assert.match(DOCKER_NOTE, /^Claude and ChatGPT sign-ins are passed to containers as short-lived access tokens\./);
-  assert.match(DOCKER_NOTE, /Google Antigravity sign-in stays on this computer/);
-  assert.match(DOCKER_NOTE, /temporary permission to make model calls through it until that permission expires/, 'the agents can use it while it is valid');
-  assert.doesNotMatch(DOCKER_NOTE, /^Subscriptions are passed/, 'no blanket token claim');
-  assert.doesNotMatch(DOCKER_NOTE, /free|unlimited|quota|every model|isolat|never leaves|cannot be read/i);
+test('the Docker note says the model calls and every credential stay on this computer: only commands run in the container', () => {
+  assert.match(DOCKER_NOTE, /^In Docker only the agents' commands run in the container\./);
+  assert.match(DOCKER_NOTE, /Model calls, sign-ins and API keys stay on this computer/);
+  assert.doesNotMatch(DOCKER_NOTE, /access token|temporary permission|passed as they are|broker/i, 'no credential travels into a container any more');
+  assert.doesNotMatch(DOCKER_NOTE, /free|unlimited|quota|every model|isolat|cannot be read/i);
 });
 
 test('the Gemini API-key row stays separate: a key only, its own note, and it is not offered under Antigravity', () => {

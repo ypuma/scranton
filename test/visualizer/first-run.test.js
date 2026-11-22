@@ -32,7 +32,7 @@ test('no account and no key: the note sits beside Start, outside Options, and th
   const foldEnd = form.lastIndexOf('</details>');
   const at = form.indexOf('id="models-signin"');
   assert.ok(at > foldEnd && at < form.indexOf('id="f-trust-row"'), 'after the Options fold, before the acknowledgement');
-  assert.match(form, /<p class="models-signin team-only" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use unless pi finds a key in the environment\.<\/span> <button type="button" class="link-btn" id="models-accounts">Open Accounts<\/button><\/p>/);
+  assert.match(form, /<p class="models-signin team-only" id="models-signin" hidden><span>No account is signed in and no API key was found, so the agents have no model to use unless an API key is set in the environment\.<\/span> <button type="button" class="link-btn" id="models-accounts">Open Accounts<\/button><\/p>/);
 
   const h = harness({ catalog: { providers: [{ id: 'openai', label: 'ChatGPT', signedIn: false, models: [] }] } });
   t.after(() => h.panel.setMode('demo'));
@@ -66,15 +66,16 @@ test('the sign-in note follows the model list: hidden with a signed-in account a
   assert.equal(none.$('models-signin').hidden, true, 'outside the model fields it is hidden with them');
 });
 
-test('a missing acknowledgement opens Options, where the Docker sandbox it names is, and the box gets the focus', async (t) => {
+test('a missing acknowledgement opens Options, where the sandboxes it names are, and the box gets the focus', async (t) => {
   const h = harness();
   t.after(() => h.panel.setMode('demo'));
   await h.open();
+  await h.sandbox('host');
   h.$('f-trusted').checked = false;
   document.activeElement = h.$('run-submit');
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 0);
-  assert.match(h.$('run-error').textContent, /or pick the Docker sandbox\.$/);
+  assert.match(h.$('run-error').textContent, /or pick a sandbox\.$/);
   assert.equal(h.$('f-trusted').getAttribute('aria-invalid'), 'true');
   assert.equal(document.activeElement, h.$('f-trusted'));
   assert.equal(h.$('run-options').open, true);
@@ -280,7 +281,7 @@ test('the empty states of a fresh installation lead to Accounts while nobody is 
   state.missing = false;
   thread.render();
   assert.equal($('thread-empty-accounts').hidden, true, 'a signed-in installation is not told');
-  assert.match(read('index.html'), /<span class="thread-empty-accounts" id="thread-empty-accounts" hidden>No account is signed in and no API key was found, so the agents have no model to use unless pi finds a key in the environment\. <button type="button" class="link-btn" id="thread-empty-accounts-open">Open Accounts<\/button><\/span>/);
+  assert.match(read('index.html'), /<span class="thread-empty-accounts" id="thread-empty-accounts" hidden>No account is signed in and no API key was found, so the agents have no model to use unless an API key is set in the environment\. <button type="button" class="link-btn" id="thread-empty-accounts-open">Open Accounts<\/button><\/span>/);
 });
 
 test('the empty states ask for an account only when the Accounts panel can open and its list is known to be empty', () => {
@@ -353,7 +354,7 @@ test('the New run note and the empty state share one condition, the model list i
   await h.tick();
   assert.equal(h.$('models-signin').hidden, true);
   assert.equal(accountsMissing(panel(true, []), h.models.catalog()), false, 'the empty state reads the list the New run drawer has');
-  const hedge = 'unless pi finds a key in the environment.';
+  const hedge = 'unless an API key is set in the environment.';
   const html = read('index.html');
   for (const id of ['thread-empty-accounts', 'models-signin']) {
     const at = html.indexOf(`id="${id}"`);

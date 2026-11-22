@@ -1,7 +1,7 @@
 {
   "name": "project-scranton",
   "version": "0.5.0",
-  "description": "Multi-agent harness around the pi coding agent: Michael plans, Dwight codes, Angela tests - talking through Markdown mailboxes in the Hive.",
+  "description": "Multi-agent harness with Scranton's own durable agent runtime, deterministic tools and isolated execution.",
   "type": "module",
   "license": "MIT",
   "private": true,
@@ -24,7 +24,7 @@
     "test:packaging": "node --test \"test/packaging/*.test.js\""
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.5.2"
+    "@dbos-inc/dbos-sdk": "5.6.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4"

@@ -26,12 +26,12 @@ async function fixture(t, { real = false, pipeline = false, runner, modelWindows
   const base = path.resolve('.scratch/context-budget/lane-s'); fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'http-')), workspace = path.join(dir, 'source'), dataDir = path.join(dir, 'data'); fs.mkdirSync(workspace);
   environment(t, Object.fromEntries(['MICHAEL', 'DWIGHT', 'ANGELA'].flatMap((role) => [[`SCRANTON_${role}_PROVIDER`, 'budget-fixture'], [`SCRANTON_${role}_MODEL`, 'base']])));
-  environment(t, { FAKE_PIPELINE_INVOCATIONS: path.join(dir, 'pipeline-invocations.jsonl'), SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(dir, 'workspaces'), SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pi.js')]), FAKE_PI_SCENARIO: 'question', SCRANTON_CONVERSATION: '1' });
+  environment(t, { FAKE_PIPELINE_INVOCATIONS: path.join(dir, 'pipeline-invocations.jsonl'), SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(dir, 'workspaces'), SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'question', SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), PI_CODING_AGENT_DIR: path.join(dir, 'legacy'), SCRANTON_CONVERSATION: '1' });
   const registry = createProjectRegistry({ dataDir }), project = registry.addProject({ name: 'Budget', workspace }), chat = registry.createChat(project.id, pipeline ? { engine: 'pipeline' } : {});
   const models = [{ id: 'base', contextWindow: 32000 }, { id: 'pick', contextWindow: 200000 }, { id: 'dev', contextWindow: 64000 }];
   let catalogs = 0, invocation, child;
   const windows = modelWindows ?? Object.assign(createModelWindows({ providers: () => [{ id: 'budget-fixture', models }], runtime: { getModel() {} } }), { warm() {} });
-  const auth = { close() {}, listAccounts: () => [{ id: 'budget-fixture', kind: 'oauth', status: 'signed_in' }], listModels: () => { catalogs++; return { providers: [{ id: 'budget-fixture', signedIn: true, models }] }; } };
+  const auth = { store: { read: () => ({ providers: { 'budget-fixture': { id: 'budget-fixture', api: 'anthropic-messages', models } } }) }, close() {}, listAccounts: () => [{ id: 'budget-fixture', kind: 'oauth', status: 'signed_in' }], listModels: () => { catalogs++; return { providers: [{ id: 'budget-fixture', signedIn: true, models }] }; } };
   const server = await startVisualizerServer({ dataDir, publicDir: dir, port: 0, control: { auth, modelWindows: windows, runner(exe, args, opts) { invocation = { exe, args, opts }; child = runner ? runner(exe, args, opts) : real ? spawn(exe, args, opts) : Object.assign(new EventEmitter(), { pid: 123 }); return child; } } });
   t.after(async () => { if (!real && child) { if (readRunLease(chat.hiveDir)) releaseRunLease(chat.hiveDir, readRunLease(chat.hiveDir).token); child.emit('close', 0); } await server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const req = async (route, body) => { const r = await fetch(server.url + route, { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body) }); return { status: r.status, value: await r.json() }; };
@@ -87,10 +87,10 @@ test('budget request: 32768 quoted UTF-8 characters reach the real orchestrator 
 });
 
 // Revert launchConfig model resolution, recipients closure, or v:3 in control.start to fail.
-for (const docker of [false, true]) test(`budget Team: v3 pack uses ${docker ? 'Docker defaults, ignoring picks' : 'per-run planner and developer picks'}`, async (t) => {
+for (const docker of [false, true]) test(`budget Team: v3 pack uses ${docker ? 'Docker per-run picks' : 'per-run planner and developer picks'}`, async (t) => {
   const f = await fixture(t), core = createContext({ dataDir: f.dataDir, registry: f.registry });
   core.setNotes(f.project.id, 'Standing notes\n'.repeat(1000));
-  const recipients = docker ? { planner: recipient('base', 32000), developer: recipient('base', 32000) } : { planner: recipient('pick', 200000), developer: recipient('dev', 64000) };
+  const recipients = { planner: recipient('pick', 200000), developer: recipient('dev', 64000) };
   const expected = core.forTeam(f.project.id, f.chat.id, { recipients });
   const defaults = (await f.req(f.route + '/context')).value;
   assert.equal(defaults.budget.tokens, 3200); assert.deepEqual(defaults.model, recipient('base', 32000)); assert.equal(defaults.developer.budget.tokens, 320);
@@ -98,7 +98,7 @@ for (const docker of [false, true]) test(`budget Team: v3 pack uses ${docker ? '
   assert.equal((await f.req(f.route + '/runs', body)).status, 202);
   const file = f.invocation.args[f.invocation.args.indexOf('--thread-context') + 1];
   assert.deepEqual(JSON.parse(fs.readFileSync(file)), { v: 3, text: expected.text, developer: expected.developer });
-  assert.equal(f.catalogs, docker ? 0 : 1);
+  assert.equal(f.catalogs, 1);
   if (!docker) assert.ok(expected.text.length > core.forTeam(f.project.id, f.chat.id, { recipients: { planner: recipient('base', 32000) } }).text.length);
 });
 

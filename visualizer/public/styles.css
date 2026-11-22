@@ -564,6 +564,19 @@ body[data-scope="none"] .conn { display: none; }
 .recovery-detail { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
 .recovery-error { margin: 0; padding-left: var(--s3); border-left: 2px solid var(--bad); font: var(--fs-s)/1.5 var(--mono); color: var(--text); overflow-wrap: anywhere; }
 .recovery-times { margin: 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
+/* tool calls waiting for a human: the answer panel's card, neutral, with the one inverted mark of a critical state */
+.approvals { flex: none; margin: var(--s3) var(--gutter) 0; min-width: 0; }
+.approval-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); min-width: 0; }
+.approval-card { display: grid; gap: var(--s2); padding: var(--s4); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); min-width: 0; }
+.approval-badge { flex: none; padding: 0 var(--s2); border-radius: var(--radius-s); background: var(--text); color: var(--bg); font-size: var(--fs-xs); font-weight: 600; line-height: 1.5rem; white-space: nowrap; }
+.approval-card > .hitl-head { flex-wrap: wrap; row-gap: var(--s1); }
+.approval-who { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.approval-title { margin: 0; color: var(--text); }
+.approval-label { font-size: var(--fs-s); color: var(--text-3); }
+.approval-args { margin: 0; max-height: 9em; overflow: auto; padding: var(--s2) var(--s3); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-s); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
+.approval-card[data-late="true"] .approval-left { color: var(--text); font-weight: 600; }
+.approval-card .hitl-actions[hidden] + .approval-status { color: var(--text); }
+
 /* what a release could not check (Docker unreachable); shown once, after the panel is gone */
 .release-note { flex: none; margin: var(--s3) var(--gutter) 0; font-size: var(--fs-s); color: var(--text-2); overflow-wrap: anywhere; }
 
@@ -1498,10 +1511,12 @@ dialog[open]::backdrop { opacity: 1; }
 .exec { margin: 0; padding: var(--s4) 0 0; border: 0; border-top: 1px solid var(--line); display: grid; gap: var(--s4); min-width: 0; }
 .exec legend { float: left; width: 100%; padding: 0; font-size: var(--fs); font-weight: 600; color: var(--text); }
 .trust { padding: var(--s2) var(--s3); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); }
-.exec[data-demo="true"] #f-sandbox, .exec[data-demo="true"] #docker-fields { opacity: 0.45; }
+.exec[data-demo="true"] #f-sandbox, .exec[data-demo="true"] #f-approve, .exec[data-demo="true"] #docker-fields { opacity: 0.45; }
+#docker-fields[data-disabled="true"], .approve-wait[data-disabled="true"] { opacity: 0.45; }
+.approve-wait { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s2); min-width: 0; }
+.approve-wait > label { font-size: var(--fs-s); color: var(--text-2); }
 .model-grid { display: grid; gap: var(--s3); min-width: 0; }
 .models[data-demo="true"] .model-grid { opacity: 0.45; }
-.models-need { margin: 0; font-size: var(--fs-s); color: var(--text); }
 /* outside the Options fold, beside Start: the one thing a first run cannot do without */
 .models-signin { margin: 0; padding: var(--s2) var(--s3); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); font-size: var(--fs-s); color: var(--text); }
 
@@ -1841,7 +1856,7 @@ dialog[open]::backdrop { opacity: 1; }
 /* ------------------------------------------------------------ pipeline chats */
 /* a chat's engine is fixed: a pipeline chat shows the pipeline view instead of the team layout; its composer
    (thread.js) is there only while the conversation is on screen */
-body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #exit-panel, #recovery, #release-note, #empty, #dash) { display: none !important; }
+body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-panel, #recovery, #release-note, #empty, #dash) { display: none !important; }
 #run-form[data-engine="pipeline"] .team-only { display: none; }
 /* the reason the engine is unavailable stays readable */
 #f-engine-pipeline-row[data-disabled="true"] { opacity: 1; color: var(--text-3); }
@@ -2577,7 +2592,7 @@ body[data-scope="none"] #chat-view { display: none; }
 .steer-actions .hint { margin-left: auto; font-size: var(--fs-xs); transition: opacity var(--dur) var(--ease-out); }
 .steer:not(:focus-within) #chat-view-count { opacity: 0; }
 /* in Chat mode everything docked under the transcript keeps to its column */
-body[data-view="chat"] :is(.followup, .steer, .hitl) { max-width: var(--read); }
+body[data-view="chat"] :is(.followup, .steer, .hitl, .approvals) { max-width: var(--read); }
 /* with the run rail put away (closed, or in its drawer) the conversation takes the room the rail left */
 body[data-view="chat"]:is([data-rail="closed"], [data-rail="overlay"], [data-side]) { --read: none; }
 body[data-view="chat"] .followup { margin-top: var(--s3); }

@@ -1,4 +1,4 @@
-// The pi team as a conversation: Contract v1 events (docs/EVENTS.md, conversation mode included) and the run list
+// The agent team as a conversation: Contract v1 events (docs/EVENTS.md, conversation mode included) and the run list
 // of a chat -> the engine-neutral entries of the Chat view (chat-entries.js). Pure: no DOM, no fetch.
 import { displayName, roleTitle, roleOf, gateLabel, writtenFile, countWritten } from './state.js';
 import { formatTokens, formatCost, formatDuration } from './format.js';

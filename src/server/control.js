@@ -1,6 +1,6 @@
 import { saveAgent, deleteAgent, validateAgentId } from '../core/agents-config.js';
 import { AGENT_IDS } from '../core/state.js';
-import { normalizeWorkflow, activeRoles } from '../core/workflow.js';
+import { normalizeWorkflow } from '../core/workflow.js';
 import { agentCatalog, resolvePrompt } from '../core/prompts.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,15 +9,14 @@ import { acquireRunLease, readRunLease, releaseRunLease, runOwnerStatus } from '
 import { orphanSnapshot, recoverOrphan } from '../core/run-recovery.js';
 import { spawn } from 'node:child_process';
 import { stripVTControlCharacters } from 'node:util';
-import { loadConfig, PACKAGE_ROOT, THINKING_LEVELS } from '../core/config.js';
-import { killTree } from '../core/pi-command.js';
+import { ConfigError, loadConfig, PACKAGE_ROOT, THINKING_LEVELS } from '../core/config.js';
+import { killTree } from '../core/process-tree.js';
 import { validDecision } from '../core/file-control.js';
 import { withFsRetry, writeFileAtomicSync } from '../core/util.js';
 
 import { createModelWindows } from '../core/model-windows.js';
 import { listRuns, formatThreadContext } from '../core/thread.js';
 import { getAuthService } from '../core/auth.js';
-import { validateDockerModels } from '../core/sandbox.js';
 import { isLoopbackAddress } from '../core/network.js';
 import { dreamingCap, teamDreamingCohort, teamDreamingContext } from '../core/dreaming-sources.js';
 
@@ -144,7 +143,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     if (!run.deadline || deadline < run.deadline) {
       clearTimeout(run.timer);
       run.deadline = deadline;
-      run.timer = setTimeout(() => { killTree(run.child); }, delay);
+      run.timer = setTimeout(() => { void killTree(run.child); }, delay);
     }
     return run.done;
   }
@@ -162,11 +161,10 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     if (body.noPlan !== undefined && typeof body.noPlan !== 'boolean') throw error(400, 'Invalid noPlan');
     if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw error(400, 'Invalid conversation');
     const baseConfig = configuration();
-    if (body.sandbox !== undefined && !['docker', 'host'].includes(body.sandbox)) throw error(400, 'Invalid sandbox');
+    if (body.sandbox !== undefined && !['scranton', 'docker', 'host'].includes(body.sandbox)) throw error(400, 'Invalid sandbox');
     if (body.trustedHost !== undefined && typeof body.trustedHost !== 'boolean') throw error(400, 'Invalid trustedHost');
     if (body.sandbox === 'host' && body.trustedHost !== true) throw error(400, 'Host execution requires trustedHost:true');
-    if (body.trustedHost === true && body.sandbox === 'docker') throw error(400, 'trustedHost conflicts with docker sandbox');
-    const docker = !demo && !body.trustedHost && (body.sandbox ?? baseConfig.execution.sandbox.mode) === 'docker';
+    if (body.trustedHost === true && body.sandbox && body.sandbox !== 'host') throw error(400, 'trustedHost conflicts with sandbox');
     const workflow = normalizeWorkflow(body.workflow === undefined ? baseConfig.workflow : body.workflow, baseConfig.roles.filter((r) => r.kind === 'gate').map((r) => r.id));
     const modelEnv = {};
     if (body.models !== undefined && (!object(body.models) || Object.keys(body.models).some((role) => !Object.hasOwn(baseConfig.agents, role)))) throw error(400, 'Invalid models');
@@ -175,8 +173,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
           typeof choice.provider !== 'string' || typeof choice.model !== 'string' ||
           (choice.thinking !== undefined && !THINKING_LEVELS.includes(choice.thinking))) throw error(400, 'Invalid model selection');
     }
-    // Docker always uses resolved agent defaults, never cached per-run selections.
-    if (body.models !== undefined && !docker) {
+    if (body.models !== undefined) {
       const catalog = await auth.listModels();
       for (const [role, choice] of Object.entries(body.models)) {
         if (!catalog.providers.some((p) => p.id === choice.provider && p.signedIn && p.models.some((m) => m.id === choice.model))) throw error(400, 'Invalid model selection');
@@ -204,21 +201,29 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
       if (!Number.isInteger(body.maxParallel) || body.maxParallel < 1 || body.maxParallel > 32) throw error(400, 'maxParallel must be an integer from 1 to 32');
       options.push('--parallel', String(body.maxParallel));
     }
-    if (body.sandbox === 'host' || body.trustedHost === true) options.push('--trusted-host');
-    else if (body.sandbox === 'docker') options.push('--sandbox', 'docker');
+    if (body.sandbox !== undefined) options.push('--sandbox', body.sandbox);
+    if (body.trustedHost === true) options.push('--trusted-host');
     if (body.sandboxImage !== undefined) {
+      if ((body.sandbox ?? (body.trustedHost ? 'host' : baseConfig.execution.sandbox.mode)) !== 'docker') throw error(400, 'sandboxImage requires docker sandbox');
       if (typeof body.sandboxImage !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(body.sandboxImage)) throw error(400, 'Invalid sandboxImage');
       options.push('--sandbox-image', body.sandboxImage);
     }
     if (body.sandboxNetwork !== undefined) {
-      if (!['bridge', 'none'].includes(body.sandboxNetwork)) throw error(400, 'Invalid sandboxNetwork');
-      options.push('--sandbox-network', body.sandboxNetwork);
+      if (!['allow', 'bridge', 'none'].includes(body.sandboxNetwork)) throw error(400, 'Invalid sandboxNetwork');
+      options.push('--sandbox-network', body.sandboxNetwork === 'bridge' ? 'allow' : body.sandboxNetwork);
+    }
+    if (body.approvals !== undefined) {
+      const approval = body.approvals;
+      if (!object(approval) || Object.keys(approval).some(key => !['tools', 'timeoutSeconds'].includes(key)) ||
+          !Array.isArray(approval.tools) || !approval.tools.every(tool => typeof tool === 'string' && ['read', 'write', 'edit', 'bash', 'powershell', 'grep', 'find', 'ls', 'agent_chat'].includes(tool)) ||
+          new Set(approval.tools).size !== approval.tools.length) throw error(400, 'Invalid approvals');
+      if (approval.timeoutSeconds !== undefined && (!Number.isInteger(approval.timeoutSeconds) || approval.timeoutSeconds < 1 || approval.timeoutSeconds > 86400)) throw error(400, 'approvals.timeoutSeconds must be an integer from 1 to 86400');
+      options.push('--approve', approval.tools.join(','));
+      if (approval.timeoutSeconds !== undefined) options.push('--approval-timeout', String(approval.timeoutSeconds));
     }
     let recipients;
     if (!demo) {
-      const launchConfig = loadConfig({ cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_DATA: '', SCRANTON_SETTINGS_DIR: baseConfig.settingsDir }, flags: { workspace: ws, hive, gates: workflow.gates.map((s) => s.join('+')).join(','), ...(body.trustedHost || body.sandbox === 'host' ? { trustedHost: true } : body.sandbox ? { sandbox: body.sandbox } : {}) } });
-      try { validateDockerModels(launchConfig, activeRoles(launchConfig, body.noPlan)); }
-      catch (err) { throw error(400, err.message); }
+      const launchConfig = loadConfig({ cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_DATA: '', SCRANTON_SETTINGS_DIR: baseConfig.settingsDir }, flags: { workspace: ws, hive, gates: workflow.gates.map((s) => s.join('+')).join(','), sandbox: body.sandbox, trustedHost: body.trustedHost, sandboxImage: body.sandboxImage, sandboxNetwork: body.sandboxNetwork === 'bridge' ? 'allow' : body.sandboxNetwork, approve: body.approvals?.tools.join(','), approvalTimeout: body.approvals?.timeoutSeconds } });
       if (prepareThread && threadContext) {
         const [planner, developer] = await Promise.all(['michael', 'dwight'].map((id) => modelWindows.resolve(launchConfig.agents[id].modelSetting.value)));
         recipients = { planner, developer };
@@ -266,7 +271,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
         writeFileAtomicSync(file, JSON.stringify(pack ? { v: 3, text: pack.text, developer: pack.developer } : { v: 1, text: teamDreamingContext(formatThreadContext(listRuns(hive), { maxChars: 8000 }), memory) }));
         args.splice(2, 0, '--thread-context', file);
       }
-      child = runner(process.execPath, args, { cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_PROMPTS_DIR: baseConfig.promptsDir, SCRANTON_SETTINGS_DIR: baseConfig.settingsDir, SCRANTON_DATA: '', SCRANTON_RUN_ID: info.runId, SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+      child = runner(process.execPath, args, { cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, ...(demo ? { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: demo.scenario, SCRANTON_FAKE_DELAY_MS: String(demo.delayMs ?? 600) } : {}), SCRANTON_PROMPTS_DIR: baseConfig.promptsDir, SCRANTON_SETTINGS_DIR: baseConfig.settingsDir, SCRANTON_DATA: '', SCRANTON_RUN_ID: info.runId, SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
     } catch (err) {
       // Cleanup must not replace the launch error.
       try { removeRequest(); } catch {}
@@ -430,7 +435,10 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
         if (!validDecision(body, pending.options)) throw error(400, 'Invalid decision or feedback');
         write('human/response.json', { runId: pending.runId, requestSeq: pending.requestSeq, decision: body.decision, ...(body.feedback !== undefined ? { feedback: body.feedback } : {}) });
         json(res, 202, { ok: true });
-      } catch (err) { json(res, err.status ?? 500, { error: err.status ? err.message : 'Control operation failed' }); }
+      } catch (err) {
+        const status = err.status ?? (pathname === '/api/runs' && err instanceof ConfigError ? 400 : 500);
+        json(res, status, { error: status === 500 && !err.status ? 'Control operation failed' : err.message });
+      }
     },
     async close() {
       closing = true;

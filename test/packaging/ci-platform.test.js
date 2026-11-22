@@ -26,7 +26,7 @@ function checkGates(source) {
     assert.ok(index > previous, `Missing or reordered gate: ${gate}`);
     previous = index;
   }
-  for (const gate of ['test/core/sandbox-posix.test.js', 'test/core/worktree-platform.test.js', 'test/core/pipeline-pi-process.test.js', 'test/server/desktop-csp.test.js', 'engine/tests/unit/test_fs_modes.py', 'engine/tests/unit/test_snapshot_modes.py', 'engine/tests/unit/test_sandbox_user.py']) assert.ok(source.includes(gate), `Missing portable gate: ${gate}`);
+  for (const gate of ['test/core/sandbox-posix.test.js', 'test/core/worktree-platform.test.js', 'test/core/pipeline-bridge.test.js', 'test/server/desktop-csp.test.js', 'engine/tests/unit/test_fs_modes.py', 'engine/tests/unit/test_snapshot_modes.py', 'engine/tests/unit/test_sandbox_user.py']) assert.ok(source.includes(gate), `Missing portable gate: ${gate}`);
   assert.match(source, /node --test --test-concurrency=1 "test\/packaging\/\*\.test\.js"/);
   assert.match(source, /assert\.equal\(process\.platform, process\.env\.EXPECTED_PLATFORM\)/);
   assert.match(source, /assert\.equal\(process\.arch, process\.env\.EXPECTED_ARCH\)/);

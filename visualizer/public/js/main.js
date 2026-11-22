@@ -12,8 +12,9 @@ import { createAgentsPanel } from './agents-panel.js';
 import { createDreamingPanel } from './dreaming-panel.js';
 import { createContextPanel } from './context-panel.js';
 import { createUndo } from './undo-panel.js';
+import { createApprovals } from './approval-panel.js';
 import { CLIENT_HEADERS } from './control.js';
-import { createScope, parseHash, hashFor, pickScope, scopeGone, findProject, chatEngine } from './scope.js';
+import { createScope, parseHash, hashFor, pickScope, scopeGone, findProject, chatEngine, streamSuffix } from './scope.js';
 import { createPipelineForm } from './pipeline-form.js';
 import { trustKey } from './trust.js';
 import { createPipelineView } from './pipeline-view.js';
@@ -25,7 +26,7 @@ import { createViewMode, createDock } from './view-mode.js';
 import { createChatView } from './chat-view.js';
 import { teamChatAdapter, CHAT_EVENT_TYPES } from './chat-adapter-team.js';
 import { pipelineChatAdapter } from './chat-adapter-pipeline.js';
-import { teamRunView, pipelineRunView, boardSummary, liveTails } from './activity-model.js';
+import { teamRunView, pipelineRunView, boardSummary, liveTails, liveTargets } from './activity-model.js';
 import { createBoard } from './board.js';
 import { createFolds } from './folds.js';
 import { createSidePanel } from './side-panel.js';
@@ -35,6 +36,7 @@ import { createSettings } from './settings-panel.js';
 import { createUsage } from './usage-chart.js';
 import { createRunRail } from './run-rail.js';
 import { createLivePoll } from './live-poll.js';
+import { createAgentStreams, mergeLive } from './agent-stream.js';
 import { createThoughtLog, thoughtColumns } from './thoughts.js';
 import { createThinkingView } from './thinking-view.js';
 import { createChatLive } from './chat-live.js';
@@ -102,7 +104,6 @@ function urlFor(suffix) {
 const readOnlyView = () => Boolean(replay) || (projectsMode && (!scope.get()?.chat || engine === 'pipeline'));
 const models = createModelPicker({
   openAccounts: (opts) => accounts?.open(opts), canOpenAccounts: () => Boolean(accounts?.available()),
-  openAgents: () => agents?.open(), canOpenAgents: () => Boolean(agents?.available()),
 });
 const chat = createChatPanel({
   getState: current,
@@ -201,15 +202,22 @@ function view() {
 }
 
 // Live activity (.enma/live-activity-contract.md): what the agents do now, the board and the usage, as one run view
-// that the rail of the Chat view and the panels of the Dashboard and of Details all draw.
-const livePoll = createLivePoll({
-  url: () => urlFor('live'),
-  wanted: () => engine === 'team' && !replay && feedMode === 'live' && ['planning', 'running', 'paused'].includes(live.status) && !control?.snapshot().gone,
+// that the rail of the Chat view and the panels of the Dashboard and of Details all draw. The model text comes from
+// each working agent's stream; the /live poll stands in for every agent whose stream is not open.
+const liveWanted = () => engine === 'team' && !replay && feedMode === 'live' && ['planning', 'running', 'paused'].includes(live.status) && !control?.snapshot().gone;
+const streams = createAgentStreams({
+  url: (runId, instanceId) => urlFor(streamSuffix(runId, instanceId)),
   onChange: () => schedule(),
 });
+const livePoll = createLivePoll({
+  url: () => urlFor('live'),
+  wanted: () => liveWanted() && streams.fallback(),
+  onChange: () => schedule(),
+});
+const liveNow = () => mergeLive(livePoll, streams);
 function runView() {
   if (engine === 'pipeline') return pipelineRunView(pipelineView.activity());
-  return teamRunView({ state: view(), live: replay ? null : livePoll.get(), runs: thread?.runs() ?? [] });
+  return teamRunView({ state: view(), live: replay ? null : liveNow(), runs: thread?.runs() ?? [] });
 }
 // What the agents reasoned and wrote, saved with the run: asked for while the Thinking view is open.
 const thoughtLog = createThoughtLog({
@@ -228,7 +236,7 @@ function renderThinking(rv) {
   const tools = engine === 'team' ? [...(thread?.details() ?? []), ...liveEvents].filter((e) => e.type === 'agent_tool' && e.runId === rv.runId) : [];
   const columns = thoughtColumns({
     agents: rv.agents, thoughts: log.runId === rv.runId ? log.thoughts : [], tools, saved,
-    tails: engine === 'team' && !replay ? liveTails(livePoll.get(), rv.runId) : null,
+    tails: engine === 'team' && !replay ? liveTails(liveNow(), rv.runId) : null,
   });
   // without /live tails of its own, a pipeline agent's open block is the text of its run view entry
   if (engine !== 'team') for (const c of columns) c.open = rv.agents.find((a) => a.id === c.id)?.text ?? null;
@@ -248,6 +256,14 @@ $('usage-panel').append(usages.dash.el);
 $('pv-usage').append(usages.details.el);
 const boardDialog = $('board-dialog');
 $('board-dialog-close').addEventListener('click', () => boardDialog.close());
+// tool calls of the live run that wait for a human: one card each under the answer panel
+const approvals = createApprovals({
+  url: () => (engine === 'team' ? urlFor('approvals') : null),
+  wanted: () => !readOnlyView() && Boolean(control?.snapshot().gates.alive),
+  getState: () => live,
+  announce: (text) => { $('control-announcer').textContent = text; },
+  onChange: () => schedule(),
+});
 // a finished team run's restore point: "Undo these changes" under its outcome
 const undo = createUndo({
   getProjects: () => nav?.doc() ?? null,
@@ -265,7 +281,7 @@ const undo = createUndo({
 const rail = createRunRail({
   undo,
   viewMode: () => viewMode.get(),
-  liveOff: () => livePoll.off(),
+  liveOff: () => livePoll.off() && !streams.serving(),
   // a pipeline run's changes wait as a patch until they are approved, so only a team run names the folder
   folder: () => (engine === 'team' ? view().workspace || findProject(nav?.doc(), scope.get()?.project)?.workspace || null : null),
   openChanges: () => side.set('changes', { focus: true }),
@@ -298,7 +314,9 @@ function renderActivity(v = view()) {
   rail.render(rv);
   renderThinking(rv);
   side.render(rv, engine === 'pipeline' ? pipelineView.changes() : teamChanges(rv, summary), engine === 'pipeline' ? '' : undo.note(rv.runId));
+  streams.sync({ runId: rv.runId, targets: engine === 'team' && !replay ? liveTargets(view()) : [], on: liveWanted() });
   livePoll.sync();
+  approvals.sync();
 }
 
 // The line diff of a team run, for the Changes side panel: what the run integrated so far, read from its private
@@ -446,6 +464,8 @@ function bind(next) {
   chat.reset();
   chatView.reset();
   livePoll.reset();
+  streams.reset();
+  approvals.reset();
   rail.reset();
   chatLive.reset();
   thinking.reset();
@@ -524,6 +544,8 @@ nav = createNav({
       chat.reset();
       chatView.reset();
       livePoll.reset();
+      streams.reset();
+      approvals.reset();
       rail.reset();
       undo.setScope(scope.get());
       attach();

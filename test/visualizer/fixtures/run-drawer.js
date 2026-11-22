@@ -70,12 +70,12 @@ export function harness({ reject = null, stored, control = CONTROL, models: stor
     await tick();
     $('f-request').value = 'Build it';
   };
-  // the trusted host or Docker, as the human sets the radio buttons
-  const sandbox = async (host) => {
-    $('f-sandbox-host').checked = host;
-    $('f-sandbox-docker').checked = !host;
-    await $(host ? 'f-sandbox-host' : 'f-sandbox-docker').fire('change');
-    $('f-trusted').checked = host;
+  // a sandbox as the human picks it: 'scranton' | 'docker' | 'host'; true is the trusted host (acknowledged), false Docker
+  const sandbox = async (pick) => {
+    const mode = pick === true ? 'host' : pick === false ? 'docker' : pick;
+    for (const m of ['scranton', 'docker', 'host']) $(`f-sandbox-${m}`).checked = m === mode;
+    await $(`f-sandbox-${mode}`).fire('change');
+    $('f-trusted').checked = mode === 'host';
   };
   return { $, panel, models, posts, storage, server, tick, row, ids, toggle, stage, shown, select, pick, open, sandbox, opened };
 }

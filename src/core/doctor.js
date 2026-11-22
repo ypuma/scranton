@@ -1,17 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PACKAGE_ROOT, windowsBashAvailable } from './config.js';
-import { execPi, findLocalPi, resolvePiCommand } from './pi-command.js';
 import { styler } from './log.js';
-import { AGENT_IDS } from './state.js';
 import { activeRoles } from './workflow.js';
 import { isFile } from './util.js';
 import { createAuthService } from './auth.js';
-import { probePipeline } from './pipeline-command.js';
-import { quotePathArgument } from './run-summary.js';
-import { validateDockerModels } from './sandbox.js';
+import { available } from './sandbox-native/index.js';
+import { selectModel } from './agent/model.js';
+import { checkSandbox } from './sandbox.js';
 
-/** `a.b.c >= x.y.z` for ranges of the form ">=x.y.z" (the only form our package.json files use). */
 export function satisfiesMin(version, range) {
   const min = /^>=\s*(\d+)\.(\d+)\.(\d+)/.exec(String(range ?? ''));
   if (!min) return true;
@@ -21,115 +18,74 @@ export function satisfiesMin(version, range) {
   }
   return true;
 }
-
+function onPath(command, env, platform) {
+  const value = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? '';
+  return value.split(platform === 'win32' ? ';' : ':').filter(Boolean).some((dir) =>
+    (platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : ['']).some((suffix) => {
+      try { const file = path.join(dir.replace(/^"|"$/g, ''), command + suffix); return fs.statSync(file).isFile() && (platform === 'win32' || (fs.accessSync(file, fs.constants.X_OK), true)); } catch { return false; }
+    }));
+}
 function writable(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const probe = path.join(dir, `.scranton-write-test-${process.pid}`);
-  fs.writeFileSync(probe, 'ok');
-  fs.rmSync(probe, { force: true });
+  fs.writeFileSync(probe, 'ok'); fs.rmSync(probe, { force: true });
 }
-
-/** Environment check. Returns the process exit code (0 = no failures, 1 = at least one). */
-export async function runDoctor({ config, env = process.env, stdout = process.stdout, platform = process.platform, auth = createAuthService({ env }) }) {
+export async function runDoctor({ config, env = process.env, stdout = process.stdout, platform = process.platform,
+  auth, sandboxAvailable = available, dockerAvailable = checkSandbox }) {
+  const ownAuth = !auth; auth ??= createAuthService({ env });
   const c = styler(stdout, env);
-  let failures = 0;
-  let warnings = 0;
+  let failures = 0, warnings = 0;
   const report = (level, text) => {
-    if (level === 'fail') failures += 1;
-    if (level === 'warn') warnings += 1;
+    if (level === 'fail') failures++;
+    if (level === 'warn') warnings++;
     const tag = { ok: c.green('[ ok ]'), warn: c.yellow('[warn]'), fail: c.red('[FAIL]'), info: c.dim('[info]') }[level];
     stdout.write(`${tag} ${text}\n`);
   };
-
-  const ownPkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
-  const nodeOk = satisfiesMin(process.versions.node, ownPkg.engines?.node);
-  report(nodeOk ? 'ok' : 'fail', `Node ${process.versions.node} (Scranton needs ${ownPkg.engines?.node})`);
-
-  const local = findLocalPi();
-  if (local) {
-    const piPkg = JSON.parse(fs.readFileSync(path.join(local.dir, 'package.json'), 'utf8'));
-    const piNode = piPkg.engines?.node;
-    report(satisfiesMin(process.versions.node, piNode) ? 'ok' : 'fail', `pi ${piPkg.version} needs Node ${piNode ?? '(unspecified)'}`);
-  }
-
-  let spec = null;
   try {
-    spec = resolvePiCommand({ config, env, platform });
-    report('ok', `pi resolved via ${spec.description}`);
-  } catch (err) {
-    report('fail', err.message);
-  }
-
-  if (spec) {
-    const v = await execPi(spec, ['--version'], { env });
-    if (v.code === 0) report('ok', `pi --version: ${v.stdout.trim().split(/\r?\n/).pop()}`);
-    else report('fail', `pi --version failed: ${v.error ?? `exit ${v.code}`} ${v.stderr.trim().slice(0, 200)}`);
-  }
-
-  const pipeline = await probePipeline({ env });
-  report('warn', pipeline.available ? `Pipeline engine ${pipeline.version} (${pipeline.source}, optional)` : `Pipeline engine (optional): ${pipeline.reason}`);
-
-  if (platform === 'win32') {
-    if (windowsBashAvailable(env)) report('ok', "Git Bash found (pi's bash tool works)");
-    else report('warn', 'No Git Bash found: pi cannot run its bash tool. Scranton uses the powershell tool by default; install Git for Windows for bash.');
-  }
-
-  report('info', config.configPath ? `config file: ${config.configPath}` : 'config file: none (defaults, env and flags only)');
-  for (const w of config.warnings) report('warn', w);
-  report('info', `maxFailedCycles=${config.maxFailedCycles}, agent timeout=${config.agentTimeoutMinutes} min, minimalContext=${config.pi.minimalContext}`);
-
-  if (config.execution) {
-    const { checkSandbox } = await import('./sandbox.js');
-    const sandbox = await checkSandbox(config.execution.sandbox);
-    report(sandbox.available ? (sandbox.mode === 'host' ? 'warn' : 'ok') : 'fail', sandbox.reason ?? `Sandbox image ready: ${sandbox.image}`);
-    report('info', `Execution: ${config.pi.transport}, ${config.execution.isolation}, maxParallel=${config.execution.maxParallel}`);
-  }
-
-  for (const account of await auth.listAccounts()) {
-    report(account.status === 'error' ? 'warn' : 'info', `${account.label}: ${account.status} (${account.kind ?? 'none'})${account.renewFailedAt ? ` - renewal failed ${account.renewFailedAt}; sign in again` : account.renewsOnUse ? ' - renews automatically on use' : ''}`);
-  }
-
-  const checked = new Map();
-  for (const id of AGENT_IDS) {
-    const a = config.agents[id];
-    const model = a.model ? `${a.provider ? `${a.provider}/` : ''}${a.model}${a.thinking ? `:${a.thinking}` : ''}` : "(pi's default; provider/model undetermined offline)";
-    report(isFile(a.skill) ? 'info' : 'fail', `${id}: model ${model}, tools ${a.tools.join(',')}, skill ${a.skill}${isFile(a.skill) ? '' : ' (MISSING)'}`);
-    if (!a.model || !spec) continue;
-    const key = `${a.provider ?? ''}\n${a.model}`;
-    if (!checked.has(key)) {
-      const args = ['auth', 'check', '--no-refresh', '--model', a.model, ...(a.provider ? ['--provider', a.provider] : []), '--json'];
-      checked.set(key, execPi(spec, args, { env }));
+    const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+    report(satisfiesMin(process.versions.node, pkg.engines?.node) ? 'ok' : 'fail', `Node ${process.versions.node} (Scranton needs ${pkg.engines?.node})`);
+    for (const command of ['rg', 'fd']) report(onPath(command, env, platform) ? 'ok' : 'info', onPath(command, env, platform) ? `${command} found on PATH` : `${command} not on PATH; tools use native search fallback`);
+    report('info', `PowerShell: ${onPath('pwsh', env, platform) || onPath('powershell', env, platform) ? 'available' : 'not found'}`);
+    const sandbox = await sandboxAvailable({ env, platform });
+    const mode = config.execution?.sandbox?.mode ?? 'scranton';
+    const bash = sandbox.tools?.bash;
+    report('info', platform === 'win32' && mode === 'scranton'
+      ? `Git Bash: unavailable in the Windows Scranton sandbox: ${bash?.reason ?? 'Low-integrity mode cannot use the host Git Bash object namespace; use powershell'}`
+      : `Git Bash: ${platform === 'win32' ? windowsBashAvailable(env) ? 'available' : 'not found' : onPath('bash', env, platform) ? 'bash available' : 'not found'}`);
+    report(sandbox.available ? 'ok' : mode === 'scranton' ? 'fail' : 'warn', sandbox.available ? `Native sandbox available (${sandbox.backend})` : `Native sandbox unavailable: ${sandbox.reason}`);
+    if (mode === 'host') report('warn', 'Trusted host execution is not OS isolation');
+    if (mode === 'docker') {
+      const docker = await dockerAvailable(config.execution.sandbox);
+      report(docker.available ? 'ok' : 'fail', docker.available ? `Docker tool executor ready: ${docker.image}` : docker.reason);
+      report('info', 'Only tools run inside Docker; the agent loop, LLM calls and credentials stay on the host');
     }
-    const r = await checked.get(key);
-    let status = null;
-    try {
-      status = JSON.parse(r.stdout.trim().split(/\r?\n/).pop()).status;
-    } catch {
-      // not JSON: reported below
+    report('info', config.configPath ? `config file: ${config.configPath}` : 'config file: none (defaults, env and flags only)');
+    for (const warning of config.warnings ?? []) report('warn', warning);
+    report('info', `maxFailedCycles=${config.maxFailedCycles}, agent timeout=${config.agentTimeoutMinutes} min`);
+    // listModels waits for the one-time import, but does not resolve or refresh tokens.
+    let catalog = { providers: [] }, accounts = [];
+    try { catalog = await auth.listModels(); accounts = await auth.listAccounts(); }
+    catch { report('fail', 'Could not inspect credentials; check the credential store'); }
+    for (const account of accounts) report(account.status === 'error' || account.status === 'expired' ? 'warn' : 'info',
+      `${account.label}: ${account.status} (${account.kind ?? 'none'})${account.renewFailedAt ? ` - renewal failed ${account.renewFailedAt}; sign in again` : account.renewsOnUse ? ' - renews automatically on use' : ''}`);
+    let automatic;
+    try { const m = selectModel({}, { listAccounts: () => accounts }); automatic = { provider: m.provider, model: m.id }; report('ok', `Automatic model: ${m.provider}/${m.id}`); }
+    catch { report('warn', 'Automatic model: unavailable; sign in to Claude, ChatGPT, Gemini or Google Antigravity'); }
+    for (const id of config.workflowWarning ? [] : activeRoles(config)) {
+      try {
+      const a = config.agents[id];
+      const ref = a.provider || a.model ? { provider: a.provider, model: a.model } : automatic;
+      const found = ref && catalog.providers.find((p) => p.id === ref.provider)?.models.some((m) => m.id === ref.model);
+      report(found ? 'ok' : 'fail', `${id}: model ${ref ? `${ref.provider}/${ref.model}` : 'Automatic (unavailable)'}${a.thinking ? `:${a.thinking}` : ''}; credentials ${found ? 'ready (offline)' : 'unavailable or model unknown; configure an account and model'}`);
+      report(isFile(a.skill) ? 'info' : 'fail', `${id}: tools ${a.tools.join(',')}, skill ${a.skill}${isFile(a.skill) ? '' : ' (MISSING)'}`);
+      } catch { report('fail', `${id}: could not inspect role model, tools or skill`); }
     }
-    if (status === 'ready') report('ok', `${id}: credentials ready for ${a.model}`);
-    else report('fail', `${id}: credentials for ${a.model} are ${status ?? 'unknown'} (sign in or check provider configuration)`);
-  }
-  try { validateDockerModels(config, config.workflowWarning ? [] : activeRoles(config)); }
-  catch (err) { report('fail', `${err.message}; a run with the configured workflow would be refused`); }
-  const defaults = (config.workflowWarning ? [] : activeRoles(config)).filter((id) => !config.agents[id]?.model);
-  if (defaults.length) {
-    // Pi 1.5.2 keeps findInitialModel private; do not duplicate its selection rule.
-    report('info', 'Default provider/model cannot be determined offline: pi 1.5.2 does not export findInitialModel through its public API. All agents without an explicit model choice share one pi default model. Credentials for pi default were not verified.');
-    report('warn', `No model configured for ${defaults.join(', ')}. Choose per agent: scranton agents; scranton agent set-model <id> --provider P --model M [--thinking T] ${config.dataDir ? '--data ' + quotePathArgument(config.dataDir) : '--hive ' + quotePathArgument(config.hiveDir)}. Also available: the dashboard Agents view, scranton.config.json (agents.<id>.provider/model), or SCRANTON_<AGENT>_PROVIDER and SCRANTON_<AGENT>_MODEL. In a source checkout, replace scranton with node bin/scranton.js.`);
-  }
-
+  } catch { report('fail', 'Could not inspect Scranton configuration or credentials; check the credential store'); }
+  finally { if (ownAuth) await auth.close(); }
   for (const [label, dir] of [['hive', config.hiveDir], ['workspace', config.workspace]]) {
-    try {
-      writable(dir);
-      report('ok', `${label} writable: ${dir}`);
-    } catch (err) {
-      report('fail', `${label} not writable: ${dir} (${err.code ?? err.message})`);
-    }
+    try { writable(dir); report('ok', `${label} writable: ${dir}`); }
+    catch { report('fail', `${label} not writable: ${dir}`); }
   }
-
-  const verdict = failures ? c.red(`${failures} problem${failures === 1 ? '' : 's'} found.`)
-    : warnings ? c.yellow(`${warnings} warning${warnings === 1 ? '' : 's'} found; the run can start.`) : c.green('All good.');
-  stdout.write(`\n${verdict}\n`);
+  stdout.write(`\n${failures ? c.red(`${failures} problem${failures === 1 ? '' : 's'} found.`) : warnings ? c.yellow(`${warnings} warning${warnings === 1 ? '' : 's'} found; the run can start.`) : c.green('All good.')}\n`);
   return failures ? 1 : 0;
 }

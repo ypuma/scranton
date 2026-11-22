@@ -241,7 +241,7 @@ test('model keys round-trip any model id; groups disable providers without crede
   assert.equal(groups[0].options[0].title, 'anthropic/claude-a · 200k context · reasoning');
 });
 
-test('stored choices: unknown roles and shapes are dropped; an unavailable choice falls back to pi default with a note', () => {
+test('stored choices: unknown roles and shapes are dropped; an unavailable choice falls back to the default with a note', () => {
   assert.deepEqual(parseStoredModels('not json'), {});
   assert.deepEqual(parseStoredModels(JSON.stringify({ dwight: { provider: 'openai', model: 'gpt-a' }, kevin: { provider: 'x', model: 'y' }, angela: { provider: 'openai' } })),
     { dwight: { provider: 'openai', model: 'gpt-a' } });
@@ -252,12 +252,13 @@ test('stored choices: unknown roles and shapes are dropped; an unavailable choic
   assert.deepEqual(r.michael.missing, stored.michael);
   assert.equal(r.angela.value, '', 'no longer offered');
   assert.match(missingNote(r.angela.missing), /gone is not available/);
+  assert.match(missingNote(r.angela.missing), /the default is used\.$/);
   assert.equal(missingNote(null), '');
   assert.deepEqual(storeChoice(stored, 'dwight', ''), { michael: stored.michael, angela: stored.angela });
   assert.deepEqual(storeChoice({}, 'angela', modelKey('openai', 'gpt-a')), { angela: { provider: 'openai', model: 'gpt-a' } });
 });
 
-test('buildModels: only roles that are not pi default, and only models of signed-in providers', () => {
+test('buildModels: only roles that are not on their default, and only models of signed-in providers', () => {
   const cat = parseModels(CATALOG);
   assert.deepEqual(buildModels({ michael: '', dwight: '', angela: '' }, cat), { models: {} });
   assert.deepEqual(buildModels({ dwight: modelKey('openai', 'gpt-a') }, cat), { models: { dwight: { provider: 'openai', model: 'gpt-a' } } });
@@ -287,7 +288,7 @@ test('the sign-in hint needs both: no signed-in account and no provider with a k
   assert.equal(credentialHint({ accounts: parseAuth({ accounts: SIGNED_OUT }).accounts, catalog: cat }), false, 'openai has a credential');
   assert.equal(credentialHint({ catalog: { providers: [{ ...cat.providers[0] }] } }), true);
   assert.equal(credentialHint({ accounts: [{ id: 'openai', status: 'signed_in', kind: 'api_key' }], catalog: { providers: [] } }), false);
-  assert.equal(DOCKER_NOTE, 'Claude and ChatGPT sign-ins are passed to containers as short-lived access tokens. A Google Antigravity sign-in stays on this computer; the agents in a container get a temporary permission to make model calls through it until that permission expires.');
+  assert.equal(DOCKER_NOTE, 'In Docker only the agents\' commands run in the container. Model calls, sign-ins and API keys stay on this computer and are never passed into it.');
 });
 
 // ------------------------------------------------------------ API keys and custom providers (addendum 2026-11-08 18:10)
@@ -351,9 +352,21 @@ test('remove key and remove provider confirm, and warn while a run is active', (
   assert.equal(removeKeyConfirm(a).ok, 'Remove key');
   assert.match(removeKeyConfirm(a).detail, /environment variable is not affected/);
   assert.equal(removeProviderConfirm(a).ok, 'Remove provider');
-  assert.match(removeProviderConfirm(a).detail, /never touched/);
+  assert.equal(removeProviderConfirm(a).detail, 'Removes abliteration.ai from Scranton\'s provider configuration and deletes its stored API key.');
   assert.match(removeProviderConfirm(a, { runActive: true }).detail, /A run is in progress/);
   assert.doesNotMatch(removeKeyConfirm(a).detail, /in progress/);
+});
+
+test('the account texts name Scranton\'s own credentials and provider configuration, never pi, auth.json or models.json', () => {
+  const a = { id: 'openai', label: 'ChatGPT', methods: ['oauth', 'api_key'] };
+  const texts = [signOutConfirm(a).detail, removeKeyConfirm(a).detail, removeProviderConfirm(a).detail];
+  assert.match(texts[0], /^Removes the ChatGPT sign-in from Scranton's credentials on this computer\./);
+  assert.match(texts[1], /^Removes the ChatGPT API key from Scranton's credentials on this computer\./);
+  for (const t of texts) assert.doesNotMatch(t, /\bpi\b|auth\.json|models\.json|credential store/);
+  const html = readFileSync(new URL('../../visualizer/public/index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(html, /\bpi's\b|\bpi default\b|auth\.json|models\.json|fake pi|via pi/);
+  assert.match(html, /Everything is stored with Scranton's credentials on this computer/);
+  assert.match(html, /Scranton adds it to Scranton's provider configuration/);
 });
 
 test('buildKey: trimmed key and provider only; errors never contain the key', () => {

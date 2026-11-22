@@ -2,140 +2,93 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { runDoctor } from '../../src/core/doctor.js';
+import { runDoctor, satisfiesMin } from '../../src/core/doctor.js';
 import { loadConfig } from '../../src/core/config.js';
 import { createAuthService } from '../../src/core/auth.js';
 
-test('doctor reports account metadata, uses no-refresh checks, and never prints credential diagnostics', async (t) => {
-  const root = path.resolve('.scratch/usability/fix3/doctor'); fs.mkdirSync(root, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(root, 'doctor-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const profile = path.join(dir, 'profile'); fs.mkdirSync(profile);
-  const authPath = path.join(profile, 'auth.json');
-  fs.writeFileSync(authPath, JSON.stringify({ anthropic: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 }, openai: { type: 'api_key', key: 'FAKE_KEY' } }));
-  const before = fs.readFileSync(authPath);
-  const script = path.join(dir, 'fake-doctor-pi.mjs');
-  fs.writeFileSync(script, `if (process.argv.includes('--version')) console.log('fake-pi'); else {
-    if (!process.argv.includes('--no-refresh')) process.exit(3);
-    console.log(JSON.stringify({status:'not_ready', secret:'FAKE_ACCESS FAKE_REFRESH FAKE_KEY'}));
-  }`);
-  const config = loadConfig({ cwd: dir, env: {}, fileConfig: {
-    pi: { command: [process.execPath, script] }, execution: { sandbox: { mode: 'host' } }, agents: { dwight: { provider: 'anthropic', model: 'fake-catalog' } }
-  } });
-  let output = '';
-  const code = await runDoctor({ config, env: { ...process.env, PI_CODING_AGENT_DIR: profile }, auth: createAuthService({ authPath, env: {} }), stdout: { write: (s) => output += s } });
-  assert.equal(code, 1);
-  assert.match(output, /1 problem found\./);
-  assert.doesNotMatch(output, /All good\.|run can start/i);
-  assert.match(output, /Claude \(Pro\/Max\): signed_in \(oauth\)/);
-  assert.match(output, /ChatGPT: signed_in \(api_key\)/);
-  assert.match(output, /credentials for fake-catalog are not_ready/);
-  assert.doesNotMatch(output, /FAKE_ACCESS|FAKE_REFRESH|FAKE_KEY/);
-  assert.deepEqual(fs.readFileSync(authPath), before);
-});
-
-test('doctor directs missing Docker models to active agent defaults in Agents', async (t) => {
-  const root = path.resolve('.scratch/usability/fix3/doctor'); fs.mkdirSync(root, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(root, 'doctor-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const previous = Object.fromEntries(['PATH', 'Path'].map((key) => [key, process.env[key]]));
-  for (const key of Object.keys(previous)) process.env[key] = '';
-  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  const script = path.join(dir, 'fake-pi.mjs');
-  fs.writeFileSync(script, "console.log('fake-pi');\n");
-  const config = loadConfig({ cwd: dir, env: {}, fileConfig: {
-    pi: { command: [process.execPath, script] }, workflow: { gates: [['hank']] }, execution: { sandbox: { mode: 'docker' } }
-  } });
-  let output = '';
-  await runDoctor({ config, env: { PI_CODING_AGENT_DIR: path.join(dir, 'profile'), SCRANTON_PIPELINE_COMMAND: JSON.stringify([path.join(dir, 'missing-engine')]) }, auth: { async listAccounts() { return []; } }, stdout: { write: (s) => output += s } });
-  assert.match(output, /Docker requires an explicit provider and model for michael, dwight, hank; set the agent default for each role in Agents/);
-  assert.doesNotMatch(output, /Options → Models/);
-  assert.match(output, /SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL/);
-});
-
-async function defaultDoctor(t, agents = {}) {
-  const root = path.resolve('.scratch/usability/fix3/doctor'); fs.mkdirSync(root, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(root, 'defaults-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const profile = path.join(dir, 'profile'); fs.mkdirSync(profile);
-  const authPath = path.join(profile, 'auth.json');
-  const oauth = { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 };
-  fs.writeFileSync(authPath, JSON.stringify({ openai: oauth, 'google-antigravity': oauth, 'google-vertex': { type: 'api_key', key: 'FAKE_KEY' } }));
-  const before = fs.readFileSync(authPath);
-  const script = path.join(dir, 'fake-pi.mjs');
-  fs.writeFileSync(script, `if (process.argv.includes('--version')) console.log('fake-pi');
-    else if (process.argv.includes('--no-refresh')) console.log('{"status":"ready"}');
-    else process.exit(3);`);
-  const config = loadConfig({ cwd: dir, env: {}, fileConfig: {
-    pi: { command: [process.execPath, script] }, execution: { sandbox: { mode: 'host' } }, agents
-  } });
-  let output = '';
-  const code = await runDoctor({ config, platform: 'linux', env: { PI_CODING_AGENT_DIR: profile,
-    SCRANTON_PIPELINE_COMMAND: JSON.stringify([path.join(dir, 'missing-engine')]) },
-    auth: createAuthService({ authPath, env: {} }), stdout: { write: (s) => output += s } });
-  assert.deepEqual(fs.readFileSync(authPath), before);
-  assert.doesNotMatch(output, /FAKE_ACCESS|FAKE_REFRESH|FAKE_KEY/);
+async function doctor(t, { credentials = {}, agents = {}, sandbox = { available: true, backend: 'fake-native' }, mode = 'host', docker = { available: true, image: 'scranton-tools:24-r1' }, platform = process.platform, gitBash = false } = {}) {
+  const root = path.resolve('.scratch/auth-port/doctor'); fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, 'case-')), file = path.join(dir, 'store.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, credentials, providers: {}, renewals: {}, deviceId: 'fixture', import: { at: 'fixture' } }));
+  const before = fs.readFileSync(file), env = { SCRANTON_CREDENTIALS_DIR: dir, PATH: '' };
+  if (gitBash) { fs.mkdirSync(path.join(dir, 'Git/bin'), {recursive: true}); fs.writeFileSync(path.join(dir, 'Git/bin/bash.exe'), 'fixture'); env.ProgramFiles = dir; }
+  const auth = createAuthService({ env });
+  t.after(async () => { await auth.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { execution: { sandbox: { mode: 'host' } }, agents } });
+  config.execution.sandbox.mode = mode;
+  let output = '', probes = 0;
+  const code = await runDoctor({ config, env, auth, platform, stdout: { write: (s) => output += s }, sandboxAvailable: async () => { probes++; return sandbox; }, dockerAvailable: async () => docker });
+  assert.equal(probes, 1); assert.deepEqual(fs.readFileSync(file), before);
+  assert.doesNotMatch(output, /FAKE_ACCESS|FAKE_REFRESH|FAKE_KEY|pi --version|pi auth check|pi default/);
   return { code, output };
 }
-
-test('doctor counts warnings without blocking a run or claiming all good', async (t) => {
-  const { code, output } = await defaultDoctor(t);
-  assert.equal(code, 0);
-  const count = output.split('\n').filter((line) => line.startsWith('[warn]')).length;
-  assert.equal(count, 3);
-  assert.match(output, new RegExp(`\\n${count} warnings found; the run can start\\.\\n$`));
-  assert.doesNotMatch(output, /All good\./);
+const oauth = { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 };
+test('doctor reports credential metadata without refreshing or printing secrets', async (t) => {
+  const { code, output } = await doctor(t, { credentials: { anthropic: oauth, openai: { type: 'api_key', key: 'FAKE_KEY' } } });
+  assert.equal(code, 0); assert.match(output, /Claude \(Pro\/Max\): signed_in \(oauth\)/); assert.match(output, /ChatGPT: signed_in \(api_key\)/);
+  assert.match(output, /Automatic model: anthropic\/claude-sonnet-4-5/);
+});
+test('doctor reports Automatic unavailable and fails active roles without accounts', async (t) => {
+  const { code, output } = await doctor(t);
+  assert.equal(code, 1); assert.match(output, /Automatic model: unavailable/);
+  for (const id of ['michael', 'dwight', 'angela']) assert.match(output, new RegExp(id + ': model Automatic \\(unavailable\\)'));
+  assert.doesNotMatch(output, /oscar:|hank:/);
+});
+test('doctor uses the runner Automatic priority rather than catalogue ordering', async (t) => {
+  const { code, output } = await doctor(t, { credentials: { openai: oauth, google: { type: 'api_key', key: 'FAKE_KEY' } } });
+  assert.equal(code, 0); assert.match(output, /Automatic model: openai\/gpt-5.3-codex/);
+});
+test('doctor verifies explicit models against own catalogue and available accounts', async (t) => {
+  const { code, output } = await doctor(t, { credentials: { openai: oauth }, agents: { dwight: { provider: 'openai', model: 'unknown-model' } } });
+  assert.equal(code, 1); assert.match(output, /dwight: model openai\/unknown-model; credentials unavailable or model unknown/);
+  assert.match(output, /michael: model openai\/gpt-5.3-codex/);
+});
+test('search and shell checks are offline and native fallback is explained', async (t) => {
+  const { output } = await doctor(t, { credentials: { google: { type: 'api_key', key: 'FAKE_KEY' } } });
+  for (const command of ['rg', 'fd']) assert.match(output, new RegExp(command + ' not on PATH; tools use native search fallback'));
+  assert.match(output, /Git Bash:/); assert.match(output, /PowerShell:/); assert.match(output, /Node \d/);
+});
+test('missing native helper fails native mode but warns in explicitly trusted host', async (t) => {
+  const options = { credentials: { openai: oauth }, sandbox: { available: false, reason: 'missing helper; no automatic fallback' } };
+  assert.equal((await doctor(t, { ...options, mode: 'scranton' })).code, 1);
+  const { code, output } = await doctor(t, options); assert.equal(code, 0); assert.match(output, /Native sandbox unavailable/); assert.match(output, /Trusted host execution is not OS isolation/);
+});
+test('doctor warning count matches summary without claiming all good', async (t) => {
+  const { code, output } = await doctor(t, { credentials: { openai: oauth } });
+  assert.equal(code, 0); const count = output.split('\n').filter((line) => line.startsWith('[warn]')).length;
+  assert.match(output, new RegExp(count + ' warning' + (count === 1 ? '' : 's') + ' found; the run can start'));
+  assert.doesNotMatch(output, /All good/);
+});
+test('Node minimum check compares full versions', () => {
+  assert.equal(satisfiesMin('24.22.1', '>=22.19.0'), true); assert.equal(satisfiesMin('22.18.9', '>=22.19.0'), false);
+  assert.equal(satisfiesMin('22.19.0', '>=22.19.0'), true);
 });
 
-test('doctor reports the unsupported offline default lookup and real model selection routes', async (t) => {
-  const { output } = await defaultDoctor(t);
-  for (const id of ['michael', 'dwight', 'oscar', 'hank', 'angela']) {
-    assert.match(output, new RegExp(`${id}: model \\(pi's default; provider/model undetermined offline\\)`));
-  }
-  assert.match(output, /pi 1\.5\.2 does not export findInitialModel through its public API/);
-  assert.match(output, /All agents without an explicit model choice share one pi default model/);
-  assert.match(output, /Credentials for pi default were not verified/);
-  assert.match(output, /scranton agents/);
-  assert.match(output, /scranton agent set-model <id> --provider P --model M \[--thinking T\]/);
-  assert.match(output, /Agents view/);
-  assert.match(output, /scranton\.config\.json \(agents\.<id>\.provider\/model\)/);
-  assert.match(output, /SCRANTON_<AGENT>_PROVIDER and SCRANTON_<AGENT>_MODEL/);
-});
-
-test('doctor also warns about unconfigured agents when another agent has a model', async (t) => {
-  const { code, output } = await defaultDoctor(t, { dwight: { provider: 'openai', model: 'chosen-model' } });
-  assert.equal(code, 0);
-  assert.match(output, /dwight: model openai\/chosen-model/);
-  assert.match(output, /No model configured for michael, angela/);
-  assert.doesNotMatch(output, /No model configured for [^\n]*dwight/);
-  assert.match(output, /scranton agent set-model/);
-});
-
-test('fix2: README model setup avoids inactive gate warnings and suggestions include the inspected hive', async (t) => {
-  const chosen = { provider: 'openai', model: 'chosen-model' };
-  const { output } = await defaultDoctor(t, { michael: chosen, dwight: chosen, angela: chosen });
-  assert.doesNotMatch(output, /No model configured for/);
-  const missing = await defaultDoctor(t);
-  assert.match(missing.output, /No model configured for michael, dwight, angela\./);
-  assert.match(missing.output, /scranton agent set-model <id> --provider P --model M \[--thinking T\] --hive "[^"]+hive"/);
-});
-
-test('fix3 item5: missing Docker models are failures even with a ready sandbox', async (t) => {
-  const childProcess = (await import('node:child_process')).default;
-  const { syncBuiltinESMExports } = await import('node:module');
-  const root = path.resolve('.scratch/usability/fix3/doctor'); fs.mkdirSync(root, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(root, 'docker-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const executable = path.join(dir, process.platform === 'win32' ? 'docker.exe' : 'docker'); fs.writeFileSync(executable, '', { mode: 0o755 });
-  const key = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH'), old = process.env[key]; process.env[key] = dir;
-  t.after(() => { process.env[key] = old; });
-  const original = childProcess.execFile;
-  t.mock.method(childProcess, 'execFile', (exe, args, options, callback) => exe.toLowerCase() === executable.toLowerCase() ? (callback(null, 'linux', ''), {}) : original(exe, args, options, callback));
-  syncBuiltinESMExports(); t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const script = path.join(dir, 'fake.mjs'); fs.writeFileSync(script, "console.log('fake-pi');\n");
-  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { pi: { command: [process.execPath, script] }, execution: { sandbox: { mode: 'docker' } }, workflow: { gates: [['hank']] } } });
+test('credential inspection failure does not suppress independent workspace diagnostics', async (t) => {
+  const root = path.resolve('.scratch/auth-port/doctor'); fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, 'broken-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { execution: { sandbox: { mode: 'host' } } } });
+  fs.writeFileSync(config.workspace, 'not a directory');
   let output = '';
-  const code = await runDoctor({ config, platform: 'linux', env: { PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_PIPELINE_COMMAND: JSON.stringify([path.join(dir, 'missing-engine')]) }, auth: { async listAccounts() { return []; } }, stdout: { write(s) { output += s; } } });
-  assert.match(output, /\[ ok \] Sandbox image ready/);
-  assert.equal(code, 1);
-  assert.match(output, /\[FAIL\] Docker requires an explicit provider and model for michael, dwight, hank[^\n]*; a run with the configured workflow would be refused/);
-  assert.doesNotMatch(output, /the run can start|All good/);
+  const code = await runDoctor({ config, env: { PATH: '' }, stdout: { write: (s) => output += s },
+    auth: { listModels: async () => { throw Error('FAKE_SECRET'); } }, sandboxAvailable: async () => ({ available: true, backend: 'fake' }) });
+  assert.equal(code, 1); assert.match(output, /michael: model Automatic/); assert.match(output, /dwight: tools/); assert.match(output, /angela: tools/); assert.match(output, /workspace not writable/); assert.match(output, /check the credential store/); assert.doesNotMatch(output, /FAKE_SECRET/);
+});
+
+test('Docker doctor checks tool executor readiness without explicit-model rules', async t => {
+  const { code, output } = await doctor(t, { mode: 'docker', credentials: { openai: oauth } });
+  assert.equal(code, 0); assert.match(output, /Docker tool executor ready: scranton-tools:24-r1/);
+  assert.match(output, /Only tools run inside Docker/); assert.match(output, /credentials stay on the host/);
+  const failed = await doctor(t, { mode: 'docker', credentials: { openai: oauth }, docker: { available: false, reason: 'daemon unreachable' } });
+  assert.equal(failed.code, 1); assert.match(failed.output, /daemon unreachable/); assert.match(failed.output, /angela: tools/);
+});
+
+test('doctor reports native Windows bash unavailable even when Git Bash is installed', async t => {
+  const reason = 'MSYS2 object namespace is Medium integrity; use powershell';
+  const {output} = await doctor(t, {credentials: {openai: oauth}, platform: 'win32', mode: 'scranton', gitBash: true,
+    sandbox: {available: true, backend: 'restricted-token', tools: {bash: {available: false, reason}}}});
+  assert.ok(output.includes('Git Bash: unavailable in the Windows Scranton sandbox: ' + reason));
+  assert.doesNotMatch(output, /Git Bash: available/);
+  const host = await doctor(t, {credentials: {openai: oauth}, platform: 'win32', mode: 'host', gitBash: true});
+  assert.match(host.output, /Git Bash: available/);
 });

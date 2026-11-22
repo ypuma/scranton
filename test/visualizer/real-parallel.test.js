@@ -1,11 +1,11 @@
-// The web views on what the real orchestrator emits in parallel RPC runs (scripted pi, project scratch):
+// The web views on what the real orchestrator emits in parallel RPC runs (scripted LLM, project scratch):
 // role cards with role-only statuses, exact chat echo correlation, and a run whose process died.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  scratchDir, createRun, capture, until, spoolChat, readEvents, FAKE_PI,
+  scratchDir, createRun, capture, until, spoolChat, readEvents,
 } from './fixtures/real-orchestrator.js';
 import {
   reduceAll, reduce, roleView, lanesOf, isLive, isBusy, interruptedView, dependencyState, createState,
@@ -26,11 +26,11 @@ const scratch = () => {
 after(() => { for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); });
 
 before(async () => {
-  // A: Michael's pi fails twice; the human retries once, then skips planning
+  // A: Michael's agent fails twice; the human retries once, then skips planning
   {
     let calls = 0;
     const { orchestrator, hive } = createRun(scratch(), {
-      command: [process.execPath, FAKE_PI], env: { FAKE_PI_FAIL: 'exit1', FAKE_PI_FAIL_ROLE: 'michael' },
+      env: { SCRANTON_FAKE_FAIL: 'exit1', SCRANTON_FAKE_FAIL_ROLE: 'michael' },
       hitl: async () => (++calls === 1 ? { decision: 'retry' } : { decision: 'skip' }),
     });
     runs.planner = { result: await orchestrator.run('Build a tiny todo CLI'), events: readEvents(hive) };
@@ -62,7 +62,7 @@ before(async () => {
     config.execution.isolation = 'shared';
     runs.shared = { result: await orchestrator.run('Build a tiny todo CLI'), events: readEvents(hive), workspace: config.workspace };
   }
-  // E: dwight-m1's pi crashes and the human skips m1 while dwight-m2 is still inside a tool, then an abort
+  // E: dwight-m1's agent crashes and the human skips m1 while dwight-m2 is still inside a tool, then an abort
   {
     const inTool = () => readEvents(hive).some((e) => e.type === 'agent_tool' && e.instanceId === 'dwight-m2' && e.tool === 'bash');
     // the skip waits for dwight-m2 to be inside its never-ending tool, so m2 is working when m1 ends
@@ -75,9 +75,9 @@ before(async () => {
     orchestrator.abort('test over');
     runs.crash = { skipped, result: await running, events: readEvents(hive) };
   }
-  // D: the legacy serial JSON transport
+  // D: serial execution still publishes exact instance identities
   {
-    const { orchestrator, hive } = createRun(scratch(), { command: [process.execPath, FAKE_PI], transport: 'json' });
+    const { orchestrator, hive } = createRun(scratch(), { maxParallel: 1 });
     runs.serial = { result: await orchestrator.run('Build a tiny todo CLI'), events: readEvents(hive) };
   }
 });
@@ -286,17 +286,16 @@ test('worktree badges only for reported worktrees, never for the shared workspac
   assert.match(named.log.at(-1).text, /shared workspace/);
 });
 
-test('a serial JSON run has no lanes, although its tool events name an instance', () => {
+test('a serial own-runtime run publishes lanes consistently with tool instance identities', () => {
   const { events, result } = runs.serial;
   assert.equal(result.status, 'success', result.summary);
   assert.ok(events.some((e) => e.type === 'agent_tool' && e.instanceId), 'the producer names instances on tool events');
   let s = createState();
   for (const e of events) {
     s = reduce(s, e);
-    for (const id of ['michael', 'dwight', 'angela']) assert.equal(roleView(s, id).status, s.agents[id].status, `${id} after seq ${e.seq}`);
+    assert.equal(s.lastSeq, e.seq, 'every own-runner event is consumed');
   }
-  // no lane is made up from tool events (the producer does name the planner on its "Planning complete" status)
-  assert.deepEqual(lanesOf(s).filter((i) => i.agent !== 'michael'), []);
+  assert.deepEqual(lanesOf(s).map(i => i.id).sort(), ['angela-m1', 'angela-m2', 'angela-m3', 'dwight-m1', 'dwight-m2', 'dwight-m3', 'michael']);
   assert.ok(lanesOf(s).every((i) => !isLive(i)));
 });
 

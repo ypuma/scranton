@@ -3,12 +3,12 @@
 // answers /api/auth. The server opens the sign-in page itself; this page shows its address and can only ask the
 // server to open it again. A typed key lives in its password field until it is sent, never anywhere else.
 import {
-  AUTH_POLL_MS, REOPEN_MS, MODEL_ROLES, MODELS_KEY, DOCKER_NOTE, DOCKER_KEY_NOTE, DOCKER_DEFAULTS_NOTE, PI_DEFAULT_NOTE, LOGIN_INPUT_MAX, API_TYPES, ABLITERATION_PRESET,
+  AUTH_POLL_MS, REOPEN_MS, MODEL_ROLES, MODELS_KEY, DOCKER_NOTE, AUTOMATIC_NOTE, LOGIN_INPUT_MAX, API_TYPES, ABLITERATION_PRESET,
   parseAuth, loginActive, shouldPoll, nextLogin, loginView, accountView, accountsSummary, signOutConfirm, buildLoginInput, buildReopen,
   removeKeyConfirm, removeProviderConfirm, buildKey, keyNote, scrubSecret, parseProviders, otherKeyProviders, slugify,
   buildDiscover, parseDiscovered, buildProvider, providerErrorField,
-  parseModels, modelGroups, parseStoredModels, resolveChoices, missingNote, storeChoice, buildModels, credentialHint, dockerGaps, dockerNote, piDefaultLabel, planNote,
-  runRoles, usesAgentDefaults,
+  parseModels, modelGroups, parseStoredModels, resolveChoices, missingNote, storeChoice, buildModels, credentialHint, defaultLabel, planNote,
+  runRoles,
 } from './accounts.js';
 import { CLIENT_HEADERS } from './control.js';
 import { postJson, store } from './control-panel.js';
@@ -873,11 +873,11 @@ export function fillModelSelect(s, groups, defaultLabel) {
 
 // The per-role model selects of the New run drawer, filled from GET /api/models. The built-in roles have their
 // rows in index.html; a custom gate of the catalog (GET /api/control defaults.agents) gets one made for it.
-// In Docker the selects show the agent defaults and are locked; the stored picks wait for the trusted host.
-export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = () => false, canOpenAgents = () => false }) {
+// The picks hold in every sandbox: the model calls are made on this computer.
+export function createModelPicker({ openAccounts, canOpenAccounts }) {
   const e = {
     fields: $('model-fields'), status: $('models-status'), note: $('models-note'), docker: $('models-docker-note'),
-    need: $('models-need'), needText: $('models-need-text'), agents: $('models-agents'), plan: $('models-plan'), grid: $('model-grid'),
+    plan: $('models-plan'), grid: $('model-grid'),
     signin: $('models-signin'), signinBtn: $('models-accounts'),
     selects: {
       michael: $('f-model-michael'), dwight: $('f-model-dwight'), oscar: $('f-model-oscar'), hank: $('f-model-hank'), angela: $('f-model-angela'),
@@ -900,12 +900,9 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
   let loadedOnce = false;
   let agentsKey = '';
   // gates: the stages the Workflow section picked (undefined: the engine default); agents: the server's catalog
-  let ctx = { demo: false, host: false, noPlan: false, configured: null, gates: undefined, agents: null, names: null };
-  // the pi default option of each select, renamed by render() to what that role uses
+  let ctx = { demo: false, sandbox: 'scranton', noPlan: false, configured: null, gates: undefined, agents: null, names: null };
+  // the default option of each select, renamed by render() to what that role uses
   const defaults = {};
-  // what the selects were last filled for: Docker shows the agent defaults, the trusted host the stored picks
-  let filledDocker = null;
-  const docker = () => usesAgentDefaults(ctx);
   const roles = () => Object.keys(e.selects);
   const values = () => Object.fromEntries(roles().map((r) => [r, e.selects[r].value]));
 
@@ -940,19 +937,17 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
     const key = JSON.stringify(catalog);
     if (key === catalogKey && !force) return;
     catalogKey = key;
-    const locked = docker();
-    filledDocker = locked;
     const choices = resolveChoices(stored, catalog, roles());
     const groups = modelGroups(catalog);
     for (const role of roles()) {
       const s = e.selects[role];
       const focused = document.activeElement === s;
-      const keep = locked ? '' : focused ? s.value : choices[role].value;
-      defaults[role] = fillModelSelect(s, groups, piDefaultLabel(ctx.demo ? null : ctx.configured, role, locked));
+      const keep = focused ? s.value : choices[role].value;
+      defaults[role] = fillModelSelect(s, groups, defaultLabel(ctx.demo ? null : ctx.configured, role));
       s.value = keep;
-      // a value that is not offered (any more) leaves the select on pi default
+      // a value that is not offered (any more) leaves the select on its default
       if (s.value !== keep || s.selectedOptions[0]?.parentElement?.disabled) s.value = '';
-      const note = focused || locked ? '' : missingNote(choices[role].missing);
+      const note = focused ? '' : missingNote(choices[role].missing);
       e.notes[role].textContent = note;
       e.notes[role].hidden = !note;
     }
@@ -1015,35 +1010,26 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
 
   function render() {
     syncRoles();
-    // switching between Docker and the trusted host shows the agent defaults or the stored picks again
-    if (filledDocker !== null && filledDocker !== docker()) fill(true);
     e.fields.hidden = support !== 'yes';
     // the sign-in note sits beside Start, outside the fields: it goes with them
     if (support !== 'yes') {
       e.signin.hidden = true;
       return;
     }
-    const locked = docker();
     e.fields.dataset.demo = String(ctx.demo);
-    e.fields.dataset.docker = String(locked);
-    for (const s of Object.values(e.selects)) s.disabled = ctx.demo || locked;
+    for (const s of Object.values(e.selects)) s.disabled = ctx.demo;
     // a select for each role the run starts; a demo shows them all, dimmed
     const used = runRoles({ noPlan: ctx.noPlan, gates: ctx.gates });
     for (const role of roles()) e.rows[role].hidden = !ctx.demo && !used.includes(role);
     e.note.textContent = ctx.demo
-      ? 'A demo uses the scripted fake pi; no model is used.'
-      : locked ? DOCKER_DEFAULTS_NOTE
-        : `Only models of signed-in accounts and configured API keys can be picked. ${PI_DEFAULT_NOTE}`;
+      ? 'A demo uses a scripted model; no real model is used.'
+      : `Only models of signed-in accounts and configured API keys can be picked. ${AUTOMATIC_NOTE}`;
     for (const role of roles()) {
-      const label = piDefaultLabel(ctx.demo ? null : ctx.configured, role, locked);
+      const label = defaultLabel(ctx.demo ? null : ctx.configured, role);
       if (defaults[role] && defaults[role].textContent !== label) defaults[role].textContent = label;
     }
-    e.docker.textContent = `${DOCKER_NOTE} ${DOCKER_KEY_NOTE}`;
-    e.docker.hidden = !locked;
-    const need = dockerNote(dockerGaps(ctx), ctx.configured, ctx.names);
-    e.needText.textContent = need;
-    e.need.hidden = !need;
-    e.agents.hidden = !canOpenAgents();
+    e.docker.textContent = DOCKER_NOTE;
+    e.docker.hidden = ctx.demo || ctx.sandbox !== 'docker';
     const plan = ctx.demo ? '' : planNote(catalog, accounts);
     e.plan.textContent = plan;
     e.plan.hidden = !plan;
@@ -1055,8 +1041,6 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
   for (const role of MODEL_ROLES) listen(role);
   // a sign-in hides the note; the selects may be folded away under Options, Start is always there
   e.signinBtn.addEventListener('click', () => openAccounts({ returnTo: $('run-submit') }));
-  // the Agents drawer opens over the New run drawer; a save there polls the control document, which syncs here
-  e.agents.addEventListener('click', () => openAgents());
 
   return {
     // the New run drawer opened
@@ -1071,7 +1055,7 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
       ctx = { ...ctx, ...next };
       render();
     },
-    // run = { demo, host, noPlan, gates } of the run to start (a follow-up is never a demo) -> { models } or { error, field, fields }
+    // run = { demo, noPlan, gates } of the run to start (a follow-up is never a demo) -> { models } or { error, field }
     selection(run = ctx) {
       if (support !== 'yes' || run.demo) return { models: {} };
       syncRoles();
@@ -1081,16 +1065,5 @@ export function createModelPicker({ openAccounts, canOpenAccounts, openAgents = 
     catalog: () => (support === 'yes' ? catalog : null),
     // the select of a role, for an error that names it (a custom gate's select has no fixed id)
     field: (role) => (Object.hasOwn(e.selects, role) ? e.selects[role] : null),
-    // where a missing agent default is fixed, when the selects are locked; null without an Agents drawer
-    // A server 400 can name a role the cached defaults still cover; the button is then shown with its own line.
-    fix: () => {
-      if (support !== 'yes' || !canOpenAgents()) return null;
-      if (e.need.hidden) {
-        e.needText.textContent = 'The server found no agent default for a role this run starts.';
-        e.need.hidden = false;
-      }
-      e.agents.hidden = false;
-      return e.agents;
-    },
   };
 }

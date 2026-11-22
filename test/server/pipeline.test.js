@@ -16,7 +16,7 @@ async function setup(t, { cap = 2, slow = 0, command, suspend = false, fail = fa
   const dataDir = path.join(dir, 'data'), workspace = path.join(dir, 'source'); fs.mkdirSync(workspace);
   const registry = createProjectRegistry({ dataDir }), project = registry.addProject({ name: 'Pipeline', workspace });
   const chats = [registry.createChat(project.id, { engine: 'pipeline' }), registry.createChat(project.id, { engine: 'pipeline' }), registry.createChat(project.id)];
-  const auth = { listAccounts: () => [{ id: 'openai', label: 'OpenAI', kind: 'api_key', status: 'signed_in' }, { id: 'anthropic', label: 'Subscription', kind: 'oauth', status: 'signed_in' }], listModels: async () => ({ providers: [{ id: 'openai', models: [{ id: 'test-model', name: 'Test model' }] }] }), resolveDockerCredential: async () => ({ name: 'OPENAI_API_KEY', value: key }), close() {} };
+  const auth = { listAccounts: () => [{ id: 'openai', label: 'OpenAI', kind: 'api_key', status: 'signed_in' }, { id: 'anthropic', label: 'Subscription', kind: 'oauth', status: 'signed_in' }], listModels: async () => ({ providers: [{ id: 'openai', models: [{ id: 'gpt-4o', name: 'Test model' }] }] }), resolveAuth: async () => ({ type: 'api_key', key }), close() {} };
   const server = await startVisualizerServer({ dataDir, publicDir: dir, port: 0, maxConcurrentRuns: cap, control: { auth } });
   t.after(async () => { await server.close(); for (const [k, v] of Object.entries(previous)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } fs.rmSync(dir, { recursive: true, force: true }); });
   const responses = [];
@@ -39,7 +39,7 @@ async function setup(t, { cap = 2, slow = 0, command, suspend = false, fail = fa
 test('Pipeline HTTP happy path, exact gates, summaries, artifacts, incremental events and removal', async (t) => {
   const f = await setup(t);
   const capability = (await f.req('/api/pipeline')).value;
-  assert.equal(capability.available, true); assert.equal(capability.source, 'env'); assert.equal(capability.models[1].supported, false);
+  assert.equal(capability.available, true); assert.equal(capability.source, 'env'); assert.equal(capability.models[1].supported, true);
   const detect = await f.req(`/api/projects/${f.project.id}/pipeline/detect`, {});
   assert.equal(detect.code, 200); assert.equal(detect.value.checks[0].command, 'node --test "a b.js"'); assert.equal(detect.value.setup[0].command, 'npm ci'); assert.equal(detect.value.setup[0].network, true);
   assert.equal((await f.req(`/api/projects/${f.project.id}/chats`, { engine: 'bogus' })).code, 400);
@@ -97,7 +97,7 @@ test('Pipeline concurrency cap counts live invocations, not approval gates; canc
 
 test('Pipeline credentials only reach environment; config, events and HTTP never contain the literal key', async (t) => {
   const f = await setup(t);
-  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'test-model' }]));
+  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
   const id = await f.start({ task: 'Fix safely', models, sandbox: { mode: 'host', trustHost: true }, checks: [{ id: 'test', kind: 'test', command: 'node --test "test file.js"' }], setup: [{ id: 'setup', command: 'node -v', network: false }], review: false });
   const gate = await f.wait(id, 'awaiting_approval');
   const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
@@ -179,7 +179,7 @@ test('Pipeline failure reaches terminal status; event pages and named artifacts 
 
 test('Pipeline launch errors survive restart without a run directory and later success clears invocation errors', async (t) => {
   const f = await setup(t);
-  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'test-model' }]));
+  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
   fs.rmSync(f.project.workspace, { recursive: true });
   const id = await f.start({ task: 'Deleted source', models });
   let r;
@@ -232,7 +232,7 @@ test('Pipeline command validation names exact row and field using the engine ID 
   assert.equal(r.code, 400); assert.match(r.value.error, /^setup\[0\]\.id:/);
 });
 
-const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'test-model' }]));
+const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
 const hostRun = { task: 'Feature fixture', models, sandbox: { mode: 'host', trustHost: true } };
 async function waitBuild(f, state) {
   let sandbox;
@@ -684,7 +684,7 @@ test('Pipeline conversation field validates strict booleans before creating a re
 
 test('Pipeline conversation config is opt-in, byte-compatible off, and list replies use task redaction', async (t) => {
   const f = await setup(t);
-  const expected = { schema: 1, models: Object.fromEntries(['planner', 'implementer', 'reviewer'].map((role) => [role, { provider: 'openai_compatible', model: 'test-model', base_url: 'https://api.openai.com/v1', api_key_env: `SCRANTON_PIPELINE_KEY_${role.toUpperCase()}` }])), limits: { max_replans: 1 }, execution: { max_parallel_steps: 1 }, sandbox: { mode: 'host' }, checks: [], setup: [], allow_no_checks: true, approvals: { plan: 'always' }, review: { enabled: true } };
+  const expected = { schema: 1, models: Object.fromEntries(['planner', 'implementer', 'reviewer'].map((role) => [role, { provider: 'openai_compatible', model: 'gpt-4o', base_url: 'https://api.openai.com/v1', api_key_env: `SCRANTON_PIPELINE_KEY_${role.toUpperCase()}` }])), limits: { max_replans: 1 }, execution: { max_parallel_steps: 1 }, sandbox: { mode: 'host' }, checks: [], setup: [], allow_no_checks: true, approvals: { plan: 'always' }, review: { enabled: true } };
   for (const fields of [{}, { conversation: false }, { conversation: true }]) {
     const id = await f.start({ ...hostRun, ...fields }), gate = await f.wait(id, 'awaiting_approval');
     const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');

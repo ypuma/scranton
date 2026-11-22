@@ -1,3 +1,4 @@
+import './helpers.js';
 import './isolation-test-root.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,28 +8,29 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { loadConfig } from '../../src/core/config.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
-import { startPi } from '../../src/core/pi-runner.js';
+import { startAgent } from '../../src/core/agent/index.js';
 import { resolvePrompt } from '../../src/core/prompts.js';
 import { createTerminalLog } from '../../src/core/log.js';
 import { conversationProof } from './fixtures/conversation-proof.js';
 
 const root = path.resolve('.scratch/chat-backend-fix/review');
 fs.mkdirSync(root, { recursive: true });
-function fixture(t, { transport = 'json', worktree = false, command = 'fake-pi.js' } = {}) {
+function fixture(t, { worktree = false } = {}) {
   const dir = fs.mkdtempSync(path.join(root, 'run-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const hive = path.join(dir, 'hive'), workspace = path.join(dir, 'ws');
   fs.mkdirSync(workspace); fs.writeFileSync(path.join(workspace, 'user.txt'), 'user bytes\n');
-  const fileConfig = { execution: { conversation: true, ...(!worktree ? { isolation: 'shared' } : {}), maxParallel: 1, sandbox: { mode: 'host' } }, pi: { transport, command: [process.execPath, path.resolve('tools', command)] } };
+  const fileConfig = { execution: { conversation: true, ...(!worktree ? { isolation: 'shared' } : {}), maxParallel: 1, sandbox: { mode: 'host' } },  };
   const file = path.join(dir, 'config.json'); fs.writeFileSync(file, JSON.stringify(fileConfig));
   const config = loadConfig({ env: {}, cwd: dir, fileConfig, flags: { hive, workspace } });
+  config.scripted = 'happy';
   return { dir, hive, workspace, file, config };
 }
 const eventsAt = (hive) => fs.readFileSync(path.join(hive, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
 const body = (file) => fs.readFileSync(file, 'utf8').replace(/^---\n[\s\S]*?\n---\n\n?/, '').trimEnd();
 function runCli(f, scenario, command = 'run') {
-  const result = spawnSync(process.execPath, ['bin/scranton.js', command, ...(command === 'run' ? [scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI'] : ['--scenario', scenario, '--delay', '0']), '--config', f.file, '--hive', f.hive, '--workspace', f.workspace, '--on-breaker', 'abort', '--conversation', '--ascii'], {
-    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(f.dir, 'iso'), FAKE_PI_SCENARIO: scenario, FAKE_PI_DELAY_MS: '0', FAKE_PI_DETERMINISTIC: '1' }, encoding: 'utf8', timeout: 60000
+  const result = spawnSync(process.execPath, ['bin/scranton.js', command, '--trusted-host', ...(command === 'run' ? [scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI'] : ['--scenario', scenario, '--delay', '0']), '--config', f.file, '--hive', f.hive, '--workspace', f.workspace, '--on-breaker', 'abort', '--conversation', '--ascii'], {
+    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(f.dir, 'iso'), SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario, SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1' }, encoding: 'utf8', timeout: 60000
   });
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
   return { result, events: eventsAt(f.hive) };
@@ -50,7 +52,7 @@ test('staged Michael system prompt overrides plan-only rules for builtin and cus
     const f = fixture(t); f.config.execution.conversation = conversation;
     if (custom) { fs.mkdirSync(f.config.promptsDir, { recursive: true }); fs.writeFileSync(path.join(f.config.promptsDir, 'michael.md'), 'Always reply with a plan. [PLAN_READY]'); }
     const original = resolvePrompt(f.config, 'michael').text;
-    const o = new Orchestrator({ config: f.config, onBreaker: 'abort', extraEnv: { FAKE_PI_SCENARIO: 'question', FAKE_PI_DELAY_MS: '0' } });
+    const o = new Orchestrator({ config: f.config, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'question', SCRANTON_FAKE_DELAY_MS: '0' } });
     await o.run('How does the Team orchestrator handle a request?');
     const staged = fs.readFileSync(path.join(f.hive, 'michael/system.md'), 'utf8');
     if (conversation) {
@@ -72,11 +74,11 @@ test('inline trailing answer/report keywords are removed but interior keywords s
     const keyword = report ? 'REPORT_READY' : 'ANSWER_READY';
     const o = new Orchestrator({ config: f.config, onBreaker: 'abort', startRunner: (options) => {
       const isReport = body(options.hive.inboxPath('michael')).includes('Write the closing report');
-      if (options.agentId !== 'michael' || report && !isReport) return startPi(options);
+      if (options.agentId !== 'michael' || report && !isReport) return startAgent(options);
       const result = synthetic(`Keep [ANSWER_READY] inside. Done. [${keyword}]`, keyword);
       options.onAssistantMessage(result.text, false);
       return { done: Promise.resolve(result), kill: async () => {} };
-    }, extraEnv: { FAKE_PI_DELAY_MS: '0' } });
+    }, extraEnv: { SCRANTON_FAKE_DELAY_MS: '0' } });
     await o.run('Build');
     assert.equal(eventsAt(f.hive).at(-2).text, 'Keep [ANSWER_READY] inside. Done.', 'reply strips inline trailing keyword only');
   }
@@ -87,13 +89,13 @@ test('failed report text and pending-only failed launches remain final messages 
     const f = fixture(t); let o;
     o = new Orchestrator({ config: f.config, onBreaker: 'abort', startRunner: (options) => {
       const isReport = options.agentId === 'michael' && body(options.hive.inboxPath('michael')).includes('Write the closing report');
-      if (!isReport) return startPi(options);
+      if (!isReport) return startAgent(options);
       options.onAssistantMessage(`Retained ${failure} text.`, false);
       if (failure === 'stopped') o.abort('Stopped reporting');
       const result = synthetic(failure === 'pending' ? '' : `Retained ${failure} text.`, failure === 'stopped' ? 'REPORT_READY' : null, failure === 'missing' || failure === 'stopped');
       if (failure === 'crash') result.failure = { kind: 'exit', message: 'Report process exited' };
       return { done: Promise.resolve(result), kill: async () => {} };
-    }, extraEnv: { FAKE_PI_DELAY_MS: '0' } });
+    }, extraEnv: { SCRANTON_FAKE_DELAY_MS: '0' } });
     const result = await o.run('Build'); const events = eventsAt(f.hive);
     assert.equal(result.status, 'success'); assert.equal(events.at(-2).kind, 'summary');
     const final = events.find(e => e.type === 'agent_message' && e.text === `Retained ${failure} text.`);
@@ -114,10 +116,10 @@ test('pending-only failed planning launch is retained, not silently dropped', as
   assert.equal(eventsAt(f.hive).find(e => e.type === 'agent_message' && e.final)?.text, 'Partial planning text.', 'pending planning text survives failed empty result');
 });
 
-for (const transport of ['json', 'rpc']) for (const scenario of ['question', 'happy']) test(`${transport}/${scenario}: real subprocess exercises supported isolation through answer/report and cleanup`, (t) => {
-  const worktree = transport === 'rpc';
-  const f = fixture(t, { transport, worktree });
-  assert.equal(f.config.execution.isolation, worktree ? 'worktree' : 'shared', 'RPC exercises engine default; JSON requires shared isolation');
+for (const isolation of ['shared', 'worktree']) for (const scenario of ['question', 'happy']) test(`${isolation}/${scenario}: real subprocess exercises supported isolation through answer/report and cleanup`, (t) => {
+  const worktree = isolation === 'worktree';
+  const f = fixture(t, { worktree });
+  assert.equal(f.config.execution.isolation, worktree ? 'worktree' : 'shared', 'both supported isolation modes are exercised');
   const before = fs.readFileSync(path.join(f.workspace, 'user.txt'));
   const { events } = runCli(f, scenario);
   assert.equal(events[0].execution.isolation, worktree ? 'worktree' : 'shared');
@@ -136,10 +138,10 @@ for (const transport of ['json', 'rpc']) for (const scenario of ['question', 'ha
   assert.equal(fs.existsSync(path.join(f.workspace, '.git')), false, 'shadow Git never touches target');
 });
 
-test('RPC fixture follows happy milestones rather than answering every Michael turn', (t) => {
-  const f = fixture(t, { transport: 'rpc', command: 'fake-pi-rpc.js' });
+test('worktree scripted fixture follows happy milestones rather than answering every Michael turn', (t) => {
+  const f = fixture(t, { worktree: true });
   const { events } = runCli(f, 'happy');
-  assert.equal(events.at(-2).kind, 'report', 'RPC happy scenario plans and reports');
+  assert.equal(events.at(-2).kind, 'report', 'worktree happy scenario plans and reports');
   assert.equal(events.filter(e => e.type === 'milestone_finished').length, 3);
 });
 
@@ -152,7 +154,7 @@ test('question demo asks a matching question and scripted messages describe the 
   for (let i = 0; i < happy.events.length; i++) {
     const e = happy.events[i]; if (e.type !== 'agent_tool') continue;
     const previous = happy.events.slice(0, i).findLast(m => m.type === 'agent_message');
-    const expected = e.tool === 'ls' ? 'Listing ..' : e.tool === 'read' ? 'Reading todo.js.' : e.tool === 'write' ? `Writing ${e.detail}.` : 'Running the tests.';
+    const expected = `Using ${e.tool}.`;
     assert.equal(previous?.text, expected, 'intermediate message names scripted tool intent');
   }
 });

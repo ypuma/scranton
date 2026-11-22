@@ -21,7 +21,7 @@ async function environment(t) {
     cwd: profile, encoding: 'utf8', timeout: 15000, windowsHide: true,
     env: { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile,
       APPDATA: profile, LOCALAPPDATA: profile, TEMP: profile, TMP: profile, TMPDIR: profile,
-      PI_CODING_AGENT_DIR: path.join(profile, 'pi') }
+      SCRANTON_CREDENTIALS_DIR: path.join(profile, 'credentials') }
   };
 }
 

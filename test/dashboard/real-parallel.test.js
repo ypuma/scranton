@@ -1,9 +1,9 @@
 // The terminal dashboard on what the real orchestrator and its state.json reducer produce in parallel RPC runs
-// (scripted pi in project scratch): role boxes with role-only statuses, lanes, messages and worktree metadata.
+// (scripted LLM in project scratch): role boxes with role-only statuses, lanes, messages and worktree metadata.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { scratchDir, createRun, capture, until, spoolChat, readEvents, FAKE_PI } from '../visualizer/fixtures/real-orchestrator.js';
+import { scratchDir, createRun, capture, until, spoolChat, readEvents } from '../visualizer/fixtures/real-orchestrator.js';
 import { initialState, reduce } from '../../src/core/state.js';
 import { renderDashboard } from '../../src/dashboard/index.js';
 
@@ -21,7 +21,7 @@ before(async () => {
   {
     let calls = 0;
     const { orchestrator, hive } = createRun(scratch(), {
-      command: [process.execPath, FAKE_PI], env: { FAKE_PI_FAIL: 'exit1', FAKE_PI_FAIL_ROLE: 'michael' },
+      env: { SCRANTON_FAKE_FAIL: 'exit1', SCRANTON_FAKE_FAIL_ROLE: 'michael' },
       hitl: async () => (++calls === 1 ? { decision: 'retry' } : { decision: 'skip' }),
     });
     runs.planner = { result: await orchestrator.run('Build a tiny todo CLI'), events: readEvents(hive) };

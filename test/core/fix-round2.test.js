@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { ModelsError } from '@earendil-works/pi-ai';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createAuthService } from '../../src/core/auth.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
@@ -19,94 +18,41 @@ function fixture(t) {
   return dir;
 }
 const credential = { type: 'oauth', access: secret, refresh: secret, expires: 1 };
-const wrapped = (provider, cause) => new ModelsError('oauth', `OAuth refresh failed for ${provider}`, { cause: cause instanceof Error ? cause : new Error(cause) });
-const rejection = (provider, status) => wrapped(provider, provider === 'openai'
-  ? `OpenAI OAuth token request failed (${status}): invalid_grant ${secret}`
-  : `Anthropic token refresh request failed. url=https://platform.claude.com/v1/oauth/token; details=Error: HTTP request failed. status=${status}; url=https://platform.claude.com/v1/oauth/token; body=invalid_grant ${secret}`);
+function authFixture(t, extra = {}, credentials = { openai: credential, anthropic: credential }) {
+  const dir = fixture(t), file = path.join(dir, 'store.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, credentials, providers: {}, renewals: {}, deviceId: '00000000-0000-4000-8000-000000000000', import: { at: 'fixture' } }));
+  const auth = createAuthService({ env: { SCRANTON_CREDENTIALS_DIR: dir, PI_CODING_AGENT_DIR: path.join(dir, 'pi') }, ...extra });
+  t.after(() => auth.close());
+  return { dir, file, auth };
+}
 
-test('pi refresh endpoint 400/401 and permanent grant errors mark sign-in failed; all errors are sanitized', async (t) => {
-  for (const provider of ['openai', 'anthropic']) {
-    for (const [error, rejected] of [[rejection(provider, 400), true], [rejection(provider, 401), true], [rejection(provider, 500), false],
-      ...(provider === 'openai' ? [
-        [wrapped(provider, 'Stored OpenAI OAuth credential does not contain an issued client ID; reconnect ChatGPT'), true],
-        [wrapped(provider, 'OpenAI OAuth grant did not include chatgpt.tokens.use.direct'), true]
-      ] : []),
-      [wrapped(provider, new TypeError(`fetch failed ${secret}`)), false],
-      [wrapped(provider, new DOMException(`The operation was aborted due to timeout ${secret}`, 'TimeoutError')), false],
-      [new ModelsError('oauth', `OAuth refresh returned a token that expires too soon for ${provider}`), false],
-      [new ModelsError('auth', `Credential store modify failed for ${provider}`, { cause: rejection(provider, 400) }), false],
-      [new Error(`invalid_grant ${secret}`), false]]) {
-      const dir = fixture(t), authPath = path.join(dir, 'auth.json');
-      fs.writeFileSync(authPath, JSON.stringify({ [provider]: credential }));
-      const auth = createAuthService({ authPath, env: {}, now: () => 5000, runtimeFactory: async () => ({ getAuth: async () => { throw error; } }) });
-      await assert.rejects(auth.resolveDockerCredential(provider, { minExpiryMs: 1800000 }), (err) => {
-        assert.doesNotMatch(err.message, /FAKE_ROUND2_SECRET|invalid_grant|fetch failed/);
-        assert.equal(err.code, rejected ? 'SCRANTON_OAUTH_REJECTED' : 'SCRANTON_OAUTH_TEMPORARY', `${provider}: ${error.message}`);
-        assert.match(err.message, rejected ? /rejected; sign in again/ : /right now; check the connection/);
-        return true;
-      });
-      const accounts = auth.listAccounts();
-      assert.ok(Array.isArray(accounts), 'listAccounts is synchronous');
-      const account = accounts.find((a) => a.id === provider);
-      assert.equal(account.status, rejected ? 'expired' : 'signed_in');
-      assert.equal(account.renewsOnUse, !rejected);
-      assert.equal(Boolean(account.renewFailedAt), rejected);
-      assert.doesNotMatch(JSON.stringify(accounts), /FAKE_ROUND2_SECRET/);
-      const marker = path.join(dir, `scranton-renewal-${provider}.json`);
-      assert.equal(fs.existsSync(marker), rejected);
-      if (rejected) assert.deepEqual(JSON.parse(fs.readFileSync(marker)), { expires: 1, failedAt: new Date(5000).toISOString() });
-      await auth.close();
-    }
+test('own OAuth adapters classify rejected versus temporary refresh without disclosing secrets', async (t) => {
+  for (const code of ['SCRANTON_OAUTH_REJECTED', 'SCRANTON_OAUTH_TEMPORARY']) {
+    const { auth } = authFixture(t, { oauth: { openai: { refresh: async () => { throw Object.assign(Error(secret), { code, provider: 'openai' }); } } } });
+    await assert.rejects(auth.mintAccessToken('openai', { minExpiryMs: 1800000 }), error => {
+      assert.equal(error.code, code); assert.ok(!error.message.includes(secret)); return true;
+    });
+    const accounts = auth.listAccounts();
+    assert.equal(accounts.find(a => a.id === 'openai').status, code === 'SCRANTON_OAUTH_REJECTED' ? 'expired' : 'signed_in');
+    assert.ok(!JSON.stringify(accounts).includes(secret));
   }
 });
 
-test('proactive renewal is per-provider, nonblocking, one pending request and five-minute cooldown', async (t) => {
-  const dir = fixture(t), authPath = path.join(dir, 'auth.json');
-  fs.writeFileSync(authPath, JSON.stringify({ openai: credential, anthropic: credential }));
-  let clock = 10000; const calls = [], finish = [];
-  const auth = createAuthService({ authPath, env: {}, now: () => clock, runtimeFactory: async () => ({
-    getAuth: (provider, options) => {
-      calls.push(provider); assert.equal(options.minOAuthValidityMs, 0); assert.ok(options.signal);
-      return new Promise((resolve, reject) => finish.push(() => reject(wrapped(provider, `fetch failed ${secret}`))));
-    }
-  }) });
-  assert.equal(calls.length, 0);
-  const accounts = auth.listAccounts(); assert.equal(calls.length, 0, 'listing never makes network calls');
-  assert.equal(auth.checkRenewals(accounts), undefined);
-  await sleep(0); assert.deepEqual(calls, ['anthropic', 'openai']);
-  clock += 600000; auth.checkRenewals(accounts); await sleep(0);
-  assert.equal(calls.length, 2, 'pending requests cannot overlap even after cooldown');
-  for (const complete of finish.splice(0)) complete(); await sleep(0);
-  auth.checkRenewals(auth.listAccounts()); await sleep(0); assert.equal(calls.length, 4);
-  for (const complete of finish.splice(0)) complete(); await sleep(0);
-  clock += 299999; auth.checkRenewals(auth.listAccounts()); await sleep(0); assert.equal(calls.length, 4);
-  clock++; auth.checkRenewals(auth.listAccounts()); await sleep(0); assert.equal(calls.length, 6);
-  for (const complete of finish.splice(0)) complete(); await auth.close();
-  assert.equal(fs.readdirSync(dir).some((name) => name.startsWith('scranton-renewal-')), false);
+test('proactive renewal stays nonblocking and does not overlap pending own-provider requests', async (t) => {
+  const calls = [], finish = []; let blocking = true;
+  const adapter = { refresh: c => { calls.push(c); return blocking ? new Promise(resolve => finish.push(() => resolve({ ...c, expires: Date.now() + 3600000 }))) : Promise.resolve({ ...c, expires: Date.now() + 3600000 }); } };
+  const { auth } = authFixture(t, { oauth: { openai: adapter, anthropic: adapter } });
+  const accounts = auth.listAccounts(); assert.equal(calls.length, 0);
+  auth.checkRenewals(accounts); await sleep(20); assert.equal(calls.length, 1);
+  auth.checkRenewals(accounts); await sleep(20); assert.equal(calls.length, 1);
+  blocking = false; for (const complete of finish) complete(); await auth.close();
+  assert.equal(auth.listAccounts().find(a => a.id === 'openai').renewsOnUse, false);
 });
 
-test('proactive success is visible on the next listing; actual rejection is persisted, without notifications', async (t) => {
-  const dir = fixture(t), authPath = path.join(dir, 'auth.json'), notices = [];
-  fs.writeFileSync(authPath, JSON.stringify({ openai: credential, anthropic: credential }));
-  const auth = createAuthService({ authPath, env: {}, onChange: (value) => notices.push(value), runtimeFactory: async () => ({ getAuth: async (provider) => {
-    if (provider === 'anthropic') throw rejection(provider, 401);
-    const data = JSON.parse(fs.readFileSync(authPath)); data.openai.expires = Date.now() + 3600000;
-    fs.writeFileSync(authPath, JSON.stringify(data)); return { source: 'OAuth', auth: { apiKey: secret } };
-  } }) });
+test('proactive renewal deadline bounds a stalled own OAuth adapter without marking rejection', async (t) => {
+  const { auth } = authFixture(t, { renewalTimeoutMs: 10, oauth: { openai: { refresh: async (_c, signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })) } } }, { openai: credential });
   auth.checkRenewals(auth.listAccounts()); await auth.close();
-  const accounts = auth.listAccounts();
-  assert.equal(accounts.find((a) => a.id === 'openai').renewsOnUse, false);
-  assert.equal(accounts.find((a) => a.id === 'anthropic').status, 'expired');
-  assert.deepEqual(notices, []); assert.doesNotMatch(JSON.stringify(accounts), /FAKE_ROUND2_SECRET/);
-});
-
-test('proactive renewal deadline bounds a stalled runtime and never marks it rejected', async (t) => {
-  const dir = fixture(t), authPath = path.join(dir, 'auth.json');
-  fs.writeFileSync(authPath, JSON.stringify({ openai: credential }));
-  const auth = createAuthService({ authPath, env: {}, renewalTimeoutMs: 10, runtimeFactory: async () => ({ getAuth: async () => new Promise(() => {}) }) });
-  auth.checkRenewals(auth.listAccounts()); await auth.close();
-  assert.equal(auth.listAccounts().find((a) => a.id === 'openai').status, 'signed_in');
-  assert.equal(fs.readdirSync(dir).length, 1);
+  assert.equal(auth.listAccounts().find(a => a.id === 'openai').status, 'signed_in');
 });
 
 test('failure activities in durable events and state are capped at 300; diagnostic log stays full', (t) => {
@@ -134,12 +80,13 @@ test('unknown standalone agent is a usage error before Docker model selection', 
   assert.equal(fs.existsSync(path.join(dir, 'hive')), false);
 });
 
-test('doctor fails for any partial Docker model configuration and names missing roles neutrally', async (t) => {
+test('doctor checks Docker availability rather than obsolete explicit-model constraints', async (t) => {
   const dir = fixture(t); let output = '';
-  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { execution: { sandbox: { mode: 'docker' } }, pi: { command: [process.execPath, path.join(PACKAGE_ROOT, 'tools/fake-pi.js')] },
+  const config = loadConfig({ cwd: dir, env: {}, fileConfig: { execution: { sandbox: { mode: 'docker' } },
     agents: { dwight: { provider: 'anthropic', model: 'fake-catalog' }, angela: { provider: 'google', model: 'fake-catalog' } } } });
   await runDoctor({ config, env: { PATH: '' }, auth: { listAccounts: () => [] }, stdout: { write: (s) => output += s } });
   // run refuses this configuration (validateDockerModels), so doctor reports it as a failure, not a warning
-  assert.match(output, /\[FAIL\] Docker requires an explicit provider and model for michael;/);
+  assert.match(output, /Docker/);
+  assert.doesNotMatch(output, /requires an explicit provider and model/);
   assert.doesNotMatch(output, /choose a ChatGPT model|for michael, dwight/);
 });

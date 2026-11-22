@@ -159,7 +159,7 @@ test('a field-named 400 from the server is shown next to the row it names, count
 });
 
 // finding 6 (reverting the note text in fillModels fails this)
-test('models: no API-key requirement is claimed; pi models are marked and unsupported ones keep their reason', async (t) => {
+test('models: no API-key requirement is claimed; bridge models are marked via Scranton and unsupported ones keep their reason', async (t) => {
   const h = harness({ info: { ...INFO, models: [INFO.models[1]] } });
   done(t, h);
   await h.open();
@@ -171,7 +171,7 @@ test('models: no API-key requirement is claimed; pi models are marked and unsupp
   const pi = harness();
   done(t, pi);
   await pi.open();
-  assert.equal(pi.$('pf-model-planner').childNodes[1].label, 'Anthropic · via pi');
+  assert.equal(pi.$('pf-model-planner').childNodes[1].label, 'Anthropic · via Scranton');
 });
 
 // finding 7 (reverting `e.fDemoRow.hidden = none;` in control-panel.js fillScenarios fails this)

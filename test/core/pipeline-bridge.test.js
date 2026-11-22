@@ -2,66 +2,44 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { bridgeFixture, invokeBridge } from './bridges-fixture.js';
+import { runPipelineCompletion } from '../../tools/pipeline-complete.js';
+import { createScriptedProvider } from '../../src/core/llm/index.js';
 
-const helper = path.resolve('tools/pipeline-pi-complete.js');
-const base = path.resolve('.scratch/pipeline/lane-b/core');
-const secret = 'private-prompt-do-not-print';
-const fake = `import fs from 'node:fs';
-const argv = process.argv.slice(2);
-fs.writeFileSync(process.env.BRIDGE_RECORD, JSON.stringify({argv, cwd: process.cwd(), files: fs.readdirSync('.'), env: Object.keys(process.env), system: fs.readFileSync(argv[argv.indexOf('--append-system-prompt')+1], 'utf8'), user: fs.readFileSync(argv.find(a=>a.startsWith('@')).slice(1), 'utf8')}));
-const mode = process.env.BRIDGE_MODE;
-if (mode === 'exit') { console.error('private-prompt-do-not-print'); process.exit(1); }
-if (mode === 'transient') { console.error('429 rate limit private-prompt-do-not-print'); process.exit(1); }
-if (mode === 'hang') await new Promise(() => setInterval(() => {}, 1000));
-if (mode === 'tool') { console.log(JSON.stringify({type:'tool_execution_start'})); console.error('429 rate limit'); }
-if (mode === 'empty') process.exit(0);
-const message = {role:'assistant', content:[{type:'text',text:'{"ok":true}'}], stopReason: mode === 'stoperror' ? 'error' : 'stop', errorMessage: mode === 'stoperror' ? '503 unavailable' : undefined};
-if (mode !== 'no_usage') message.usage = mode === 'zero_usage' ? {input:0,output:0,cacheRead:0,cacheWrite:0} : mode === 'cache_usage' ? {input:11,output:17,cacheRead:23,cacheWrite:29,cacheWrite1h:7} : {input:11,output:17};
-console.log(JSON.stringify({type:'message_end',message}));
-console.log(JSON.stringify({type:'agent_settled',aborted:false}));
-`;
-
-async function invoke(t, mode, selection = {}) {
-  fs.mkdirSync(base, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(base, 'call-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const pi = path.join(dir, 'fake.mjs'), request = path.join(dir, 'request.json'), response = path.join(dir, 'response.json'), record = path.join(dir, 'record.json');
-  fs.writeFileSync(pi, fake);
-  fs.writeFileSync(request, JSON.stringify({ v: 1, role: 'planner', model: 'test', system: secret, user: secret, max_output_tokens: 8192, temperature: 0 }));
-  fs.writeFileSync(response, 'stale response must be removed');
-  const child = spawn(process.execPath, [helper, '--provider', selection.provider ?? 'anthropic', '--model', selection.model ?? 'test', '--thinking', selection.thinking ?? 'low', request, response], { env: { ...process.env, SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, pi]), SCRANTON_PIPELINE_KEY_PLANNER: 'sensitive-key', SCRANTON_PIPELINE_PI_TIMEOUT_MS: mode === 'hang' ? '1000' : '10000', BRIDGE_MODE: mode, BRIDGE_RECORD: record }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', stderr = '';
-  child.stdout.on('data', (d) => { stdout += d; }); child.stderr.on('data', (d) => { stderr += d; });
-  const code = await new Promise((resolve) => child.on('close', resolve));
-  assert.equal(stdout, ''); assert.equal(stderr, '');
-  if (Object.keys(selection).length) { assert.equal(fs.existsSync(record), false); assert.equal(fs.readdirSync(dir).some((f) => f.startsWith('pi-')), false); return { code }; }
-  const seen = JSON.parse(fs.readFileSync(record));
-  assert.equal(fs.existsSync(seen.cwd), false);
-  assert.deepEqual(seen.files, []);
-  assert.equal(seen.system, secret); assert.equal(seen.user, secret); assert.equal(seen.argv.some((a) => a.includes(secret)), false);
-  assert.equal(seen.env.some((k) => k.startsWith('SCRANTON_PIPELINE_KEY_')), false);
-  assert.equal(fs.readdirSync(dir).some((f) => f.startsWith('pi-')), false);
-  return { code, seen, response };
-}
-
-for (const mode of ['ok', 'no_usage', 'zero_usage', 'cache_usage', 'exit', 'transient', 'stoperror', 'empty', 'hang', 'tool']) {
-  test(`Pipeline pi bridge: ${mode}, private prompt cleanup and silent output`, async (t) => {
-    const { code, seen, response } = await invoke(t, mode);
-    assert.equal(code, ['transient', 'stoperror', 'hang'].includes(mode) ? 75 : ['exit', 'empty', 'tool'].includes(mode) ? 1 : 0);
-    const flags = ['--mode', 'json', '-p', '--no-tools', '--no-extensions', '--no-mcp', '--no-skills', '--no-context-files', '--no-prompt-templates', '--no-themes', '--no-session', '--no-approve', '--provider', 'anthropic', '--model', 'test', '--thinking', 'low'];
-    assert.deepEqual(seen.argv.slice(0, flags.length), flags);
-    assert.equal(seen.argv[flags.length], '--system-prompt');
-    if (code === 0) assert.deepEqual(JSON.parse(fs.readFileSync(response)), { text: '{"ok":true}', usage: ['no_usage', 'zero_usage'].includes(mode) ? null : { input_tokens: mode === 'cache_usage' ? 63 : 11, output_tokens: 17 } });
-    else assert.equal(fs.existsSync(response), false);
+for (const helper of ['tools/pipeline-complete.js']) {
+  test(helper + ' preserves private file protocol and usage', async (t) => {
+    const f = await bridgeFixture(t), request = path.join(f.dir, 'request.json'), response = path.join(f.dir, 'response.json');
+    fs.writeFileSync(request, JSON.stringify({ v: 1, role: 'planner', model: 'test', system: 'private system', user: 'private user', max_output_tokens: 256, temperature: 0 }));
+    const result = await invokeBridge(helper, ['--provider', 'offline', '--model', 'test', '--thinking', 'off', request, response], f.env);
+    assert.deepEqual(result, { code: 0, stdout: '', stderr: '' });
+    assert.deepEqual(JSON.parse(fs.readFileSync(response)), { text: 'completion', usage: { input_tokens: 11, output_tokens: 4 } });
+    assert.equal(f.calls.length, 1); assert.equal(f.calls[0].tools, undefined);
+    assert.equal(f.calls[0].max_tokens, 256); assert.equal(f.calls[0].temperature, 0);
+    assert.deepEqual(f.calls[0].messages, [{ role: 'system', content: 'private system' }, { role: 'user', content: 'private user' }]);
   });
 }
-
-for (const selection of [{ provider: '--tools' }, { model: '--extensions' }, { model: 'test\n--tools' }, { thinking: '--tools' }, { thinking: 'bogus' }]) {
-  test(`Pipeline pi bridge refuses option injection ${JSON.stringify(selection)}`, async (t) => {
-    assert.equal((await invoke(t, 'ok', selection)).code, 1);
-  });
-}
+for (const status of [400, 401, 403, 408, 429, 500, 503]) test('Pipeline HTTP exit mapping ' + status, async (t) => {
+  const f = await bridgeFixture(t, (_body, res) => { res.writeHead(status); res.end('private diagnostic'); });
+  const request = path.join(f.dir, 'request.json'), response = path.join(f.dir, 'response.json');
+  fs.writeFileSync(request, JSON.stringify({ v: 1, system: 'secret', user: 'secret', max_output_tokens: 256, temperature: 0 }));
+  fs.writeFileSync(response, 'stale');
+  const result = await invokeBridge('tools/pipeline-complete.js', ['--provider', 'offline', '--model', 'test', request, response], f.env);
+  assert.deepEqual(result, { code: [408, 429, 500, 503].includes(status) ? 75 : 1, stdout: '', stderr: '' });
+  assert.equal(fs.existsSync(response), false);
+});
+for (const code of ['SCRANTON_OAUTH_TEMPORARY', 'SCRANTON_CREDENTIAL_LOCKED', 'ECONNRESET', 'SCRANTON_AUTH_MISSING', 'SCRANTON_CREDENTIAL_INVALID']) test('Pipeline credential classification ' + code, async (t) => {
+  const f = await bridgeFixture(t), request = path.join(f.dir, 'request.json'), response = path.join(f.dir, 'response.json');
+  fs.writeFileSync(request, JSON.stringify({ v: 1, system: '', user: 'secret', max_output_tokens: 256, temperature: 0 }));
+  const result = await runPipelineCompletion(['--provider', 'offline', '--model', 'test', request, response], { env: {}, clientFactory: async () => ({ model: {}, llm: createScriptedProvider([{ error: { code } }]), close() {} }) });
+  assert.equal(result, ['SCRANTON_AUTH_MISSING', 'SCRANTON_CREDENTIAL_INVALID'].includes(code) ? 1 : 75);
+});
+test('Pipeline refuses tool attempts even alongside a transient failure', async (t) => {
+  const f = await bridgeFixture(t), request = path.join(f.dir, 'request.json'), response = path.join(f.dir, 'response.json');
+  fs.writeFileSync(request, JSON.stringify({ v: 1, system: '', user: 'secret', max_output_tokens: 256, temperature: 0 }));
+  const llm = createScriptedProvider([{ toolCalls: [{ name: 'bash', arguments: {} }], error: { status: 429 } }]);
+  assert.equal(await runPipelineCompletion(['--provider', 'offline', '--model', 'test', request, response], { env: {}, clientFactory: async () => ({ model: {}, llm, close() {} }) }), 1);
+  assert.deepEqual(llm.calls[0].context.tools, []);
+});
 
 // Status fixtures exercise the bridge without starting an engine or model.
 test('Pipeline conversation list bounds replies and inspect preserves reply/event envelopes', async (t) => {
@@ -98,4 +76,42 @@ test('Pipeline conversation list bounds replies and inspect preserves reply/even
     fs.writeFileSync(path.join(runs, 'answer01/status.json'), JSON.stringify(status('answer01', short)));
     assert.deepEqual(supervisor.list(chat).runs[0].reply, { kind: 'result', text: 'Done', truncated, citations: [] });
   }
+});
+
+for (const mode of ['timeout', 'network', 'tool', 'legacy-timeout', 'legacy-command']) test('own completion transport lifecycle: ' + mode, async (t) => {
+  const f = await bridgeFixture(t, (_body, res) => {
+    if (mode === 'timeout') return;
+    if (mode === 'network') return res.destroy();
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.end('data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call', function: { name: 'bash', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }) + '\n\ndata: [DONE]\n\n');
+  });
+  const request = path.join(f.dir, 'request.json'), response = path.join(f.dir, 'response.json');
+  fs.writeFileSync(request, JSON.stringify({ v: 1, system: 'secret', user: 'secret', max_output_tokens: 256, temperature: 0 }));
+  fs.writeFileSync(response, 'stale');
+  f.env.SCRANTON_PIPELINE_COMPLETE_TIMEOUT_MS = '300';
+  if (mode === 'legacy-timeout') f.env.SCRANTON_PIPELINE_PI_TIMEOUT_MS = '300';
+  if (mode === 'legacy-command') f.env.SCRANTON_PI_COMMAND = 'pi';
+  const started = Date.now();
+  const result = await invokeBridge('tools/pipeline-complete.js', ['--provider', 'offline', '--model', 'test', request, response], f.env);
+  assert.equal(result.code, ['timeout', 'network'].includes(mode) ? 75 : 1);
+  assert.equal(result.stdout, '');
+  if (mode.startsWith('legacy-')) assert.match(result.stderr, /no longer supported/);
+  else assert.equal(result.stderr, '');
+  assert.equal(fs.existsSync(response), false);
+  assert.ok(Date.now() - started < 10000);
+});
+
+test('Pipeline capability emits bridge for host completions and direct for compatible API keys', async t => {
+  const { createPipelineSupervisor } = await import('../../src/core/pipeline-supervisor.js');
+  const f = await bridgeFixture(t);
+  const supervisor = createPipelineSupervisor({ dataDir: f.dir, env: {
+    SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]),
+  }, auth: { store: { read: () => ({ providers: {} }) }, listAccounts: () => [
+    { id: 'anthropic', label: 'Subscription', kind: 'oauth', status: 'signed_in' },
+    { id: 'openai', label: 'API', kind: 'api_key', status: 'signed_in' },
+  ] } });
+  t.after(() => supervisor.close());
+  const result = await supervisor.capability();
+  assert.equal(result.models.find(p => p.provider === 'anthropic').via, 'bridge');
+  assert.equal(result.models.find(p => p.provider === 'openai').via, 'direct');
 });

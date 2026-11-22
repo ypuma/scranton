@@ -24,7 +24,8 @@ export const LAYER_TITLE = {
 };
 export const ENGINE_LABEL = { team: 'Team', pipeline: 'Pipeline' };
 export const UNREADABLE = 'The server sent a context answer this page cannot read.';
-export const PI_DEFAULT = 'pi default';
+// the model a role without an agent default runs on, as accounts.js AUTOMATIC names it
+export const DEFAULT_MODEL_LABEL = 'Automatic';
 
 // the transport ceiling of a planner pack: exact: true promises the injected text, so it is never cut here
 const TEXT_MAX = 800000;
@@ -112,7 +113,7 @@ function ruleOf(v, ranges = DEFAULTS) {
   return r.value >= lo && r.value <= hi ? { mode: r.mode, value: r.value } : null;
 }
 
-// a recipient: { id: string | null (pi default), window, known }
+// a recipient: { id: string | null (Automatic), window, known }
 function recipientOf(v) {
   const m = obj(v) ?? {};
   const ok = Number.isSafeInteger(m.window) && m.window > 0;
@@ -230,7 +231,7 @@ export function parseChatContext(doc) {
 
 // ------------------------------------------------------------ what is shown
 
-export const modelText = (id) => (id ? stripBidi(id) : PI_DEFAULT);
+export const modelText = (id) => (id ? stripBidi(id) : DEFAULT_MODEL_LABEL);
 
 // -> 'Context: 5 turns · 2 other chats · notes · ≈6.2k tokens (3.1%)', '' for no document; the percentage is of
 // the recipient's window. stale: the last read failed, this is older

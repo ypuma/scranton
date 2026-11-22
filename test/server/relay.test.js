@@ -1,4 +1,5 @@
 import './docker-model-env.js';
+import './runtime-env.js';
 import '../core/isolation-test-root.js';
 import assert from 'node:assert/strict';
 import http from 'node:http';

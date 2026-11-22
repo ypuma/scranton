@@ -105,3 +105,13 @@ test('Pipeline bundled executable cannot escape engine-runtime through a directo
   fs.symlinkSync(path.join(root, 'outside'), path.join(root, 'engine-runtime/python'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => resolvePipelineCommand({ root, env: {}, platform: 'win32', arch: 'x64' }), /outside engine-runtime/);
 });
+
+test('Pipeline resume binds completion to this installation, overriding stale environment paths', async (t) => {
+  const root = fixture(t), script = put(root, 'completion-env.cjs', 'console.log(JSON.stringify(JSON.parse(process.env.SCRANTON_PIPELINE_COMPLETION_COMMAND)));');
+  const result = await execPipeline({ argv: [process.execPath, script] }, ['resume', '--run-dir', root], {
+    env: { ...process.env, SCRANTON_PIPELINE_COMPLETION_COMMAND: JSON.stringify(['missing-node', '/old/tools/pipeline-pi-complete.js']) }
+  });
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.value, [process.execPath, path.resolve('tools/pipeline-complete.js')]);
+  for (const file of result.value) assert.ok(fs.statSync(file).isFile());
+});

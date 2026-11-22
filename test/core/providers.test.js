@@ -7,45 +7,28 @@ import { createProviderStore, discoverModels, validateBaseUrl } from '../../src/
 
 const KEY = 'FAKE_DISCOVERY_KEY_NEVER_ECHO';
 function fixture(t) {
-  const root = path.resolve('.scratch/auth-ext-backend'); fs.mkdirSync(root, { recursive: true });
+  const root = path.resolve('.scratch/auth-port/providers'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'providers-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { dir, store: createProviderStore(dir), file: path.join(dir, 'models.json') };
+  return { dir, store: createProviderStore(dir), file: path.join(dir, 'store.json') };
 }
 const definition = (id = 'example') => ({ id, label: 'Example', baseUrl: 'https://example.test/v1', api: 'openai-completions', models: [{ id: 'model-a' }] });
 
-test('models merge preserves foreign entries, formats JSON, backs up once and serializes concurrent writers', async (t) => {
-  const { dir, file, store } = fixture(t);
-  const original = '{"providers":{"foreign":{"baseUrl":"https://foreign.test","apiKey":"$FOREIGN","models":[]}},"$schema":"schema"}\n';
-  fs.writeFileSync(file, original);
+test('own provider store serializes writers and preserves other definitions', async (t) => {
+  const {file, store, dir} = fixture(t);
   await Promise.all([store.add(definition('first')), createProviderStore(dir).add(definition('second'))]);
-  const data = JSON.parse(fs.readFileSync(file));
-  assert.deepEqual(data.providers.foreign, JSON.parse(original).providers.foreign);
-  assert.deepEqual(Object.keys(data.providers).sort(), ['first', 'foreign', 'second']);
-  assert.equal(fs.readFileSync(file + '.scranton-bak', 'utf8'), original);
-  assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(data, null, 2) + '\n');
-  await store.remove('first');
-  assert.equal(fs.readFileSync(file + '.scranton-bak', 'utf8'), original);
-  assert.equal(store.list().length, 1);
-  await assert.rejects(store.remove('foreign'), { status: 409 });
-  await assert.rejects(store.add(definition('foreign')), { status: 409 });
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file)).providers).sort(), ['first', 'second']);
+  await store.remove('first'); assert.equal(store.list()[0].id, 'second');
   const before = fs.readFileSync(file);
-  await assert.rejects(store.remove('not-managed'), { status: 409 });
+  await assert.rejects(store.add(definition('second')), {status:409});
+  await assert.rejects(store.remove('foreign'), {status:409});
   assert.deepEqual(fs.readFileSync(file), before);
 });
-
-test('corrupt models JSON and externally modified managed entries are never overwritten', async (t) => {
-  const { file, store } = fixture(t);
-  fs.writeFileSync(file, '{corrupt');
-  await assert.rejects(store.add(definition()), { status: 409 });
-  assert.equal(fs.readFileSync(file, 'utf8'), '{corrupt');
-  assert.equal(fs.existsSync(file + '.scranton-bak'), false);
-  fs.writeFileSync(file, '{"providers":{}}'); await store.add(definition());
-  const changed = JSON.parse(fs.readFileSync(file)); changed.providers.example.headers = { 'foreign-header': 'keep' };
-  fs.writeFileSync(file, JSON.stringify(changed));
-  await assert.rejects(store.remove('example'), { status: 409 });
-  assert.deepEqual(JSON.parse(fs.readFileSync(file)), changed);
-  assert.deepEqual(store.list(), []);
+test('corrupt own-store JSON is never overwritten and list exposes safe failure detail', async (t) => {
+  const {file, store} = fixture(t); fs.writeFileSync(file, '{corrupt');
+  await assert.rejects(store.add(definition()), {code:'SCRANTON_CREDENTIAL_STORE'});
+  assert.equal(fs.readFileSync(file, 'utf8'), '{corrupt'); assert.deepEqual(store.list(), []);
+  assert.match(store.getDetail(), /Scranton provider configuration/);
 });
 
 test('provider validation rejects builtins, metadata commands, malformed models and unsafe URLs', async (t) => {

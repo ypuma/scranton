@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { ConfigError, defaultTools, loadConfig, loadDotEnv, parseCommandSpec } from '../../src/core/config.js';
 import { tempDir } from './helpers.js';
 
-const base = { cwd: path.resolve('some', 'project'), hasBash: true };
+const base = { cwd: path.resolve('some', 'project'), platform: 'linux', hasBash: true };
 
 test('defaults', () => {
   const c = loadConfig({ ...base, env: {}, fileConfig: {} });
@@ -13,8 +13,9 @@ test('defaults', () => {
   assert.equal(c.agentTimeoutMinutes, 20);
   assert.equal(c.workspace, path.join(base.cwd, 'workspace'));
   assert.equal(c.hiveDir, path.join(base.cwd, 'hive'));
-  assert.equal(c.pi.command, null);
-  assert.equal(c.pi.minimalContext, true);
+  assert.equal(c.pi, undefined);
+  assert.equal(c.execution.sandbox.mode, 'scranton');
+  assert.equal(c.execution.sandbox.network, 'allow');
   assert.equal(c.agents.dwight.model, null);
   assert.ok(c.agents.michael.skill.endsWith(path.join('agents', 'michael', 'SKILL.md')));
 });
@@ -81,24 +82,24 @@ test('tools can be overridden; windows without bash falls back to powershell onl
   assert.ok(defaultTools('dwight', { platform: 'win32', hasBash: false }).includes('powershell'));
   assert.ok(!defaultTools('dwight', { platform: 'win32', hasBash: false }).includes('bash'));
   assert.ok(defaultTools('dwight', { platform: 'win32', hasBash: true }).includes('bash'));
-  const c = loadConfig({ ...base, platform: 'win32', hasBash: false, env: {}, fileConfig: { agents: { angela: { tools: 'read,bash' } } } });
+  const c = loadConfig({ ...base, platform: 'win32', hasBash: false, env: {}, fileConfig: { execution: {sandbox: {mode: 'host'}}, agents: { angela: { tools: 'read,bash' } } } });
   assert.deepEqual(c.agents.angela.tools, ['read', 'bash']);
   assert.ok(c.agents.dwight.tools.includes('powershell'));
 });
 
-test('pi command: env wins over file; JSON array or whitespace-separated string', () => {
-  assert.deepEqual(parseCommandSpec('["C:\\\\Program Files\\\\pi.exe","--x"]'), ['C:\\Program Files\\pi.exe', '--x']);
-  assert.deepEqual(parseCommandSpec('node  tools/fake-pi.js'), ['node', 'tools/fake-pi.js']);
-  assert.equal(parseCommandSpec('  '), null);
-  assert.throws(() => parseCommandSpec('[1,2]'), ConfigError);
-  assert.throws(() => parseCommandSpec('[oops'), ConfigError);
-  const c = loadConfig({ ...base, env: { SCRANTON_PI_COMMAND: 'env-pi' }, fileConfig: { pi: { command: ['file-pi'] } } });
-  assert.deepEqual(c.pi.command, ['env-pi']);
-  assert.equal(c.pi.commandSource, 'env');
-  const f = loadConfig({ ...base, env: {}, fileConfig: { pi: { command: ['file-pi'], extraArgs: ['--offline'] } } });
-  assert.deepEqual(f.pi.command, ['file-pi']);
-  assert.equal(f.pi.commandSource, 'config');
-  assert.deepEqual(f.pi.extraArgs, ['--offline']);
+test('legacy Pi keys and command env are rejected even when empty', () => {
+  for (const pi of [null, {}, {command: null}, {extraArgs: []}, {transport: 'rpc'}, {minimalContext: false}]) assert.throws(() => loadConfig({...base, env: {}, fileConfig: {pi}}), /key "pi" is no longer supported/);
+  for (const value of ['', 'node fake.js']) assert.throws(() => loadConfig({...base, env: {SCRANTON_PI_COMMAND: value}, fileConfig: {}}), /SCRANTON_PI_COMMAND is no longer supported/);
+  for (const id of ['michael', 'dwight', 'angela', 'unknown']) assert.throws(() => loadConfig({...base, env: {}, fileConfig: {agents: {[id]: {extraArgs: []}}}}), /extraArgs is no longer supported/);
+  assert.doesNotThrow(() => loadConfig({...base, env: {PI_CODING_AGENT_DIR: 'import-only'}, fileConfig: {}}));
+});
+
+test('network and approvals validate strictly', () => {
+  const load = fileConfig => loadConfig({...base, env: {}, fileConfig});
+  assert.equal(load({execution: {sandbox: {network: 'bridge'}}}).execution.sandbox.network, 'allow');
+  for (const network of [false, 'bad', 1]) assert.throws(() => load({execution: {sandbox: {network}}}), /network/);
+  for (const approvals of [{tools: ['unknown']}, {tools: 'write'}, {tools: [], timeoutSeconds: 0}, {tools: [], timeoutSeconds: '60'}]) assert.throws(() => load({approvals}), /approvals/);
+  assert.deepEqual(load({approvals: {tools: ['write']}}).approvals, {tools: ['write'], timeoutSeconds: 600});
 });
 
 test('reads scranton.config.json from cwd; relative paths resolve against the file', (t) => {
@@ -146,14 +147,82 @@ test('registry data and maxConcurrentRuns follow flags, environment, file and de
   assert.throws(() => loadConfig({ ...base, env: { SCRANTON_MAX_RUNS: '0' }, fileConfig: {} }), /maxConcurrentRuns/);
 });
 
-test('sandbox defaults to host while explicit Docker and host acknowledgements remain enforced', () => {
+test('sandbox defaults to scranton while explicit Docker and host acknowledgements remain enforced', () => {
   const config = (fileConfig = {}, flags = {}) => loadConfig({ ...base, env: {}, fileConfig, flags });
-  assert.equal(config().execution.sandbox.mode, 'host');
+  assert.equal(config().execution.sandbox.mode, 'scranton');
   assert.equal(config().execution.isolation, 'worktree');
   assert.equal(config({ execution: { sandbox: { mode: 'docker' } } }).execution.sandbox.mode, 'docker');
   assert.equal(config({}, { sandbox: 'docker' }).execution.sandbox.mode, 'docker');
   assert.equal(config({ execution: { sandbox: { mode: 'docker' } } }, { trustedHost: true }).execution.sandbox.mode, 'host');
+  assert.throws(() => config({}, {trustedHost: true, sandbox: 'docker'}), /--trusted-host conflicts with --sandbox docker/);
   assert.throws(() => config({}, { sandbox: 'host' }), /requires --trusted-host/);
   assert.equal(config({}, { sandbox: 'host', trustedHost: true }).execution.sandbox.mode, 'host');
   assert.throws(() => config({ execution: { isolation: 'shared', maxParallel: 1 } }), /requires explicit trusted-host/);
+});
+
+for (const hasBash of [true, false]) test('Windows native sandbox defaults to PowerShell with Git Bash ' + hasBash, () => {
+  const config = loadConfig({...base, env: {}, platform: 'win32', hasBash, fileConfig: {}});
+  for (const id of ['dwight', 'angela', 'oscar', 'hank']) {
+    assert.deepEqual(config.agents[id].tools, defaultTools(id, {platform: 'win32', hasBash: false}));
+    assert.ok(config.agents[id].tools.includes('powershell'));
+    assert.ok(!config.agents[id].tools.includes('bash'));
+  }
+  assert.deepEqual(config.agents.michael.tools, ['read', 'grep', 'find', 'ls']);
+});
+test('explicit Windows native bash is refused with role and alternatives, never silently rewritten', () => {
+  for (const id of ['dwight', 'angela', 'oscar', 'hank']) {
+    const fileConfig = {agents: {[id]: {tools: ['read', 'bash']}}};
+    assert.throws(() => loadConfig({...base, env: {}, platform: 'win32', fileConfig}), new RegExp('agents.' + id + '.tools: bash.*powershell.*--sandbox docker.*--sandbox host'));
+    for (const mode of ['host', 'docker']) {
+      const c = loadConfig({...base, env: {}, platform: 'win32', fileConfig: {...fileConfig, execution: {sandbox: {mode}}}});
+      assert.deepEqual(c.agents[id].tools, ['read', 'bash']);
+    }
+  }
+  const c = loadConfig({...base, env: {}, platform: 'win32', fileConfig: {agents: {dwight: {tools: ['write', 'powershell']}, angela: {tools: ['read']}}}});
+  assert.deepEqual(c.agents.dwight.tools, ['write', 'powershell']); assert.deepEqual(c.agents.angela.tools, ['read']);
+});
+test('approval timeouts are bounded integer seconds, preventing timer overflow', () => {
+  for (const timeoutSeconds of [0, -1, 1.5, 86401, 2147483647, Infinity, NaN, '600']) assert.throws(() => loadConfig({...base, env: {}, fileConfig: {approvals: {tools: [], timeoutSeconds}}}), /integer from 1 to 86400/);
+  for (const timeoutSeconds of [1, 600, 86400]) assert.equal(loadConfig({...base, env: {}, fileConfig: {approvals: {tools: [], timeoutSeconds}}}).approvals.timeoutSeconds, timeoutSeconds);
+});
+
+for (const hasBash of [false, true]) test(`Docker defaults use container bash on Windows with host Bash ${hasBash}`, t => {
+  const config = loadConfig({cwd: tempDir(t), env: {}, platform: 'win32', hasBash, fileConfig: {execution: {sandbox: {mode: 'docker'}}}});
+  for (const id of ['dwight', 'angela', 'oscar', 'hank']) {
+    assert.ok(config.agents[id].tools.includes('bash'));
+    assert.ok(!config.agents[id].tools.includes('powershell'));
+  }
+});
+
+test('Docker rejects explicitly configured PowerShell with the role name', t => {
+  const cwd = tempDir(t);
+  for (const platform of ['win32', 'linux']) for (const id of ['michael', 'dwight', 'angela', 'oscar', 'hank']) {
+    assert.throws(() => loadConfig({cwd, env: {}, platform, hasBash: false, fileConfig: {
+      execution: {sandbox: {mode: 'docker'}}, agents: {[id]: {tools: ['read', 'powershell']}}
+    }}), new RegExp(`agents.${id}.tools: powershell.*Docker.*bash`));
+  }
+});
+
+test('Windows native network none fails at config load for file and flag options', t => {
+  const options = {cwd: tempDir(t), env: {}, hasBash: false, platform: 'win32'};
+  assert.throws(() => loadConfig({...options, fileConfig: {execution: {sandbox: {network: 'none'}}}}), /Windows Scranton sandbox cannot block network.*--sandbox docker/);
+  assert.throws(() => loadConfig({...options, fileConfig: {}, flags: {sandbox: 'scranton', sandboxNetwork: 'none'}}), /Windows Scranton sandbox cannot block network.*--sandbox docker/);
+  for (const mode of ['docker', 'host']) assert.doesNotThrow(() => loadConfig({...options, fileConfig: {execution: {sandbox: {mode, network: 'none'}}}}));
+  for (const platform of ['linux', 'darwin']) assert.doesNotThrow(() => loadConfig({...options, platform, fileConfig: {execution: {sandbox: {mode: 'scranton', network: 'none'}}}}));
+});
+
+test('generic command parsing no longer names a retired Pi setting', () => {
+  assert.throws(() => parseCommandSpec('[broken'), /command is not valid JSON/);
+});
+
+test('custom Docker gate defaults retain bash and PowerShell overrides are rejected', t => {
+  const cwd = tempDir(t), settingsDir = path.join(cwd, 'settings');
+  fs.mkdirSync(settingsDir);
+  fs.writeFileSync(path.join(settingsDir, 'agents.json'), JSON.stringify({v: 1, agents: {reviewer: {
+    name: 'Reviewer', title: 'Review', instruction: 'Review without edits.', tools: ['read', 'bash']
+  }}}));
+  const options = {cwd, env: {SCRANTON_SETTINGS_DIR: settingsDir}, platform: 'win32', hasBash: false};
+  const fileConfig = {execution: {sandbox: {mode: 'docker'}}};
+  assert.deepEqual(loadConfig({...options, fileConfig}).agents.reviewer.tools, ['read', 'bash']);
+  assert.throws(() => loadConfig({...options, fileConfig: {...fileConfig, agents: {reviewer: {tools: ['powershell']}}}}), /agents.reviewer.tools: powershell.*Docker.*bash/);
 });

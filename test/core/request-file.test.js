@@ -147,16 +147,15 @@ test('request-file cannot be combined with a positional and cannot be used on ot
 });
 
 // Regression anchor: cmdRun assigns value.request, leaving the request out of process argv.
-test('32768-character quoted request reaches the real orchestrator and fake pi intact through file transport', (t) => {
+test('32768-character quoted request reaches the orchestrator and planner inbox intact through file transport', (t) => {
   const f = fixture(t, false), request = '"\\'.repeat(16384);
   fs.writeFileSync(f.file, JSON.stringify({ v: 1, request }));
   const config = { workspace: path.join(f.dir, 'workspace'), hiveDir: path.join(f.dir, 'hive'),
-    execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } },
-    pi: { transport: 'json', command: [process.execPath, path.resolve('tools/fake-pi.js')] } };
+    execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } } };
   const configFile = path.join(f.dir, 'config.json'); fs.writeFileSync(configFile, JSON.stringify(config));
   const result = spawnSync(process.execPath, [path.resolve('bin/scranton.js'), 'run', '--request-file', f.file, '--config', configFile, '--on-breaker', 'abort'], {
     cwd: f.dir, encoding: 'utf8', timeout: 60000,
-    env: { ...process.env, SCRANTON_DATA: '', FAKE_PI_SCENARIO: 'happy', FAKE_PI_DELAY_MS: '0' }, maxBuffer: 2 * 1024 * 1024
+    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_FAKE_MODE: '1', SCRANTON_CREDENTIALS_DIR: path.join(f.dir, 'credentials'), PI_CODING_AGENT_DIR: path.join(f.dir, 'pi'), SCRANTON_FAKE_SCENARIO: 'happy', SCRANTON_FAKE_DELAY_MS: '0' }, maxBuffer: 2 * 1024 * 1024
   });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const events = fs.readFileSync(path.join(config.hiveDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

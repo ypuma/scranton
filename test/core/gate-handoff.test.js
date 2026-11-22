@@ -1,3 +1,4 @@
+import './helpers.js';
 import './isolation-test-root.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -93,7 +94,8 @@ function fixture(t) {
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'run-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const config = loadConfig({ cwd: dir, env: {}, flags: { gates: 'oscar+hank,angela', trustedHost: true }, fileConfig: { pi: { command: [process.execPath, path.resolve('tools/fake-pi.js')] } } });
+  const config = loadConfig({ cwd: dir, env: {}, flags: { gates: 'oscar+hank,angela', trustedHost: true }, fileConfig: {  } });
+  config.scripted = 'happy';
   return { dir, config };
 }
 
@@ -103,9 +105,9 @@ function inboxes(hiveDir, agent) {
   return [path.join(dir, 'inbox.md'), ...(fs.existsSync(archive) ? fs.readdirSync(archive).map((name) => path.join(archive, name)) : [])].map((file) => fs.readFileSync(file, 'utf8'));
 }
 
-test('CLI --gates delivers distinct handoffs and neutral CHANGES_REQUESTED report with fake pi', async (t) => {
+test('CLI --gates delivers distinct handoffs and neutral CHANGES_REQUESTED report with the scripted model', async (t) => {
   const { dir, config } = fixture(t);
-  await promisify(execFile)(process.execPath, [path.resolve('bin/scranton.js'), 'demo', '--no-plan', '--delay', '0', '--scenario', 'changes_once', '--gates', 'oscar+hank,angela', '--workspace', config.workspace, '--hive', config.hiveDir], { cwd: dir, env: process.env, timeout: 30000 });
+  await promisify(execFile)(process.execPath, [path.resolve('bin/scranton.js'), 'run', 'Test gates', '--trusted-host', '--no-plan', '--gates', 'oscar+hank,angela', '--workspace', config.workspace, '--hive', config.hiveDir], { cwd: dir, env: { ...process.env, SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'changes_once' }, timeout: 30000 });
   const oscar = inboxes(config.hiveDir, 'oscar-m1').find((text) => /cycle: 1/.test(text));
   const hank = inboxes(config.hiveDir, 'hank-m1').find((text) => /cycle: 1/.test(text));
   assert.match(oscar, /Review the changes for correctness/);
@@ -126,7 +128,7 @@ test('CLI --gates delivers distinct handoffs and neutral CHANGES_REQUESTED repor
 for (const decision of ['retry', 'feedback']) test(`breaker ${decision} preserves neutral gate report attribution`, async (t) => {
   const { config } = fixture(t);
   config.maxFailedCycles = 1;
-  const o = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'changes_once' }, hitl: async () => ({ decision, feedback: 'Fix review findings' }) });
+  const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'changes_once' }, hitl: async () => ({ decision, feedback: 'Fix review findings' }) });
   assert.equal((await o.run('gate retry')).status, 'success');
   const body = inboxes(config.hiveDir, 'dwight-m1')[0];
   assert.match(body, /Oscar's Review report/);
@@ -154,7 +156,7 @@ test('snapshot paths cover additions, deletions and mode/content changes relativ
 test('shared trusted-host handoffs omit unavailable snapshot paths', async (t) => {
   const { config } = fixture(t);
   config.execution.isolation = 'shared';
-  const o = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'happy' } });
+  const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' } });
   assert.equal((await o.run('shared gates')).status, 'success');
   for (const role of ['oscar', 'hank']) {
     const body = inboxes(config.hiveDir, `${role}-m1`)[0];

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startAgent } from '../../src/core/agent/index.js';
+import { createScriptedProvider, getModel } from '../../src/core/llm/index.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 import { ChatRouter } from '../../src/core/chat-router.js';
 import { initialState, reduce } from '../../src/core/state.js';
@@ -22,11 +24,22 @@ const fixture = fileURLToPath(new URL('./fixtures/parallel-pi.js', import.meta.u
 const plan = [{ title: 'One', dependsOn: [] }, { title: 'Two', dependsOn: [] }, { title: 'Three', dependsOn: ['m1', 'm2'] }];
 function setup(t, { mode = '', milestones = plan, hitl, onBreaker = 'abort', maxParallel = 2 } = {}) {
   const dir = scratch(t);
-  const config = fakeConfig(dir, { command: [process.execPath, fixture], pi: { transport: 'rpc' }, maxFailedCycles: 1 });
+  const config = fakeConfig(dir, { maxFailedCycles: 1 });
   config.execution = { maxParallel, isolation: 'worktree', sandbox: { mode: 'host' } };
   const log = path.join(dir, 'invocations.jsonl');
   const orchestrator = new Orchestrator({ config, onBreaker, hitl, stdin: { isTTY: false }, stdout: { isTTY: false, write() {} },
-    extraEnv: { PARALLEL_LOG: log, PARALLEL_PLAN: JSON.stringify({ milestones }), PARALLEL_MODE: mode } });
+    startRunner: options => {
+      const role = options.agentId, milestone = options.milestone, cycle = options.cycle;
+      fs.appendFileSync(log, JSON.stringify({ type: 'start', role, milestone, cycle, sessionId: options.sessionId, instance: options.instanceId, cwd: options.cwd, hasM1: fs.existsSync(path.join(options.cwd, 'm1.txt')) }) + '\n');
+      const gate = role === 'angela';
+      if (gate) fs.writeFileSync(path.join(options.cwd, 'qa-only.txt'), milestone);
+      const text = role === 'michael' ? '```json\n' + JSON.stringify({milestones}) + '\n```\n[PLAN_READY]' : mode === 'blocked' ? '[BLOCKED]' : role === 'dwight' ? '[TASK_COMPLETE]' : mode === 'flaky' && cycle === 1 ? '[TEST_FAILED]' : '[TEST_PASSED]';
+      const turns = [];
+      if (role === 'dwight' && mode !== 'blocked') turns.push({delayMs: 180, toolCalls: [{id: 'write', name: 'write', arguments: {path: milestone + '.txt', content: milestone}}]});
+      turns.push({text, delayMs: role === 'michael' ? 0 : 240});
+      const runner = startAgent({...options, scripted: undefined, llm: createScriptedProvider(turns), model: getModel('openai', 'gpt-4o'), ...(mode === 'hang' && role !== 'michael' ? {scripted: {scenario: 'happy', fail: 'hang'}} : {})});
+      return runner;
+    } });
   return { dir, config, log, orchestrator };
 }
 async function until(predicate) {

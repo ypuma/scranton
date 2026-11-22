@@ -123,7 +123,7 @@ test('nested Hive/runtime/credentials/ignored builds excluded without recursive 
   const manager = new WorktreeManager({ workspace: root, hiveDir: path.join(root, 'hive'), runId: 'nested' });
   await manager.init(); t.after(() => manager.close());
   const d = await dev(manager);
-  assert.deepEqual(fs.readdirSync(d.dir).sort(), ['.git', '.gitignore', 'source.js']);
+  assert.deepEqual(fs.readdirSync(d.dir).sort(), ['.git', '.gitignore', '.scranton-sandbox-owned', 'source.js']);
   await snapshot(manager); assert.equal(manager.snapshots.get('m1').entries.size, 2);
 });
 

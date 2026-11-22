@@ -6,7 +6,6 @@ import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { loadConfig, PACKAGE_ROOT } from '../../src/core/config.js';
 import { activeRoles } from '../../src/core/workflow.js';
-import { validateDockerModels } from '../../src/core/sandbox.js';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
 
 const custom = { id: 'lintgate', name: 'Lint', title: 'Lint Gate', instruction: 'Check the changes.' };
@@ -50,7 +49,7 @@ function childConfig(call) {
   return loadConfig({ cwd: options.cwd, env: options.env, flags: { singleHive: true, hive: args[args.indexOf('--hive') + 1], workspace: args[args.indexOf('--workspace') + 1], gates: args[args.indexOf('--gates') + 1], ...(args.includes('--trusted-host') ? { trustedHost: true } : args.includes('--sandbox') ? { sandbox: args[args.indexOf('--sandbox') + 1] } : {}) } });
 }
 
-for (const registry of [false, true]) for (const explicit of [false, true]) test(`Docker uses resolved defaults, not stale selections (${registry ? 'registry' : 'single'}, ${explicit ? 'explicit' : 'configured'})`, async (t) => {
+for (const registry of [false, true]) for (const explicit of [false, true]) test(`Docker uses catalog-validated per-run selections (${registry ? 'registry' : 'single'}, ${explicit ? 'explicit' : 'configured'})`, async (t) => {
   const f = await fixture(t, registry, { agents: { dwight: { provider: 'config-provider', model: 'config-model' } }, ...(explicit ? { execution: { sandbox: { mode: 'host' } } } : {}) });
   process.env.SCRANTON_DWIGHT_PROVIDER = 'env-provider'; process.env.SCRANTON_DWIGHT_MODEL = 'env-model';
   assert.equal((await f.request('/api/agents', { ...custom, model: saved, thinking: 'low' })).status, 201);
@@ -58,29 +57,27 @@ for (const registry of [false, true]) for (const explicit of [false, true]) test
   const before = (await f.request(f.route + '/control')).body.defaults.models;
   const response = await f.request(f.route + '/runs', { request: 'fake goal', noPlan: true, workflow: { gates: [['lintgate', 'angela']] }, ...(explicit ? { sandbox: 'docker' } : {}), models: { dwight: stale, lintgate: stale, angela: stale } });
   assert.equal(response.status, 202, JSON.stringify(response.body));
-  assert.equal(f.catalogCalls(), 0, 'ignored stale choices cannot require an available catalog');
+  assert.equal(f.catalogCalls(), 1, 'tool-only Docker uses host model selection');
   const config = childConfig(f.calls[0]);
   assert.equal(config.execution.sandbox.mode, 'docker');
   assert.deepEqual(activeRoles(config, true), ['dwight', 'lintgate', 'angela']);
-  assert.doesNotThrow(() => validateDockerModels(config, activeRoles(config, true)));
-  for (const id of activeRoles(config, true)) assert.deepEqual({ provider: config.agents[id].provider, model: config.agents[id].model }, before[id]);
-  assert.equal(config.agents.lintgate.thinking, 'low', 'per-run thinking travels with the ignored model selection');
+  for (const id of activeRoles(config, true)) assert.deepEqual({ provider: config.agents[id].provider, model: config.agents[id].model }, { provider: stale.provider, model: stale.model });
+  assert.equal(config.agents.lintgate.thinking, 'max', 'per-run thinking travels with the model selection');
   assert.equal(config.agents.michael.model, null, 'inactive planner needs no default');
   assert.deepEqual((await f.request(f.route + '/control')).body.defaults.models, before);
   f.finish();
 });
 
-for (const registry of [false, true]) test(`Docker direct POST cannot fill missing active defaults (${registry ? 'registry' : 'single'})`, async (t) => {
+for (const registry of [false, true]) test(`Docker direct POST can use Automatic or explicit host model selection (${registry ? 'registry' : 'single'})`, async (t) => {
   const f = await fixture(t, registry);
   assert.equal((await f.request('/api/agents/dwight', { model: saved }, 'PATCH')).status, 200);
   assert.equal((await f.request('/api/agents', custom)).status, 201);
-  for (const [noPlan, gates, missing] of [[true, [['lintgate']], 'lintgate'], [true, [['oscar', 'hank']], 'oscar, hank'], [false, [['lintgate']], 'michael, lintgate']]) {
+  for (const [noPlan, gates] of [[true, [['lintgate']], 'lintgate'], [true, [['oscar', 'hank']], 'oscar, hank'], [false, [['lintgate']], 'michael, lintgate']]) {
     const models = Object.fromEntries(['michael', 'dwight', 'lintgate', 'oscar', 'hank'].map((id) => [id, stale]));
     const response = await f.request(f.route + '/runs', { request: 'fake goal', noPlan, workflow: { gates }, models });
-    assert.equal(response.status, 400);
-    assert.ok(response.body.error.includes(`for ${missing};`), response.body.error);
-    assert.match(response.body.error, /set the agent default.*Agents/);
-    assert.equal(f.calls.length, 0);
+    assert.equal(response.status, 202, JSON.stringify(response.body));
+    assert.equal(childConfig(f.calls.at(-1)).agents.dwight.model, stale.model);
+    f.finish();
   }
   assert.equal((await f.request(f.route + '/control')).body.recoveryRequired, false, 'rejection acquires no lease');
 });
@@ -94,11 +91,11 @@ test('configured defaults keep config over saved settings, and trusted host keep
     const response = await f.request('/api/runs', { request: 'fake goal', noPlan: true, ...(trustedHost ? { trustedHost: true } : {}), models: { dwight: stale, angela: stale } });
     assert.equal(response.status, 202, JSON.stringify(response.body));
     const config = childConfig(f.calls.at(-1));
-    assert.equal(config.agents.dwight.model, trustedHost ? stale.model : defaults.dwight.model);
-    assert.equal(config.agents.dwight.thinking, trustedHost ? 'max' : null);
+    assert.equal(config.agents.dwight.model, stale.model);
+    assert.equal(config.agents.dwight.thinking, 'max');
     f.finish();
   }
-  assert.equal(f.catalogCalls(), 1);
+  assert.equal(f.catalogCalls(), 2);
 });
 
 for (const registry of [false, true]) for (const trustedHost of [false, true]) test(`model selection structure is validated before catalog or launch (${registry ? 'registry' : 'single'}, ${trustedHost ? 'host' : 'docker'})`, async (t) => {
@@ -114,9 +111,8 @@ for (const registry of [false, true]) for (const trustedHost of [false, true]) t
   assert.equal((await f.request(f.route + '/control')).body.recoveryRequired, false);
   if (!trustedHost) {
     const response = await f.request(f.route + '/runs', { request: 'fake goal', noPlan: true, models: { dwight: { provider: 'unavailable-provider', model: 'removed-model', thinking: 'high' } } });
-    assert.equal(response.status, 202, JSON.stringify(response.body));
-    assert.equal(f.catalogCalls(), 0);
-    assert.equal(childConfig(f.calls[0]).agents.dwight.model, saved.model);
-    f.finish();
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.equal(f.catalogCalls(), 1);
+    assert.equal(f.calls.length, 0);
   }
 });

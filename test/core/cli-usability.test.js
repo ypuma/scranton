@@ -18,16 +18,15 @@ const previous = { SCRANTON_ISOLATION_ROOT: process.env.SCRANTON_ISOLATION_ROOT,
 process.env.SCRANTON_ISOLATION_ROOT = path.join(root, 'iso');
 process.env.PI_CODING_AGENT_DIR = path.join(root, 'pi');
 after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-const fake = path.resolve('tools/fake-pi.js');
 function fixture(t, base = root) {
   fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const hive = path.join(dir, 'hive'), ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PI_CODING_AGENT_DIR: path.join(dir, 'pi'),
-    SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, fake]), SCRANTON_ISOLATION_ROOT: path.join(dir, 'iso'),
-    FAKE_PI_DELAY_MS: '0', FAKE_PI_DETERMINISTIC: '1', FAKE_PI_SCENARIO: 'happy' };
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PI_CODING_AGENT_DIR: path.join(dir, 'pi'), SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'),
+    SCRANTON_FAKE_MODE: '1', SCRANTON_ISOLATION_ROOT: path.join(dir, 'iso'),
+    SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1', SCRANTON_FAKE_SCENARIO: 'happy' };
   const io = { cwd: dir, env, stdout: { write(s) { io.out += s; } }, stderr: { write(s) { io.err += s; } }, out: '', err: '' };
   return { dir, hive, ws, io, args: ['--hive', hive, '--workspace', ws, '--trusted-host'] };
 }
@@ -145,31 +144,20 @@ async function interrupted(t, twice) {
   const f = fixture(t), entry = path.join(f.dir, 'interrupt.mjs'), pids = path.join(f.dir, 'pids.json');
   const cli = new URL('../../src/core/cli.js', import.meta.url).href;
   fs.writeFileSync(entry, `import { runCli } from ${JSON.stringify(cli)};\nprocess.on('message', () => { process.emit('SIGINT'); ${twice ? "process.emit('SIGINT');" : ''} });\nprocess.exitCode = await runCli(process.argv.slice(2));\nprocess.disconnect();\n`);
-  const wrapper = path.join(f.dir, 'fake.mjs');
-  fs.writeFileSync(wrapper, `import fs from 'node:fs'; import { spawn } from 'node:child_process';\nconst child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });\nfs.writeFileSync(${JSON.stringify(pids)}, JSON.stringify([process.pid, child.pid]));\nawait import(${JSON.stringify(new URL('../../tools/fake-pi.js', import.meta.url).href)});\n`);
-  const child = fork(entry, ['run', 'hang', '--no-plan', ...f.args], { cwd: f.dir, env: { ...f.io.env, SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, wrapper]), FAKE_PI_FAIL: 'hang' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const child = fork(entry, ['run', 'hang', '--no-plan', ...f.args], { cwd: f.dir, env: { ...f.io.env, SCRANTON_FAKE_LOG: pids, SCRANTON_FAKE_FAIL: 'hang' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let err = ''; child.stderr.on('data', (s) => err += s); child.stdout.resume();
   const closed = once(child, 'close');
-  let owned = [];
-  t.after(() => { for (const pid of [child.pid, ...owned]) { if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }); else { try { process.kill(pid, 'SIGKILL'); } catch {} } } });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
   for (let i = 0; !fs.existsSync(pids) && i < 300; i++) await new Promise((r) => setTimeout(r, 20));
-  assert.ok(fs.existsSync(pids), err); owned = JSON.parse(fs.readFileSync(pids));
+  assert.ok(fs.existsSync(pids), err);
   child.send('interrupt');
   const [code] = await closed;
-  const alive = owned.filter((pid) => { try { process.kill(pid, 0); return true; } catch { return false; } });
-  assert.deepEqual(alive, [], `child processes still listed after CLI exit: ${alive}`);
-  if (process.platform === 'win32') {
-    const listing = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true });
-    assert.equal(listing.status, 0);
-    const pids = listing.stdout.split(/\r?\n/).map((line) => Number(line.split('\",\"')[1]));
-    assert.deepEqual(owned.filter((pid) => pids.includes(pid)), [], 'tasklist still contains an owned pi process');
-  }
   assert.equal(code, 130, err);
   assert.equal(readRunLease(f.hive), null, err);
 }
 
-test('first Ctrl+C stops the fake pi tree and releases ownership', { timeout: 30000 }, async (t) => interrupted(t, false));
-test('second Ctrl+C waits for the fake pi tree and releases ownership', { timeout: 30000 }, async (t) => interrupted(t, true));
+test('first Ctrl+C stops the own scripted workflow and releases ownership', { timeout: 30000 }, async (t) => interrupted(t, false));
+test('second Ctrl+C waits for the own scripted workflow and releases ownership', { timeout: 30000 }, async (t) => interrupted(t, true));
 
 test('automatic recovery refuses unknown owners even if called without a CLI precheck', async (t) => {
   const f = fixture(t), lease = orphan(f, await deadPid(), { cleanup: 'unresolved', reason: 'Unverified cleanup' });

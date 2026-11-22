@@ -33,7 +33,7 @@ export function loadDotEnv(cwd = process.cwd(), loader = process.loadEnvFile) {
   return file;
 }
 
-/** Pi's bash tool needs Git Bash (or another bash.exe) on Windows. */
+/** Host bash discovery; Windows native-sandbox defaults use PowerShell instead. */
 export function windowsBashAvailable(env = process.env) {
   const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs')];
   if (roots.some((r) => r && isFile(path.join(r, 'Git', 'bin', 'bash.exe')))) return true;
@@ -48,8 +48,8 @@ export function defaultTools(agent, { platform = process.platform, hasBash = win
   return tools;
 }
 
-/** `SCRANTON_PI_COMMAND`: a JSON array, or a plain string split on whitespace. */
-export function parseCommandSpec(value, name = 'SCRANTON_PI_COMMAND') {
+/** A JSON array, or a plain string split on whitespace. */
+export function parseCommandSpec(value, name = 'command') {
   if (Array.isArray(value)) return value.map(String);
   const text = String(value ?? '').trim();
   if (!text) return null;
@@ -142,19 +142,14 @@ export function loadConfig({
   const onBreaker = pick(flags.onBreaker, env.SCRANTON_ON_BREAKER, file.onBreaker, 'ask');
   if (!['ask', 'abort', 'skip', 'hive'].includes(onBreaker)) throw new ConfigError('onBreaker must be ask, abort, skip or hive');
 
-  const envCommand = parseCommandSpec(env.SCRANTON_PI_COMMAND);
-  const fileCommand = Array.isArray(file.pi?.command) && file.pi.command.length ? file.pi.command.map(String) : null;
-  const pi = {
-    command: envCommand ?? fileCommand,
-    commandSource: envCommand ? 'env' : fileCommand ? 'config' : null,
-    extraArgs: toList(file.pi?.extraArgs, 'pi.extraArgs') ?? [],
-    minimalContext: file.pi?.minimalContext !== false
-  };
-
+  if (Object.hasOwn(env, 'SCRANTON_PI_COMMAND')) throw new ConfigError('SCRANTON_PI_COMMAND is no longer supported; remove it and configure agents.<id>.provider/model instead.');
+  if (Object.hasOwn(file, 'pi')) throw new ConfigError('Configuration key "pi" is no longer supported; remove it. Scranton uses its own runtime.');
+  for (const [id, agent] of Object.entries(file.agents ?? {})) if (agent && Object.hasOwn(agent, 'extraArgs')) throw new ConfigError(`agents.${id}.extraArgs is no longer supported; remove Pi CLI arguments and configure tools/provider/model directly.`);
   if (file.execution?.maxReplans) warnings.push('execution.maxReplans is unsupported and ignored; the published DAG is immutable');
   const conversation = pick(flags.conversation, env.SCRANTON_CONVERSATION, file.execution?.conversation, false);
   const conversationFromEnv = blank(flags.conversation) && !blank(env.SCRANTON_CONVERSATION);
   if (conversationFromEnv ? !['1', '0'].includes(conversation) : typeof conversation !== 'boolean') throw new ConfigError('execution.conversation must be boolean (SCRANTON_CONVERSATION: 1 or 0)');
+  if (flags.trustedHost && flags.sandbox && flags.sandbox !== 'host') throw new ConfigError('--trusted-host conflicts with --sandbox ' + flags.sandbox);
   const execution = {
     conversation: conversation === true || conversation === '1',
     maxParallel: toPositiveInt(pick(flags.parallel, env.SCRANTON_PARALLEL, file.execution?.maxParallel, 3), 'execution.maxParallel'),
@@ -162,20 +157,23 @@ export function loadConfig({
     persistentSessions: file.execution?.persistentSessions !== false,
     maxReplans: 0,
     sandbox: {
-      mode: flags.trustedHost ? 'host' : pick(flags.sandbox, file.execution?.sandbox?.mode, 'host'),
-      image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-sandbox:1.5.2-r1'),
-      network: pick(flags.sandboxNetwork, file.execution?.sandbox?.network, 'bridge')
+      mode: flags.trustedHost ? 'host' : pick(flags.sandbox, file.execution?.sandbox?.mode, 'scranton'),
+      image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-tools:24-r1'),
+      network: pick(flags.sandboxNetwork, file.execution?.sandbox?.network, 'allow')
     }
   };
   if (!['shared', 'worktree'].includes(execution.isolation)) throw new ConfigError('execution.isolation must be shared or worktree');
   if (execution.isolation === 'shared' && (execution.sandbox.mode !== 'host' || !flags.trustedHost && flags.sandbox !== 'host' && file.execution?.sandbox?.mode !== 'host')) throw new ConfigError('shared isolation requires explicit trusted-host execution; Docker requires worktree isolation');
   if (execution.maxParallel > 1 && execution.isolation !== 'worktree') throw new ConfigError('parallel execution requires worktree isolation');
-  if (!['host', 'docker'].includes(execution.sandbox.mode)) throw new ConfigError('sandbox must be host or docker');
-  if (!['none', 'bridge'].includes(execution.sandbox.network)) throw new ConfigError('sandbox network must be none or bridge');
+  if (!['scranton', 'host', 'docker'].includes(execution.sandbox.mode)) throw new ConfigError('execution.sandbox.mode must be scranton, docker or host');
+  if (execution.sandbox.network === 'bridge') execution.sandbox.network = 'allow';
+  if (!['none', 'allow'].includes(execution.sandbox.network)) throw new ConfigError('execution.sandbox.network must be allow or none (bridge is an alias for allow)');
+  if (platform === 'win32' && execution.sandbox.mode === 'scranton' && execution.sandbox.network === 'none') throw new ConfigError('Windows Scranton sandbox cannot block network; use --sandbox docker with --sandbox-network none');
   if (flags.sandbox === 'host' && !flags.trustedHost) throw new ConfigError('--sandbox host requires --trusted-host');
-  pi.transport = file.pi?.transport ?? 'rpc';
-  if (!['rpc', 'json'].includes(pi.transport)) throw new ConfigError('pi.transport must be rpc or json');
-  if (execution.isolation === 'worktree' && pi.transport !== 'rpc') throw new ConfigError('worktree isolation requires RPC transport');
+  const approvals = file.approvals ?? { tools: [], timeoutSeconds: 600 };
+  if (!approvals || typeof approvals !== 'object' || Array.isArray(approvals) || Object.keys(approvals).some((key) => !['tools', 'timeoutSeconds'].includes(key)) || !Array.isArray(approvals.tools) || approvals.tools.some((tool) => !['read', 'write', 'edit', 'bash', 'powershell', 'grep', 'find', 'ls', 'agent_chat'].includes(tool))) throw new ConfigError('approvals must contain a tools array of known tool names and optional timeoutSeconds');
+  const approvalConfig = { tools: [...new Set(approvals.tools)], timeoutSeconds: approvals.timeoutSeconds ?? 600 };
+  if (!Number.isInteger(approvalConfig.timeoutSeconds) || approvalConfig.timeoutSeconds < 1 || approvalConfig.timeoutSeconds > 86400) throw new ConfigError('approvals.timeoutSeconds must be an integer from 1 to 86400');
 
   const promptsDir = fromCwd(env.SCRANTON_PROMPTS_DIR) ?? path.join(dataDir ?? hiveDir, 'prompts');
   const settingsDir = fromCwd(env.SCRANTON_SETTINGS_DIR) ?? dataDir ?? hiveDir;
@@ -189,29 +187,32 @@ export function loadConfig({
     if (validateWorkflow) throw err;
     workflowWarning = err.message; warnings.push(workflowWarning);
   }
-  const bash = hasBash ?? (platform === 'win32' ? windowsBashAvailable(env) : true);
+  const docker = execution.sandbox.mode === 'docker';
+  const bash = docker || (hasBash ?? (platform === 'win32' ? windowsBashAvailable(env) : true));
+  const nativeWindows = platform === 'win32' && execution.sandbox.mode === 'scranton';
   const agents = {};
   for (const role of roles) {
     const id = role.id, saved = settings.agents[id] ?? {};
     const f = file.agents?.[id] ?? {};
     const upper = id.toUpperCase();
     const customTools = role.builtin ? null : toList(f.tools, `agents.${id}.tools`) ?? role.tools;
-    if (customTools && (!customTools.length || customTools.some((tool) => !['read', 'grep', 'find', 'ls', 'bash'].includes(tool)))) throw new ConfigError(`${id}: custom gates require read-only tools`);
+    if (customTools && (!customTools.length || customTools.some((tool) => !['read', 'grep', 'find', 'ls', 'bash', 'powershell'].includes(tool)))) throw new ConfigError(`${id}: custom gates require read-only tools`);
     const agent = {
       skillSource: f.skill ? 'config' : 'builtin',
       skill: fromFile(f.skill) ?? path.join(PACKAGE_ROOT, 'agents', id, 'SKILL.md'),
       provider: pick(env[`SCRANTON_${upper}_PROVIDER`], f.provider, saved.model?.provider) ?? null,
       model: pick(env[`SCRANTON_${upper}_MODEL`], f.model, saved.model?.model) ?? null,
       thinking: pick(env[`SCRANTON_${upper}_THINKING`], f.thinking, saved.thinking) ?? null,
-      tools: role.builtin ? toList(f.tools, `agents.${id}.tools`) ?? defaultTools(id, { platform, hasBash: bash }) : customTools.map((t) => platform === 'win32' && !bash && t === 'bash' ? 'powershell' : t),
-      extraArgs: toList(f.extraArgs, `agents.${id}.extraArgs`) ?? []
+      tools: role.builtin ? toList(f.tools, `agents.${id}.tools`) ?? defaultTools(id, { platform, hasBash: bash && !nativeWindows }) : customTools.map((t) => !f.tools && platform === 'win32' && (!bash || nativeWindows) && t === 'bash' ? 'powershell' : t)
     };
-    if (role.kind === 'gate') validateGateTools({ ...agent, id }, pi);
+    if (docker && agent.tools.includes('powershell')) throw new ConfigError(`agents.${id}.tools: powershell is unavailable in the Linux Docker tool image; use bash`);
+    if (nativeWindows && f.tools !== undefined && agent.tools.includes('bash')) throw new ConfigError(`agents.${id}.tools: bash is unavailable in the Windows Scranton sandbox; use powershell, or select --sandbox docker or --sandbox host --trusted-host`);
+    if (role.kind === 'gate') validateGateTools({ ...agent, id });
     if (agent.thinking && !THINKING_LEVELS.includes(agent.thinking)) {
       throw new ConfigError(`${id} thinking level "${agent.thinking}" is not one of: ${THINKING_LEVELS.join(', ')}`);
     }
     if (agent.provider && !agent.model) {
-      warnings.push(`${id}: provider "${agent.provider}" is set without a model - pi needs both, so the provider is ignored`);
+      warnings.push(`${id}: provider "${agent.provider}" is set without a model - Scranton needs both, so the provider is ignored`);
       agent.provider = null;
     }
     const modelSource = !blank(env[`SCRANTON_${upper}_PROVIDER`]) || !blank(env[`SCRANTON_${upper}_MODEL`]) ? 'env' : !blank(f.provider) || !blank(f.model) ? 'config' : saved.model ? 'settings' : 'none';
@@ -221,25 +222,10 @@ export function loadConfig({
     agents[id] = agent;
   }
 
-  return { configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, pi, agents, warnings, onBreaker };
+  return { configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
 }
 
-// Audited against pi 1.5.2 cli/args.js (unchanged from 1.5.0). Unknown flags fail closed, including future resource loaders.
-const GATE_VALUE_FLAGS = new Set(['--provider', '--model', '--api-key', '--system-prompt', '--append-system-prompt', '--name', '-n', '--session', '--session-id', '--fork', '--session-dir', '--models', '--thinking']);
-const GATE_BOOLEAN_FLAGS = new Set(['--continue', '-c', '--resume', '-r', '--no-session', '--no-extensions', '-ne', '--no-mcp', '--no-skills', '-ns', '--no-prompt-templates', '-np', '--no-themes', '--no-context-files', '-nc', '--verbose', '--no-approve', '-na', '--offline']);
-const GATE_TOOL_FLAGS = new Set(['--tools', '-t', '--exclude-tools', '-xt', '--no-tools', '-nt', '--no-builtin-tools', '-nbt', '--extension', '-e', '--skill', '--prompt-template', '--theme', '--']);
-
-export function validateGateTools(agent, pi) {
-  for (const [key, args] of [['pi.extraArgs', pi.extraArgs ?? []], [`agents.${agent.id ?? 'gate'}.extraArgs`, agent.extraArgs ?? []]]) {
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (GATE_TOOL_FLAGS.has(arg.split('=')[0])) throw new ConfigError(`${key}: tool-changing extraArgs are forbidden for gate roles: ${arg}`);
-      if (GATE_BOOLEAN_FLAGS.has(arg)) continue;
-      if (!GATE_VALUE_FLAGS.has(arg)) throw new ConfigError(`${key}: unsupported gate extraArgs flag: ${arg}`);
-      // Do not let a value consume another option or cross into Scranton's managed argv.
-      const value = args[++i];
-      if (!value || value.startsWith('-') || value.startsWith('@')) throw new ConfigError(`${key}: gate extraArgs ${arg} requires a value that is not an option or file argument`);
-    }
-  }
+export function validateGateTools(agent) {
+  if (Object.hasOwn(agent, 'extraArgs')) throw new ConfigError(`agents.${agent.id ?? 'gate'}.extraArgs is no longer supported; remove Pi CLI arguments and configure tools/provider/model directly.`);
   if (!agent.tools?.length || agent.tools.some((tool) => !['read', 'grep', 'find', 'ls', 'bash', 'powershell'].includes(tool))) throw new ConfigError(`agents.${agent.id ?? 'gate'}.tools: gates require read-only tools`);
 }

@@ -1,25 +1,17 @@
+import './isolation-test-root.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import childProcess from 'node:child_process';
 import { completeDreaming, validateDreamingRequest, validateDreamingResult } from '../../src/core/dreaming-completion.js';
-import { runDreamingCompletion, validateDreamingPayload } from '../../tools/dreaming-pi-complete.js';
-
-const root = path.resolve('.scratch/claude-dream-completion');
+import { runDreamingCompletion, validateDreamingPayload } from '../../tools/dreaming-complete.js';
+import { createCompletionClient } from '../../tools/completion-client.js';
+import { createCredentials } from '../../src/core/credentials/index.js';
+import { createScriptedProvider } from '../../src/core/llm/index.js';
+import { bridgeFixture, invokeBridge } from './bridges-fixture.js';
+const root = path.resolve('.scratch/bridges/dreaming');
 const request = { model: 'offline/model/with-slash', system: 'System only', user: 'User only' };
-const message = (overrides = {}) => ({ role: 'assistant', content: [{ type: 'text', text: 'completion' }], stopReason: 'stop',
-  usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 1, cost: { total: 0.12 } }, ...overrides });
-function runtime(events, observe = () => {}) {
-  return { getError: () => undefined, getModel: () => ({ api: 'openai-completions', id: 'model/with-slash', provider: 'offline', samplingParams: { tools: ['bad'] } }),
-    streamSimple(model, context, options) {
-      observe(model, context, options);
-      options.onPayload({ max_tokens: options.maxTokens });
-      return (async function* () { for (const event of events) yield event; })();
-    } };
-}
-const events = (m) => [{ type: 'start', partial: message({ content: [], stopReason: 'pending' }) }, { type: 'done', reason: 'stop', message: m }];
-
 test('request has hard bounds and exact identity, never a default model', () => {
   assert.deepEqual(validateDreamingRequest(request).model, { provider: 'offline', model: 'model/with-slash' });
   assert.equal(validateDreamingRequest(request).maxOutputTokens, 2048);
@@ -30,97 +22,36 @@ test('request has hard bounds and exact identity, never a default model', () => 
   assert.equal(validateDreamingRequest({ ...request, system: 'x'.repeat(11991) }).system.length, 11991);
 });
 
-test('one fresh SDK request, no tool declarations, no sampling payload overrides, actual usage only', async () => {
-  let calls = 0, signal;
-  const result = await runDreamingCompletion(request, { runtimeFactory: async () => runtime(events(message()), (model, context, options) => {
-    calls++;
-    assert.equal(model.samplingParams, undefined);
-    assert.equal(model.samplingParamsByThinkingLevel, undefined);
-    assert.deepEqual(context.tools, []);
-    assert.equal(context.systemPrompt, request.system);
-    assert.deepEqual(context.messages.map(({ role, content }) => ({ role, content })), [{ role: 'user', content: request.user }]);
-    assert.equal(options.maxTokens, 2048);
-    assert.equal(options.maxRetries, 0);
-    assert.equal(options.toolChoice, 'none');
-    assert.equal(options.sessionId, undefined);
-    signal = options.signal;
-  }) });
-  assert.equal(calls, 1);
-  assert.equal(signal.aborted, true);
+
+test('one fresh own LLM request has no tools and includes cache usage without estimated billing', async () => {
+  const llm = createScriptedProvider([{ text: 'completion', usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 1 } }]);
+  let closed = false;
+  const result = await runDreamingCompletion(request, { clientFactory: async () => ({ model: {}, llm, close() { closed = true; } }) });
   assert.deepEqual(result, { text: 'completion', usage: { inputTokens: 13, outputTokens: 3 } });
-  const billed = message(); billed.usage.cost.totalFromProvider = true;
-  assert.equal((await runDreamingCompletion(request, { runtimeFactory: async () => runtime(events(billed)) })).usage.costUsd, 0.12);
-  for (const usage of [undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, { input: -1, output: 2 }]) {
-    assert.equal((await runDreamingCompletion(request, { runtimeFactory: async () => runtime(events(message({ usage }))) })).usage, null);
-  }
+  assert.deepEqual(llm.calls[0].context, { systemPrompt: request.system, messages: [{ role: 'user', content: request.user }], tools: [] });
+  assert.equal(closed, true);
 });
-
-test('SDK rejects tool events, hidden tool blocks, malformed, incomplete, oversized and excess-token responses', async () => {
-  for (const sequence of [[], [{ type: 'done', reason: 'stop', message: message() }],
-    [events(message())[0], ...events(message())], [{ type: 'toolcall_start', partial: message() }],
-    events(message({ content: [{ type: 'toolCall', name: 'bash', arguments: {} }] })),
-    events(message({ content: [{ type: 'image' }] })), events(message({ content: [{ type: 'text', text: 'x'.repeat(4097) }] })),
-    events(message({ stopReason: 'length' })), events(message({ usage: { input: 1, output: 2049, cacheRead: 0, cacheWrite: 0 } })),
-    [...events(message()), ...events(message())], [{ type: 'error', error: { errorMessage: 'SECRET' } }]]) {
-    await assert.rejects(runDreamingCompletion(request, { runtimeFactory: async () => runtime(sequence) }));
-  }
+for (const turn of [{ toolCalls: [{ name: 'bash', arguments: {} }] }, { text: 'partial', stopReason: 'length' }, { text: 'x'.repeat(4097) }, { text: 'error', error: { status: 503 } }, { text: 'tokens', usage: { input: 1, output: 2049 } }]) test('Dreaming fails closed on ' + JSON.stringify(turn).slice(0, 100), async () => {
+  await assert.rejects(runDreamingCompletion(request, { clientFactory: async () => ({ model: {}, llm: createScriptedProvider([turn]), close() {} }) }));
 });
-
-test('payload caps fail closed for unsupported ChatGPT subscription mode and overrides', () => {
-  for (const [api, payload] of [['openai-responses', {}], ['openai-completions', { max_tokens: 9999 }],
-    ['openai-completions', { max_tokens: 256, max_completion_tokens: 9999 }], ['unknown', { max_tokens: 256 }],
-    ['anthropic-messages', { max_tokens: 256, tools: [{ name: 'bash' }] }]]) {
-    assert.throws(() => validateDreamingPayload(api, payload, 256));
-  }
-  for (const [api, payload] of [['openai-responses', { max_output_tokens: 256 }], ['anthropic-messages', { max_tokens: 256 }],
-    ['google-generative-ai', { config: { maxOutputTokens: 256 } }], ['bedrock-converse-stream', { inferenceConfig: { maxTokens: 256 } }]]) {
-    validateDreamingPayload(api, payload, 256);
-  }
+test('payload validation refuses tools and missing or overridden caps', () => {
+  for (const [api, payload] of [['openai-responses', {}], ['openai-completions', { max_tokens: 9999 }], ['anthropic-messages', { max_tokens: 256, tools: [{}] }], ['google-generative', { generationConfig: { maxOutputTokens: 256 }, tools: [{}] }]]) assert.throws(() => validateDreamingPayload(api, payload, 256));
+  for (const [api, payload] of [['openai-responses', { max_output_tokens: 256 }], ['anthropic-messages', { max_tokens: 256 }], ['google-generative', { generationConfig: { maxOutputTokens: 256 } }], ['google-antigravity', { request: { generationConfig: { maxOutputTokens: 256 } } }]]) validateDreamingPayload(api, payload, 256);
 });
-
-test('Google Antigravity without onPayload is rejected before runtime or inference begins', async () => {
-  let runtimes = 0, calls = 0;
-  const fixture = {
-    registerNativeProvider() {},
-    getError: () => undefined,
-    getModel: () => ({ api: 'google-generative-ai', id: 'gemini-3-flash', provider: 'google-antigravity' }),
-    streamSimple() {
-      calls++;
-      return (async function* () { for (const event of events(message())) yield event; })();
-    }
-  };
-  const result = await runDreamingCompletion({ ...request, model: 'google-antigravity/gemini-3-flash' }, {
-    runtimeFactory: async () => { runtimes++; return fixture; }
-  }).then(() => 'completed', () => 'rejected');
-  assert.equal(calls, 0, 'no inference call may begin without pre-send payload validation');
-  assert.equal(runtimes, 0, 'unsupported transport is rejected before runtime creation');
-  assert.equal(result, 'rejected');
+test('own credentials and LLM send the bounded tool-less payload to loopback', async (t) => {
+  const f = await bridgeFixture(t);
+  const result = await runDreamingCompletion({ ...request, model: 'offline/test', maxOutputTokens: 256 }, { clientFactory: (ref, cap) => createCompletionClient(ref, cap, { credentialsFactory: () => createCredentials({ env: f.env }) }) });
+  assert.deepEqual(result, { text: 'completion', usage: { inputTokens: 11, outputTokens: 4 } });
+  assert.equal(f.calls[0].tools, undefined); assert.equal(f.calls[0].max_tokens, 256);
 });
-
-test('supported API transports require and accept bounded tool-less payload callbacks', async () => {
-  for (const [api, payload] of [
-    ['anthropic-messages', { max_tokens: 256 }],
-    ['openai-completions', { max_completion_tokens: 256 }],
-    ['openai-responses', { max_output_tokens: 256 }],
-    ['azure-openai-responses', { max_output_tokens: 256 }],
-    ['google-generative-ai', { config: { maxOutputTokens: 256 } }],
-    ['google-vertex', { config: { maxOutputTokens: 256 } }],
-    ['bedrock-converse-stream', { inferenceConfig: { maxTokens: 256 } }]
-  ]) {
-    for (const callback of [true, false]) {
-      const fixture = runtime(events(message()));
-      fixture.getModel = () => ({ api, id: 'model/with-slash', provider: 'offline' });
-      fixture.streamSimple = (model, context, options) => {
-        if (callback) options.onPayload(payload);
-        return (async function* () { for (const event of events(message())) yield event; })();
-      };
-      const completion = runDreamingCompletion({ ...request, maxOutputTokens: 256 }, { runtimeFactory: async () => fixture });
-      if (callback) assert.equal((await completion).text, 'completion', api);
-      else await assert.rejects(completion, undefined, api);
-    }
-  }
+for (const helper of ['tools/dreaming-complete.js']) test(helper + ' stdin/stdout protocol and byte limit', async (t) => {
+  const f = await bridgeFixture(t);
+  const result = await invokeBridge(helper, [], f.env, JSON.stringify({ ...request, model: 'offline/test' }));
+  assert.equal(result.code, 0); assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), { text: 'completion', usage: { inputTokens: 11, outputTokens: 4 } });
+  const large = await invokeBridge(helper, [], f.env, ' '.repeat(65537));
+  assert.deepEqual(large, { code: 1, stdout: '', stderr: '' });
 });
-
 test('wire result rejects additional/tool keys, invalid usage and overlong text', () => {
   for (const result of [{ text: '', usage: null }, { text: 'x'.repeat(4097), usage: null }, { text: 'x', usage: null, tools: [] },
     { text: 'x' }, { text: 'x', usage: { inputTokens: 1, outputTokens: 2049 } },
@@ -151,7 +82,7 @@ process.stdout.write(out);
   const original = childProcess.spawn;
   let launches = 0, lastCwd;
   t.mock.method(childProcess, 'spawn', (exe, args, options) => {
-    if (!args?.[0]?.endsWith('dreaming-pi-complete.js')) return original(exe, args, options);
+    if (!args?.[0]?.endsWith('dreaming-complete.js')) return original(exe, args, options);
     launches++; lastCwd = options.cwd;
     assert.equal(exe, process.execPath);
     assert.equal(options.env.NODE_OPTIONS, undefined);
@@ -182,35 +113,3 @@ process.stdout.write(out);
   } finally { await fs.rm(fixtures, { recursive: true, force: true }); }
 });
 
-test('installed Pi SDK resolves stored custom provider/auth and sends the real bounded tool-less payload (fake fetch)', async () => {
-  await fs.mkdir(root, { recursive: true });
-  const dir = await fs.mkdtemp(path.join(root, 'sdk-'));
-  try {
-    const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
-    await fs.writeFile(path.join(dir, 'auth.json'), JSON.stringify({ offline: { type: 'api_key', key: 'offline-not-a-secret' } }));
-    await fs.writeFile(path.join(dir, 'models.json'), JSON.stringify({ providers: { offline: { baseUrl: 'https://offline.invalid/v1',
-      api: 'openai-completions', models: [{ id: 'model/with-slash', contextWindow: 16000, maxTokens: 4096 }] } } }));
-    const r = await ModelRuntime.create({ authPath: path.join(dir, 'auth.json'), modelsPath: path.join(dir, 'models.json'), allowModelNetwork: false, refreshOnCreate: false });
-    let requests = 0;
-    const streamSimple = r.streamSimple.bind(r);
-    r.streamSimple = (model, context, options) => streamSimple(model, context, { ...options, fetch: async (url, init) => {
-      requests++;
-      assert.equal(String(url), 'https://offline.invalid/v1/chat/completions');
-      assert.equal(new Headers(init.headers).get('authorization'), 'Bearer offline-not-a-secret');
-      const payload = JSON.parse(init.body);
-      assert.equal(payload.max_tokens ?? payload.max_completion_tokens, 256);
-      assert.equal(payload.tool_choice, 'none');
-      assert.equal(payload.tools, undefined);
-      assert.deepEqual(payload.messages.map(({ role, content }) => ({ role, content })), [
-        { role: 'system', content: request.system }, { role: 'user', content: request.user }
-      ]);
-      const chunk = { id: 'offline', object: 'chat.completion.chunk', model: model.id,
-        choices: [{ index: 0, delta: { content: 'Offline SDK answer' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 } };
-      return new Response('data: ' + JSON.stringify(chunk) + '\n\ndata: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
-    } });
-    const result = await runDreamingCompletion({ ...request, maxOutputTokens: 256 }, { runtimeFactory: async () => r });
-    assert.equal(requests, 1);
-    assert.deepEqual(result, { text: 'Offline SDK answer', usage: { inputTokens: 11, outputTokens: 4 } });
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
-});

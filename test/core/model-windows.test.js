@@ -25,7 +25,7 @@ test('model ids handle defaults, malformed references, slash ids and model-only 
 });
 
 // Regression anchors: custom lookup precedes load(), and list() is inside resolve().
-test('custom declarations win and are reread for every resolve without loading pi', async () => {
+test('custom declarations win and are reread for every resolve without loading a runtime', async () => {
   let window = 64000, reads = 0;
   const resolver = createModelWindows({ providers: { list: () => { reads++; return [{ id: 'custom', models: [{ id: 'm', contextWindow: window }] }]; } }, runtime: () => { throw Error(); } });
   assert.deepEqual(await resolver.resolve({ provider: 'custom', model: 'm' }), known('custom/m', 64000));
@@ -72,18 +72,18 @@ test('provider and registry failures never throw and failed registry creation is
   assert.deepEqual(await broken.resolve({ provider: 'p', model: 'm' }), unknown('p/m'));
 });
 
-// Regression anchors: sharedRuntime and createModelRuntime (offline paths + Antigravity registration).
-test('real pi registry resolves a known model offline; cold and warm timings', async (t) => {
+// Regression anchors: own catalogue (offline paths + Antigravity entries).
+test('real Scranton catalogue resolves a known model offline; cold and warm timings', async (t) => {
   const ref = { provider: 'openai', model: 'gpt-4o' };
   const resolver = createModelWindows({ providers: empty });
   const start = performance.now(), result = await resolver.resolve(ref), cold = performance.now() - start;
   const next = performance.now(), warmResult = await createModelWindows({ providers: empty }).resolve(ref), warm = performance.now() - next;
   assert.equal(result.known, true); assert.ok(result.window > 0); assert.deepEqual(result, warmResult);
-  t.diagnostic(`Real pi registry cold=${cold.toFixed(3)} ms warm=${warm.toFixed(3)} ms window=${result.window}`);
+  t.diagnostic(`Real Scranton catalogue cold=${cold.toFixed(3)} ms warm=${warm.toFixed(3)} ms window=${result.window}`);
   assert.deepEqual(await resolver.resolve({ provider: 'google-antigravity', model: 'gemini-3-pro' }), known('google-antigravity/gemini-3-pro', 1048576));
 });
 
-// Removing warm/load reuse makes this fail without touching installed pi models or providers.
+// Removing warm/load reuse makes this fail without touching own catalogue models or providers.
 test('warm starts one background registry load and resolve reuses it', async () => {
   let loads = 0, reads = 0, finish;
   const resolver = createModelWindows({ providers: () => { reads++; return []; }, runtime: () => {

@@ -20,11 +20,11 @@ function fixture(t) {
 
 test('unused pinned Hank prompt cannot break legacy runs or change their event sequence', async (t) => {
   const { dir, config } = fixture(t);
-  const baseline = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'happy' } });
+  const baseline = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' } });
   assert.equal((await baseline.run('legacy')).status, 'success');
   const sequence = readEvents(config.hiveDir).map((e) => [e.type, e.agent, e.status, e.kind]);
   Object.assign(config.agents.hank, { skillSource: 'config', skill: path.join(dir, 'missing-hank.md') });
-  const run = new Orchestrator({ config, noPlan: true, extraEnv: { FAKE_PI_SCENARIO: 'happy' } });
+  const run = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' } });
   const result = await run.run('legacy');
   assert.equal(result.status, 'success', 'unused pinned Hank prompt must not fail a legacy run');
   const events = readEvents(config.hiveDir);
@@ -57,7 +57,7 @@ test('active pinned Hank prompt fails cleanly and releases lease; legacy retry i
 test('prompt audit contains planner only when used and standalone role only', async (t) => {
   for (const standalone of [false, true]) {
     const { config } = fixture(t);
-    const run = new Orchestrator({ config, extraEnv: { FAKE_PI_SCENARIO: 'happy' } });
+    const run = new Orchestrator({ config, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' } });
     if (standalone) run.standaloneAgent = 'angela';
     assert.equal((await run.run('audit')).status, 'success');
     assert.deepEqual(Object.keys(readEvents(config.hiveDir)[0].prompts), standalone ? ['angela'] : ['michael', 'dwight', 'angela'], 'audit contains only invoked roles');

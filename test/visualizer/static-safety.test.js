@@ -58,10 +58,15 @@ test('the message composer and run form keep their bounds and labels', () => {
   assert.match(html, /<label class="chat-to-label" for="chat-to">/);
   assert.match(html, /<label class="sr-only" for="chat-text">/);
   assert.match(html, /id="chat-status" role="status" aria-live="polite"/);
-  for (const [docker, host] of [['f-sandbox-docker', 'f-sandbox-host'], ['pf-docker', 'pf-host']]) {
-    assert.match(html, new RegExp(`<input type="radio" name="[a-z-]+" value="host" id="${host}" checked>`), `${host}: the trusted host is the default`);
-    assert.match(html, new RegExp(`<input type="radio" name="[a-z-]+" value="docker" id="${docker}">`), `${docker}: Docker is not preselected`);
-  }
+  // the Team run: Scranton's own sandbox is the default, Docker and the trusted host are picked
+  assert.match(html, /<input type="radio" name="sandbox" value="scranton" id="f-sandbox-scranton" checked>/, 'the Scranton sandbox is the default');
+  assert.match(html, /<input type="radio" name="sandbox" value="docker" id="f-sandbox-docker">/, 'Docker is not preselected');
+  assert.match(html, /<input type="radio" name="sandbox" value="host" id="f-sandbox-host">/, 'the trusted host is not preselected');
+  // the Pipeline checks keep their own choice
+  assert.match(html, /<input type="radio" name="[a-z-]+" value="host" id="pf-host" checked>/, 'pf-host: the trusted host is the default');
+  assert.match(html, /<input type="radio" name="[a-z-]+" value="docker" id="pf-docker">/, 'pf-docker: Docker is not preselected');
+  assert.match(html, /<input id="f-approve-timeout" name="approvalTimeout" class="mono narrow" type="text" inputmode="numeric" maxlength="5" value="600"/);
+  assert.match(html, /<section class="approvals" id="approvals" hidden aria-labelledby="approvals-title">/, 'the approval cards start hidden');
   // the acknowledgement of the default host is shown, and never given in the page: a chat that already ran on the
   // host has it ticked by the drawer (trust.js), a new one does not
   assert.match(html, /<label class="check trust team-only" id="f-trust-row"><input type="checkbox" id="f-trusted" name="trustedHost"><span>/);

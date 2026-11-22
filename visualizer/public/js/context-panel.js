@@ -501,7 +501,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
     e.budgetValue.setAttribute('min', String(lo));
     e.budgetValue.setAttribute('max', String(hi));
     setText(e.budgetRange, rangeText(mode, defaults));
-    // pi default has no id an override could be stored under
+    // Automatic has no id an override could be stored under
     e.budgetOnlyRow.hidden = !s.id;
     setText(e.budgetOnlyLabel, s.id ? `Only for ${modelText(s.id)}` : '');
     const v = Number(e.budgetValue.value);

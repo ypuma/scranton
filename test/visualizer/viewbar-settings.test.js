@@ -31,6 +31,7 @@ test('run defaults: only valid fields the human set; the host acknowledgement is
   assert.deepEqual(parseRunDefaults(JSON.stringify({ maxParallel: 0, sandbox: 'vm', trustedHost: true })), {});
   assert.deepEqual(parseRunDefaults(JSON.stringify({ maxParallel: 33 })), {});
   assert.deepEqual(parseRunDefaults(JSON.stringify({ sandbox: 'host', trustedHost: true })), { sandbox: 'host' });
+  assert.deepEqual(parseRunDefaults(JSON.stringify({ sandbox: 'scranton' })), { sandbox: 'scranton' }, 'Scranton\'s own sandbox can be the default of this computer');
   assert.deepEqual([parseParallel('1'), parseParallel(' 32 '), parseParallel('0'), parseParallel('1.5'), parseParallel('-2'), parseParallel('')], [1, 32, null, null, null, null]);
   const panel = read('js/control-panel.js');
   assert.match(panel, /const d = \{ \.\.\.executionDefaults\(control\), \.\.\.parseRunDefaults\(store\.get\(RUN_DEFAULTS_KEY\)\) \};/, 'the run form starts from them');

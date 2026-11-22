@@ -5,7 +5,7 @@ import path from 'node:path';
 import { initialState, reduce } from '../../src/core/state.js';
 import { createLiveActivity, emptyLive, readLive } from '../../src/core/live-activity.js';
 import { EventRecorder } from '../../src/core/events.js';
-import { startPi, describeTool } from '../../src/core/pi-runner.js';
+import { startAgent, describeTool, shutdownAgentRuntimes } from '../../src/core/agent/index.js';
 import { fakeConfig } from './helpers.js';
 import { listRuns } from '../../src/core/thread.js';
 import { pipelineUsage, pipelineSteps } from '../../src/core/pipeline-activity.js';
@@ -77,17 +77,22 @@ test('run completion clears live on success, abort and failure; reasoning is nev
   }
 });
 
-for (const transport of ['json', 'rpc']) test(`${transport} fake streams thinking and text and per-message usage without changing totals`, async t => {
+test('own runner streams thinking and text into live activity and reconciles per-message usage', async t => {
+  t.after(() => shutdownAgentRuntimes());
   const dir = temp(t), config = fakeConfig(dir), records = [], calls = [];
-  fs.writeFileSync(path.join(dir, 'inbox.md'), 'fixture');
-  const result = await startPi({ transport, spec: { argv: [process.execPath, path.resolve('tools/fake-pi.js')], shell: false },
-    cwd: dir, agentId: 'michael', instanceId: 'michael', agentConfig: config.agents.michael, pi: config.pi,
+  const live = createLiveActivity(dir, 'stream'); t.after(() => live.close());
+  const result = await startAgent({ scripted: 'happy',
+    cwd: dir, agentId: 'michael', instanceId: 'michael', agentConfig: {...config.agents.michael, keywords: ['PLAN_READY']},
     hive: { dir, inboxPath: () => path.join(dir, 'inbox.md'), sessionDir: () => dir }, message: 'fixture',
-    extraEnv: { SCRANTON_AGENT: 'michael', FAKE_PI_DETERMINISTIC: '1', SCRANTON_FAKE_DELAY_MS: '1' },
-    onLive: r => records.push(r), onUsage: u => calls.push(u), timeoutMs: 10000 }).done;
+    extraEnv: { SCRANTON_AGENT: 'michael', SCRANTON_FAKE_DETERMINISTIC: '1', SCRANTON_FAKE_DELAY_MS: '1' },
+    onLive: r => { records.push(r); live.update('michael', 'michael', r); }, onUsage: u => calls.push(u), timeoutMs: 10000 }).done;
   assert.equal(result.ok, true, JSON.stringify(result));
   for (const kind of ['thinking_start', 'thinking_delta', 'thinking_end', 'text_delta', 'text_end']) assert.ok(records.some(r => r.assistantMessageEvent?.type === kind), kind);
   assert.ok(calls.length > 0);
+  live.close();
+  const thoughts = fs.readFileSync(path.join(dir, 'thoughts.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(thoughts.some(r => r.kind === 'reasoning' && r.text.includes('Checking the request')));
+  assert.ok(thoughts.some(r => r.kind === 'answer' && r.text.includes('[PLAN_READY]')));
   for (const key of ['input', 'output', 'cost']) assert.equal(calls.reduce((n, c) => n + c.usage[key], 0), result.usage[key]);
 });
 

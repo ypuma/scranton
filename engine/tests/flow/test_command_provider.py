@@ -136,3 +136,13 @@ response.write_text(json.dumps({"text": json.dumps(answers[r["role"]][0]), "usag
     assert code == 0 and status["status"] == "succeeded", status
     assert "a + b" in (case["source"] / "calculator.py").read_text()
     assert not list((case["root"] / "test0001/tmp/provider").iterdir())
+
+
+def test_command_example_uses_scranton_completion_bridge():
+    example = Path(__file__).parents[2] / "examples" / "config.command.json"
+    config = json.loads(example.read_text(encoding="utf-8"))
+    for role in ("planner", "implementer", "reviewer"):
+        model = config["models"][role]
+        assert model["provider"] == "command"
+        assert model["command"][1].endswith("/tools/pipeline-complete.js")
+        assert model["structured_output"] == "json_text"

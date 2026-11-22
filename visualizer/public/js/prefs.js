@@ -52,6 +52,6 @@ export function parseRunDefaults(raw) {
   const out = {};
   const parallel = parseParallel(v.maxParallel);
   if (parallel !== null) out.maxParallel = parallel;
-  if (v.sandbox === 'docker' || v.sandbox === 'host') out.sandbox = v.sandbox;
+  if (v.sandbox === 'scranton' || v.sandbox === 'docker' || v.sandbox === 'host') out.sandbox = v.sandbox;
   return out;
 }

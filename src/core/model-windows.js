@@ -1,17 +1,11 @@
-import path from 'node:path';
-import { homedir } from 'node:os';
-import { createModelRuntime } from './auth.js';
+import { models as catalogue, getModel } from './llm/catalogue.js';
 import { createProviderStore } from './providers.js';
 import { LIMITS } from './context/limits.js';
 
 const valid = (value) => typeof value === 'string' && value.isWellFormed() && value.length > 0 && value.length <= 256 && !/[\s\x00-\x1f\x7f-\x9f]/.test(value);
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
-let sharedRuntime;
-const registry = () => sharedRuntime ??= Promise.resolve().then(() => createModelRuntime()).catch(() => null);
-const providerStore = () => {
-  const override = process.env.PI_CODING_AGENT_DIR;
-  return createProviderStore(override ? path.resolve(override.replace(/^~(?=$|[\\/])/, homedir())) : path.join(homedir(), '.pi', 'agent'));
-};
+const registry = () => ({ getAllModels: () => catalogue, getModel });
+const providerStore = () => createProviderStore();
 
 export function modelId(ref) {
   try {

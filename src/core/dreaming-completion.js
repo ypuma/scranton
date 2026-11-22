@@ -2,9 +2,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import childProcess from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { killTree, piChildEnv } from './pi-command.js';
+import { killTree, helperEnv } from './process-tree.js';
+import { credentialsDirectory } from './credentials/store.js';
 
-const helper = fileURLToPath(new URL('../../tools/dreaming-pi-complete.js', import.meta.url));
+const helper = fileURLToPath(new URL('../../tools/dreaming-complete.js', import.meta.url));
 const invalid = () => new Error('Invalid dreaming completion request');
 const failed = () => new Error('Dreaming completion failed');
 
@@ -45,7 +46,8 @@ export async function completeDreaming({ dataDir, signal, ...options }) {
     dir = await fs.mkdtemp(path.join(dataDir, 'dreaming-completion-'));
     await fs.chmod(dir, 0o700);
     if (signal?.aborted) throw cancelled();
-    const env = piChildEnv(process.env);
+    const env = helperEnv(process.env);
+    env.SCRANTON_CREDENTIALS_DIR = credentialsDirectory({ env });
     // Node preload hooks would run before our trusted helper could disable discovery.
     for (const key of Object.keys(env)) if (/^(NODE_OPTIONS|NODE_PATH|SCRANTON_PIPELINE_KEY_.*)$/i.test(key)) delete env[key];
     return await new Promise((resolve, reject) => {

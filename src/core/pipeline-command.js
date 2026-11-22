@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { PACKAGE_ROOT, parseCommandSpec } from './config.js';
-import { killTree } from './pi-command.js';
+import { killTree } from './process-tree.js';
+import { credentialsDirectory } from './credentials/store.js';
 
 export function resolvePipelineCommand({ env = process.env, root = PACKAGE_ROOT, platform = process.platform, arch = process.arch } = {}) {
   if (env.SCRANTON_PIPELINE_COMMAND !== undefined) {
@@ -56,10 +57,13 @@ function bundledFile(runtime, relative) {
 
 export function pipelineChildEnv(env = process.env) {
   // Do not propagate unrelated provider credentials into the engine or its checks.
-  return Object.fromEntries(Object.entries(env).filter(([k]) => !/API_KEY|TOKEN|SECRET|PASSWORD|^SCRANTON_PIPELINE_KEY_|^SCRANTON_PROVIDER_.*_KEY$|^SCRANTON_(RUN_LEASE|PARENT_GUARD)$/i.test(k)));
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([k]) => !/API_KEY|TOKEN|SECRET|PASSWORD|^SCRANTON_PIPELINE_KEY_|^SCRANTON_PROVIDER_.*_KEY$|^SCRANTON_(RUN_LEASE|PARENT_GUARD)$/i.test(k)));
+  if (env.SCRANTON_CREDENTIALS_DIR) childEnv.SCRANTON_CREDENTIALS_DIR = credentialsDirectory({ env });
+  return childEnv;
 }
 export function spawnPipeline(spec, args, env = process.env) {
-  return spawn(spec.argv[0], [...spec.argv.slice(1), ...args], { cwd: PACKAGE_ROOT, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+  // Resume rebinds saved bridge paths after upgrades without rewriting the audited config.
+  return spawn(spec.argv[0], [...spec.argv.slice(1), ...args], { cwd: PACKAGE_ROOT, env: { ...env, SCRANTON_PIPELINE_COMPLETION_COMMAND: JSON.stringify([process.execPath, path.join(PACKAGE_ROOT, 'tools/pipeline-complete.js')]) }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
 }
 export function execPipeline(spec, args, { env = process.env, timeoutMs = 15000 } = {}) {
   return new Promise((resolve) => {

@@ -10,7 +10,7 @@ import { runCli } from '../../src/core/cli.js';
 import { runDoctor, satisfiesMin } from '../../src/core/doctor.js';
 import { loadConfig } from '../../src/core/config.js';
 import { parseMessage } from '../../src/core/hive.js';
-import { FAKE_PI, ROOT, fakeConfig, readEvents, tempDir } from './helpers.js';
+import { ROOT, fakeConfig, readEvents, tempDir } from './helpers.js';
 
 function capture() {
   const out = { text: '' };
@@ -24,12 +24,12 @@ async function cli(t, args, env = {}) {
   const e = capture();
   const code = await runCli(
     [...args, '--trusted-host', '--hive', path.join(dir, 'hive'), '--workspace', path.join(dir, 'ws')],
-    { stdout: o.stream, stderr: e.stream, cwd: dir, env: { PATH: process.env.PATH, ...env } }
+    { stdout: o.stream, stderr: e.stream, cwd: dir, env: { PATH: process.env.PATH, SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), PI_CODING_AGENT_DIR: path.join(dir, 'pi'), ...env } }
   );
   return { code, stdout: o.out.text, stderr: e.out.text, dir };
 }
 
-const fakePiEnv = (extra = {}) => ({ SCRANTON_PI_COMMAND: JSON.stringify([process.execPath, FAKE_PI]), FAKE_PI_DELAY_MS: '0', ...extra });
+const fakePiEnv = (extra = {}) => ({ SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy', SCRANTON_FAKE_DELAY_MS: '0', ...extra });
 
 test('help lists the commands', async () => {
   const o = capture();
@@ -53,8 +53,8 @@ test('invalid configuration is a clean exit 2, not a stack trace', async (t) => 
   assert.match(r.stderr, /maxFailedCycles must be a positive integer/);
 });
 
-test('run: full happy run through the CLI with SCRANTON_PI_COMMAND, exit 0', async (t) => {
-  const r = await cli(t, ['run', 'Build a tiny todo CLI', '--max-cycles', '2'], fakePiEnv({ FAKE_PI_SCENARIO: 'flaky' }));
+test('run: full happy run through the CLI with the scripted model, exit 0', async (t) => {
+  const r = await cli(t, ['run', 'Build a tiny todo CLI', '--max-cycles', '2'], fakePiEnv({ SCRANTON_FAKE_SCENARIO: 'flaky' }));
   assert.equal(r.code, 0, r.stderr + r.stdout);
   assert.match(r.stdout, /Plan: 3 milestones/);
   assert.match(r.stdout, /FAIL .*m2 cycle 1/);
@@ -65,19 +65,19 @@ test('run: full happy run through the CLI with SCRANTON_PI_COMMAND, exit 0', asy
   assert.notEqual(events[0].execution.simulated, true);
 });
 
-test('run: a partial run exits 1; no pi at all is a clear error', async (t) => {
-  const partial = await cli(t, ['run', 'x', '--no-plan', '--on-breaker', 'skip'], fakePiEnv({ FAKE_PI_FAIL: 'exit1' }));
+test('run: a partial run exits 1; obsolete Pi command settings are rejected', async (t) => {
+  const partial = await cli(t, ['run', 'x', '--no-plan', '--on-breaker', 'skip'], fakePiEnv({ SCRANTON_FAKE_FAIL: 'exit1' }));
   assert.equal(partial.code, 1);
   assert.match(partial.stdout, /Run finished: partial/);
   const none = await cli(t, ['run', 'x'], { SCRANTON_PI_COMMAND: JSON.stringify(['scranton-no-such-pi']) });
-  assert.equal(none.code, 1);
-  assert.match(none.stdout + none.stderr, /spawn scranton-no-such-pi ENOENT/);
+  assert.equal(none.code, 2);
+  assert.match(none.stdout + none.stderr, /SCRANTON_PI_COMMAND is no longer supported/);
 });
 
-test('demo: runs the fake pi in ./demo-workspace style dirs and succeeds', async (t) => {
+test('demo: runs the scripted model in ./demo-workspace style dirs and succeeds', async (t) => {
   const r = await cli(t, ['demo', '--scenario', 'happy', '--delay', '0']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /Simulated trusted-host demo with the fake pi - scenario "happy"/);
+  assert.match(r.stdout, /Simulated trusted-host demo with the scripted model - scenario "happy"/);
   assert.ok(fs.existsSync(path.join(r.dir, 'ws', 'todo.js')));
   assert.equal(readEvents(path.join(r.dir, 'hive'))[0].execution.simulated, true);
 });
@@ -97,9 +97,9 @@ test('agent: isolated single run writes an audited inbox and prints text + keywo
 });
 
 test('agent: an infrastructure failure is reported on stderr with exit 1', async (t) => {
-  const r = await cli(t, ['agent', 'angela', 'check it'], fakePiEnv({ FAKE_PI_FAIL: 'exit1' }));
+  const r = await cli(t, ['agent', 'angela', 'check it'], fakePiEnv({ SCRANTON_FAKE_FAIL: 'exit1' }));
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /pi exited with code 1; pi stderr: fake-pi: No API key found/);
+  assert.match(r.stderr, /Scripted agent exited with code 1/);
 });
 
 test('dashboard / visualize report a missing module instead of crashing', async (t) => {
@@ -133,28 +133,18 @@ test('bin/scranton.js: a busy port exits 1 with the message, without "unexpected
   assert.ok(!r.stderr.includes('unexpected error'));
 });
 
-test('doctor: fake pi with a configured model passes; a missing pi fails with exit 1', async (t) => {
-  const dir = tempDir(t);
-  const stdout = capture();
-  const config = fakeConfig(dir);
-  config.agents.dwight.model = 'fake/model';
-  assert.equal(await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: stdout.stream, auth: { async listAccounts() { return []; } } }), 0, stdout.out.text);
-  assert.match(stdout.out.text, /pi --version: fake-pi 0\.0\.0/);
-  assert.match(stdout.out.text, /dwight: credentials ready for fake\/model/);
-  assert.match(stdout.out.text, /warnings found; the run can start\./);
-  assert.doesNotMatch(stdout.out.text, /All good\./);
-
-  const bad = capture();
-  const badConfig = fakeConfig(dir, { command: ['scranton-no-such-pi'] });
-  assert.equal(await runDoctor({ config: badConfig, env: { PATH: process.env.PATH }, stdout: bad.stream, auth: { async listAccounts() { return []; } } }), 1);
-  assert.match(bad.out.text, /\[FAIL\] pi --version failed/);
+test('doctor reports own runtime and does not resolve a Pi executable', async (t) => {
+  const dir = tempDir(t), stdout = capture(), config = fakeConfig(dir);
+  await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: stdout.stream, auth: { listAccounts() { return []; } } });
+  assert.match(stdout.out.text, /Scranton|runtime/i);
+  assert.doesNotMatch(stdout.out.text, /pi --version/);
 });
 
 test('doctor: an unwritable workspace is a failure', async (t) => {
   const dir = tempDir(t);
   const blocker = path.join(dir, 'a-file');
   fs.writeFileSync(blocker, 'x');
-  const config = loadConfig({ cwd: dir, env: {}, hasBash: true, fileConfig: { workspace: path.join(blocker, 'sub'), hiveDir: path.join(dir, 'hive'), pi: { command: [process.execPath, FAKE_PI] } } });
+  const config = loadConfig({ cwd: dir, env: {}, hasBash: true, fileConfig: { workspace: path.join(blocker, 'sub'), hiveDir: path.join(dir, 'hive') } });
   const out = capture();
   assert.equal(await runDoctor({ config, env: { PATH: process.env.PATH }, stdout: out.stream, auth: { async listAccounts() { return []; } } }), 1);
   assert.match(out.out.text, /\[FAIL\] workspace not writable/);

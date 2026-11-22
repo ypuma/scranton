@@ -31,6 +31,7 @@ function text(value, max, label) {
 function validateEntry(id, input, entries) {
   validateAgentId(id, !AGENT_IDS.includes(id));
   if (!object(input)) fail(400, 'Expected agent object');
+  if (Object.hasOwn(input, 'extraArgs')) fail(400, `agents.${id}.extraArgs is no longer supported; remove Pi CLI arguments and configure tools/provider/model directly.`);
   const builtin = AGENT_IDS.includes(id);
   const allowed = builtin ? ['model', 'thinking', ...(GATE_INSTRUCTIONS[id] ? ['instruction'] : [])] : ['id', 'name', 'title', 'passKeyword', 'failKeyword', 'tools', 'instruction', 'model', 'thinking'];
   if (Object.keys(input).some((key) => !allowed.includes(key))) fail(400, 'Unexpected or immutable agent field');

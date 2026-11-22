@@ -98,14 +98,14 @@ test('Pipeline snapshots cap and structured project memory at start only, final-
   const f = fixture(t), chat = f.registry.createChat(f.project.id, { engine: 'pipeline' }); let calls = [];
   const memory = [{ id: 'memory', text: 'Pipeline: recorded structural outcome.', sources: [`projects/${f.project.id}/source.json`] }];
   const env = { ...process.env, SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(f.dir, 'workspaces') };
-  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], listModels: () => ({ providers: [{ id: 'openai', models: [{ id: 'fake' }] }] }), resolveDockerCredential: () => ({ value: 'test-key' }) };
+  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], listModels: () => ({ providers: [{ id: 'openai', models: [{ id: 'fake' }] }] }), resolveAuth: () => ({ type: 'api_key', key: 'test-key' }) };
   const supervisor = createPipelineSupervisor({ dataDir: f.dataDir, env, auth, dreaming: (p) => { assert.equal(p, f.project.id); return { policy: (...a) => { calls.push(a); return 1; }, structuredContext: () => memory }; } });
   f.onClose(async () => {
     await supervisor.close();
     assert.equal(supervisor.liveCount, 0);
     assert.ok(fs.existsSync(f.dir), 'Fixture survives until Pipeline writers have stopped');
   });
-  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'fake' }]));
+  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
   const body = { task: 'Current task', models, sandbox: { mode: 'host', trustHost: true }, checks: [{ id: 'test', kind: 'test', command: 'node --test' }] };
   const started = await supervisor.start(f.project, chat, body);
   const root = path.join(f.dataDir, 'projects', f.project.id, 'chats', chat.id, 'pipeline/requests', started.runId);
@@ -172,8 +172,8 @@ test('optional Team Dreaming failures never block starts or leak diagnostics or 
 test('optional Pipeline Dreaming failures keep configured ceilings, checks and fresh approvals', async (t) => {
   const f = fixture(t);
   const env = { ...process.env, SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(f.dir, 'workspaces') };
-  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], listModels: () => ({ providers: [{ id: 'openai', models: [{ id: 'fake' }] }] }), resolveDockerCredential: () => ({ value: 'test-key' }) };
-  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'fake' }]));
+  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], listModels: () => ({ providers: [{ id: 'openai', models: [{ id: 'fake' }] }] }), resolveAuth: () => ({ type: 'api_key', key: 'test-key' }) };
+  const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
   f.write(path.join(f.dataDir, 'projects', f.project.id, 'dreaming/state.json'), '{PRIVATE-SECRET');
   for (const fault of ['factory', 'context', 'policy', 'authority']) {
     const boom = () => { throw Error('PRIVATE-SECRET-DO-NOT-EXPOSE'); };

@@ -1,29 +1,15 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
-import { setTimeout as sleep } from 'node:timers/promises';
-import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
+import { models } from './llm/catalogue.js';
+import { createCredentialStore, credentialsDirectory } from './credentials/store.js';
+export { PROVIDER_ENV_NAMES } from './credentials/environment.js';
 
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const apis = ['openai-completions', 'openai-responses', 'anthropic-messages'];
-const digest = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
-export const builtinCatalog = builtinProviders();
-export const PROVIDER_ENV_NAMES = Object.freeze({
-  anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'], openai: ['OPENAI_API_KEY'], google: ['GEMINI_API_KEY'],
-  'ant-ling': ['ANT_LING_API_KEY'], azure: ['AZURE_OPENAI_API_KEY'], baseten: ['BASETEN_API_KEY'], cerebras: ['CEREBRAS_API_KEY'],
-  deepseek: ['DEEPSEEK_API_KEY'], fireworks: ['FIREWORKS_API_KEY'], 'github-copilot': ['COPILOT_GITHUB_TOKEN'], groq: ['GROQ_API_KEY'],
-  huggingface: ['HF_TOKEN'], 'kimi-coding': ['KIMI_API_KEY'], meta: ['META_API_KEY'], minimax: ['MINIMAX_API_KEY'], 'minimax-cn': ['MINIMAX_CN_API_KEY'],
-  mistral: ['MISTRAL_API_KEY'], moonshotai: ['MOONSHOT_API_KEY'], 'moonshotai-cn': ['MOONSHOT_API_KEY'], nvidia: ['NVIDIA_API_KEY'],
-  opencode: ['OPENCODE_API_KEY'], 'opencode-go': ['OPENCODE_API_KEY'], openrouter: ['OPENROUTER_API_KEY'],
-  'qwen-token-plan': ['QWEN_TOKEN_PLAN_API_KEY'], 'qwen-token-plan-cn': ['QWEN_TOKEN_PLAN_CN_API_KEY'], 'qwen-token-plan-individual': ['QWEN_TOKEN_PLAN_API_KEY'],
-  'qwen-token-plan-individual-cn': ['QWEN_TOKEN_PLAN_CN_API_KEY'],
-  radius: ['RADIUS_API_KEY'], together: ['TOGETHER_API_KEY'], typesafe: ['TYPESAFE_API_KEY'], 'vercel-ai-gateway': ['AI_GATEWAY_API_KEY'], xai: ['XAI_API_KEY'],
-  xiaomi: ['XIAOMI_API_KEY'], 'xiaomi-token-plan-ams': ['XIAOMI_TOKEN_PLAN_AMS_API_KEY'], 'xiaomi-token-plan-cn': ['XIAOMI_TOKEN_PLAN_CN_API_KEY'],
-  'xiaomi-token-plan-sgp': ['XIAOMI_TOKEN_PLAN_SGP_API_KEY'], zai: ['ZAI_API_KEY'], 'zai-coding-cn': ['ZAI_CODING_CN_API_KEY'],
-  'cloudflare-ai-gateway': ['CLOUDFLARE_API_KEY'], 'cloudflare-workers-ai': ['CLOUDFLARE_API_KEY'],
-  'google-vertex': ['GOOGLE_CLOUD_API_KEY'], 'amazon-bedrock': ['AWS_BEARER_TOKEN_BEDROCK']
-});
+export const builtinCatalog = Object.freeze([...new Set(models.map((m) => m.provider))].map((id) => Object.freeze({
+  id, name: { anthropic: 'Claude (Pro/Max)', openai: 'ChatGPT', google: 'Gemini', 'google-antigravity': 'Google Antigravity' }[id] ?? id,
+  auth: { ...(['anthropic', 'openai', 'google-antigravity'].includes(id) ? { oauth: true } : {}),
+    ...(id !== 'google-antigravity' ? { apiKey: { login: true } } : {}) }
+})));
 export function validateKey(value) {
   if (typeof value !== 'string' || value.length > 4096 || !value.trim() || /\s/.test(value.trim()) || /^[!$]/.test(value.trim()) || /[\x00-\x1f\x7f]/.test(value)) throw failure(400, 'API key must contain 1 to 4096 non-whitespace characters');
   return value.trim();
@@ -51,107 +37,28 @@ export function validateProvider(value) {
   });
   return { name: label.trim(), baseUrl: validateBaseUrl(value.baseUrl), api: value.api, authHeader: true, models };
 }
-// Match Pi 1.5's unexported utils/json.js parser, including trailing commas.
-function stripComments(input) {
-  return input.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => m[0] === '"' ? m : '');
-}
-function readJson(file, fallback, writable = false) {
-  try {
-    const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-    const stripped = stripComments(text);
-    if (writable && text !== stripped) throw failure(409, 'Provider configuration contains comments; refusing to rewrite or drop comments');
-    const v = JSON.parse(writable ? text : stripped.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : '')));
-    if (!object(v)) throw Error();
-    return v;
-  } catch (e) { if (e.code === 'ENOENT') return fallback; if (e.status) throw e; throw failure(409, 'Cannot read provider configuration; refusing to overwrite'); }
-}
-function atomic(file, value) {
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  try { fs.writeFileSync(tmp, Buffer.isBuffer(value) ? value : `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); fs.renameSync(tmp, file); }
-  finally { fs.rmSync(tmp, { force: true }); }
-}
-export function createProviderStore(agentDir) {
-  const modelsPath = path.join(agentDir, 'models.json'), registryPath = path.join(agentDir, 'scranton-providers.json');
-  const lock = path.join(agentDir, 'models.json.scranton-lock');
+
+export function createProviderStore(dir = credentialsDirectory()) {
+  const store = createCredentialStore({ dir });
   let detail;
-  function read(writable = false) {
-    const models = readJson(modelsPath, { providers: {} }, writable), registry = readJson(registryPath, {}, writable);
-    if (!object(models.providers) || Object.values(registry).some((v) => typeof v !== 'string' || !/^[a-f0-9]{64}$/.test(v))) throw failure(409, 'Invalid provider configuration; refusing to overwrite');
-    return { models, registry };
-  }
-  async function exclusive(fn) {
-    fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-    const deadline = Date.now() + 10000;
-    for (;;) {
-      try { fs.mkdirSync(lock); break; } catch (e) {
-        if (e.code !== 'EEXIST') throw e;
-        // Old Scranton locks were empty directories; new locks identify their owner.
-        let stale = false, owned = false;
-        try {
-          const pid = Number(fs.readFileSync(path.join(lock, 'pid'), 'utf8'));
-          owned = true;
-          if (Number.isSafeInteger(pid) && pid > 0) {
-            try { process.kill(pid, 0); } catch (error) { stale = error.code === 'ESRCH'; }
-          }
-        } catch {
-          try { stale = Date.now() - fs.statSync(lock).mtimeMs > 30000; } catch {}
-        }
-        if (stale && !owned) {
-          // Atomic empty-directory removal cannot delete a new writer's populated lock.
-          try { fs.rmdirSync(lock); continue; } catch (error) { if (error.code === 'ENOENT') continue; }
-        }
-        if (stale || Date.now() >= deadline) throw failure(409, 'Provider configuration is locked; after verifying no Scranton writer is running, remove models.json.scranton-lock from the Pi agent directory');
-        await sleep(25);
-      }
-    }
-    try {
-      fs.writeFileSync(path.join(lock, 'pid'), String(process.pid), { flag: 'wx', mode: 0o600 });
-      return await fn();
-    } finally { fs.unlinkSync(path.join(lock, 'pid')); fs.rmdirSync(lock); }
-  }
-  function commit(models, registry) {
-    if (fs.existsSync(modelsPath)) {
-      try { fs.copyFileSync(modelsPath, `${modelsPath}.scranton-bak`, fs.constants.COPYFILE_EXCL); } catch (e) { if (e.code !== 'EEXIST') throw e; }
-    }
-    atomic(modelsPath, models);
-    atomic(registryPath, registry);
-  }
-  function list() {
-    detail = undefined;
-    try {
-      const { models, registry } = read();
-      return Object.keys(registry).filter((id) => Object.hasOwn(models.providers, id) && registry[id] === digest(models.providers[id])).map((id) => {
-        const entry = models.providers[id];
-        if (builtinCatalog.some((p) => p.id === id)) return { id, label: id, custom: true, methods: [], status: 'error', detail: 'Custom provider conflicts with a built-in Pi provider' };
-        // Revalidate before exposing or mounting metadata, even if the registry was edited externally.
-        const safe = validateProvider({ id, label: entry.name, baseUrl: entry.baseUrl, api: entry.api, models: entry.models });
-        return { id, label: safe.name, baseUrl: safe.baseUrl, api: safe.api, models: safe.models, custom: true, methods: ['api_key'] };
-      });
-    } catch { detail = 'Cannot read custom provider configuration; custom providers unavailable'; return []; }
-  }
-  return { list, getDetail: () => detail,
-    add: (value, afterWrite = async () => {}, canRepair = async () => false) => exclusive(async () => {
-      const entry = validateProvider(value), { models, registry } = read(true);
-      const managed = Object.hasOwn(registry, value.id) && Object.hasOwn(models.providers, value.id) && registry[value.id] === digest(models.providers[value.id]);
-      const repairable = await canRepair(managed);
-      if (Object.hasOwn(models.providers, value.id) && (!managed || !repairable)) {
-        throw failure(409, 'Provider already exists; remove a managed provider before replacing it');
-      }
-      const originals = [modelsPath, registryPath].map((file) => [file, fs.existsSync(file) ? fs.readFileSync(file) : null]);
-      try {
-        models.providers[value.id] = entry; registry[value.id] = digest(entry); commit(models, registry);
-        await afterWrite();
-      } catch (error) {
-        for (const [file, bytes] of originals) { if (bytes === null) fs.rmSync(file, { force: true }); else atomic(file, bytes); }
-        throw error;
-      }
-    }),
-    remove: (id, beforeWrite = async () => {}) => exclusive(async () => {
-      const { models, registry } = read(true);
-      if (!Object.hasOwn(registry, id) || !Object.hasOwn(models.providers, id) || registry[id] !== digest(models.providers[id])) throw failure(409, 'Provider is not managed by Scranton or was modified externally');
-      await beforeWrite(); delete models.providers[id]; delete registry[id]; commit(models, registry);
-    })
-  };
+  return { list() {
+    try { detail = undefined; return Object.values(store.read().providers).map((p) => {
+      const safe = validateProvider(p);
+      return { id: p.id, label: safe.name, baseUrl: safe.baseUrl, api: safe.api, models: safe.models, custom: true, methods: ['api_key'] };
+    }); } catch { detail = 'Cannot read Scranton provider configuration'; return []; }
+  }, getDetail: () => detail,
+  async add(value) {
+    const entry = validateProvider(value);
+    await store.transaction((data) => {
+      if (Object.hasOwn(data.providers, value.id) || Object.hasOwn(data.credentials, value.id)) throw Object.assign(failure(409, 'Provider already exists'), {code:'SCRANTON_PROVIDER_CONFLICT'});
+      data.providers[value.id] = { id: value.id, label: entry.name, baseUrl: entry.baseUrl, api: entry.api, models: entry.models };
+    });
+  }, async remove(id) {
+    await store.transaction((data) => {
+      if (!Object.hasOwn(data.providers, id)) throw Object.assign(failure(409, 'Provider is not managed by Scranton'), {code:'SCRANTON_PROVIDER_CONFLICT'});
+      delete data.providers[id]; delete data.credentials[id]; delete data.renewals[id];
+    });
+  } };
 }
 
 export async function discoverModels({ baseUrl, api, key }, { fetcher = fetch, timeoutMs = 10000, maxBytes = 1024 * 1024 } = {}) {

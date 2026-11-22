@@ -54,7 +54,7 @@ test('New run: the request, Options in one closed fold with its choices in a lin
   t.after(() => h.panel.setMode('demo'));
   await h.open();
   assert.equal(h.$('run-options').open, false);
-  assert.equal(h.$('run-options-summary').textContent, 'Checks: Review + Security, then Tests · no sandbox · up to 3 milestones at once');
+  assert.equal(h.$('run-options-summary').textContent, 'Checks: Review + Security, then Tests · Scranton sandbox · up to 3 milestones at once');
   assert.equal(h.$('run-busy').hidden, true);
   assert.equal(h.$('run-submit').disabled, false);
   await h.sandbox(false);
@@ -128,6 +128,10 @@ test('trust: asked once per chat - the chat that ran on the host has it ticked, 
     h.$('f-request').value = 'Build it';
   };
   await open();
+  // the trusted host is picked, never preselected
+  await h.sandbox('host');
+  h.$('f-trusted').checked = false;
+  assert.equal(h.$('f-trust-row').hidden, false);
   assert.deepEqual([h.$('f-trusted').checked, h.$('f-trust-kept').hidden], [false, true], 'a chat that never ran asks');
   await h.$('run-form').fire('submit');
   assert.equal(h.posts.length, 0, 'and nothing starts without the answer');
@@ -142,8 +146,8 @@ test('trust: asked once per chat - the chat that ran on the host has it ticked, 
   // Docker and back: still given; the follow-up composer starts with it as well
   await h.sandbox(false);
   assert.equal(h.$('f-trust-row').hidden, true);
+  for (const m of ['scranton', 'docker']) h.$(`f-sandbox-${m}`).checked = false;
   h.$('f-sandbox-host').checked = true;
-  h.$('f-sandbox-docker').checked = false;
   await h.$('f-sandbox-host').fire('change');
   assert.equal(h.$('f-trusted').checked, true);
   h.$('run-dialog').close();

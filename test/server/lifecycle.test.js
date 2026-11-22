@@ -1,4 +1,5 @@
 import './docker-model-env.js';
+import './runtime-env.js';
 import { isolationTestEnv } from '../core/isolation-test-root.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

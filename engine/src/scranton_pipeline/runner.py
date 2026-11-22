@@ -244,6 +244,32 @@ def drive(deps: Dependencies, value: Any = None) -> RunStatus:
         return status
 
 
+def resume_completion_config(cfg: EngineConfig) -> tuple[EngineConfig, list[str]]:
+    updates = {}
+    for role in ("planner", "implementer", "reviewer"):
+        model = getattr(cfg.models, role)
+        if model.provider != "command" or len(model.command) < 2:
+            continue
+        helper = model.command[1].replace("\\", "/").rsplit("/", 1)[-1]
+        if helper not in {"pipeline-pi-complete.js", "pipeline-complete.js"}:
+            continue
+        try:
+            current = json.loads(os.environ.get("SCRANTON_PIPELINE_COMPLETION_COMMAND", "null"))
+            if (not isinstance(current, list) or len(current) != 2
+                    or any(not isinstance(arg, str) or not arg or "\0" in arg
+                           or not Path(arg).is_absolute() or not Path(arg).is_file() for arg in current)
+                    or Path(current[1]).name != "pipeline-complete.js"):
+                raise ValueError("Invalid completion command")
+        except (OSError, ValueError, TypeError):
+            raise invalid("completion_command_missing", "Resume requires the current installation's completion command") from None
+        command = [*current, *model.command[2:]]
+        if command != model.command:
+            updates[role] = model.model_copy(update={"command": command})
+    if not updates:
+        return cfg, []
+    return cfg.model_copy(update={"models": cfg.models.model_copy(update=updates)}), list(updates)
+
+
 def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = None, digest: str | None = None,
            comment: str = "", trust_host: bool = False, guarded: bool = False, cancelling: bool = False, by: str = "human") -> RunStatus:
     if by not in {"human", "eval"}:
@@ -290,6 +316,8 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                 value = Command(resume={"decision": decision, "digest": digest, "comment": comment, "by": by})
             elif gate or decision or digest:
                 raise invalid("not_waiting", "Run is not waiting at a gate")
+        # Check the saved digest first; installation paths are runtime bindings, not config edits.
+        cfg, rebound_roles = resume_completion_config(cfg) if not cancelling else (cfg, [])
         with dependencies(run_dir, cfg, trust_host=trust_host or metadata.get("demo", False), guarded=guarded, models=not cancelling) as deps:
             if status.pending and not cancelling:
                 graph = build_graph(deps)
@@ -307,6 +335,10 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                     raise invalid("stale_digest", "Gate artifact changed")
             cleanup_provider(deps)
             cleanup_sandbox(deps)
+            if rebound_roles:
+                deps.events.emit("warning", code="completion_command_rebound",
+                                 message="Completion helper rebound to the current installation; saved config preserved",
+                                 roles=rebound_roles)
             deps.events.emit("run_resumed", gate=gate if not cancelling else None,
                              decision=decision if not cancelling else None,
                              has_feedback=bool(comment) if status.pending and not cancelling else False)

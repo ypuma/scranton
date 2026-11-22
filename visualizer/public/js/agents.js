@@ -3,7 +3,7 @@
 // No DOM, so Node can test it. Prompt text only ever lives in the open editor and the request body.
 import { stripBidi } from './format.js';
 import { AGENT_IDS, GATE_ROLES, ROLE_TITLES, ROLE_ID_RE, displayName } from './state.js';
-import { modelKey, parseModelKey } from './accounts.js';
+import { modelKey, parseModelKey, AUTOMATIC } from './accounts.js';
 
 export const AGENTS_URL = '/api/agents';
 // the server's limit, in UTF-8 bytes of the text as sent
@@ -133,11 +133,11 @@ export function missingNote(missing) {
   return `This prompt never mentions ${joined}. The agent's final answer needs ${missing.length > 1 ? 'these keywords' : 'this keyword'} for the handoff, so the run may stall without ${missing.length > 1 ? 'them' : 'it'}.`;
 }
 
-// "openai/gpt-a (set here) · thinking high", or "pi default"
+// "openai/gpt-a (set here) · thinking high", or "Automatic"
 export function modelSummary(r) {
   const m = r.model.value;
   const src = SETTING_SOURCE_LABEL[r.model.source];
-  const model = m ? `${stripBidi(m.provider)}/${stripBidi(m.model)}${src ? ` (${src})` : ''}` : 'pi default';
+  const model = m ? `${stripBidi(m.provider)}/${stripBidi(m.model)}${src ? ` (${src})` : ''}` : AUTOMATIC;
   const t = r.thinking.value;
   return t ? `${model} · thinking ${t}` : model;
 }
@@ -306,7 +306,7 @@ export function buildNewAgent(f = {}, roles = [], levels = THINKING_LEVELS) {
   return { body };
 }
 
-// The select value of a role's model ('' = pi default).
+// The select value of a role's model ('' = Automatic).
 export function modelValueKey(r) {
   const m = r?.model.value;
   return m ? modelKey(m.provider, m.model) : '';
@@ -349,7 +349,7 @@ export function buildAgentPatch(f = {}, r, roles = [], levels = THINKING_LEVELS)
   }
   if (!r.model.pinned && raw(f.model) !== modelValueKey(r)) {
     const m = parseModelKey(f.model);
-    if (f.model && !m) return { error: 'That model cannot be picked. Pick another one or pi default.', field: 'model' };
+    if (f.model && !m) return { error: `That model cannot be picked. Pick another one or ${AUTOMATIC}.`, field: 'model' };
     body.model = m;
   }
   if (!r.thinking.pinned && raw(f.thinking) !== (r.thinking.value ?? '')) {

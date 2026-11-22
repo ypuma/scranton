@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { test } from 'node:test';
-import { ModelsError } from '@earendil-works/pi-ai';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -13,30 +12,20 @@ import { createAuthService } from '../../src/core/auth.js';
 import { loadConfig } from '../../src/core/config.js';
 
 async function setup(t, enabled = true) {
-  const root = path.resolve('.scratch/docker-e2e/server-auth-tests'); fs.mkdirSync(root, { recursive: true });
+  const root = path.resolve('.scratch/auth-port/server'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'server-'));
   const notices = []; const opened = []; const calls = [];
-  const authPath = path.join(dir, 'profile', 'auth.json');
-  const auth = createAuthService({ authPath, env: {}, opener: async (...args) => opened.push(args), onChange: (s) => notices.push(s), runtimeFactory: async () => ({
-    refresh: async () => {},
-    login: async (provider, type, io) => {
-      if (type === 'api_key') {
-        const key = await io.prompt({ type: 'secret' });
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        let data = {}; try { data = JSON.parse(fs.readFileSync(authPath)); } catch {}
-        fs.writeFileSync(authPath, JSON.stringify({ ...data, [provider]: { type, key } }));
-        return;
-      }
-      io.notify({ type: 'auth_url', url: 'https://auth.openai.com/api/accounts/authorize?state=test' });
-      assert.equal(await io.prompt({ type: 'manual_code' }), 'FAKE_CODE');
-      fs.mkdirSync(path.dirname(authPath), { recursive: true });
-      fs.writeFileSync(authPath, JSON.stringify({ [provider]: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 } }));
-      io.notify({ type: 'progress', message: 'FAKE_ACCESS FAKE_REFRESH' });
+  const authPath = path.join(dir, 'store.json');
+  fs.writeFileSync(authPath, JSON.stringify({version:1,credentials:{},providers:{},renewals:{},deviceId:'fixture',import:{at:'fixture'}}));
+  const auth = createAuthService({env:{SCRANTON_CREDENTIALS_DIR:dir}, opener:async (...args) => opened.push(args), onChange:(s) => notices.push(s), oauth:{openai:{
+    async login(io) {
+      io.notify({type:'auth_url',url:'https://auth.openai.com/api/accounts/authorize?state=test'});
+      assert.equal(await io.prompt({type:'manual_code'}), 'FAKE_CODE');
+      io.notify({type:'progress',message:'FAKE_ACCESS FAKE_REFRESH'});
+      return {type:'oauth',access:'FAKE_ACCESS',refresh:'FAKE_REFRESH',expires:Date.now()+3600000};
     },
-    logout: async (provider) => { const data = JSON.parse(fs.readFileSync(authPath)); delete data[provider]; fs.writeFileSync(authPath, JSON.stringify(data)); },
-    getAuth: async () => { throw new ModelsError('oauth', 'OAuth refresh failed for openai', { cause: new Error('OpenAI OAuth token request failed (401): invalid_grant FAKE_ACCESS FAKE_REFRESH') }); },
-    getAvailable: async () => [{ provider: 'openai', id: 'fake-catalog', name: 'Fake catalog', reasoning: true, contextWindow: 12345 }]
-  }) });
+    async refresh() {throw Object.assign(Error('rejected'), {code:'SCRANTON_OAUTH_REJECTED',provider:'openai'});}
+  }}});
   const child = Object.assign(new EventEmitter(), { pid: 123, stdout: new PassThrough(), stderr: new PassThrough() });
   const runner = (...args) => { calls.push(args); return child; };
   const hive = path.join(dir, 'hive'), workspace = path.join(dir, 'workspace');
@@ -80,7 +69,7 @@ test('all auth routes enforce client marker, origin, host, JSON and body limits'
 
 test('non-loopback peer refused before auth service access', async () => {
   let accessed = false;
-  const controller = createControl({ hive: path.resolve('.scratch/auth-backend/unused'), auth: { listAccounts: () => { accessed = true; } } });
+  const controller = createControl({ hive: path.resolve('.scratch/auth-port/unused'), auth: { listAccounts: () => { accessed = true; } } });
   let status; let text;
   await controller.handle({ socket: { remoteAddress: '192.0.2.1', localPort: 1725 }, headers: { host: 'localhost:1725', 'x-scranton-client': '1' }, method: 'GET' }, { writeHead: (code) => status = code, end: (value) => text = value }, '/api/auth');
   assert.equal(status, 403); assert.equal(accessed, false); assert.match(text, /Forbidden/);
@@ -100,14 +89,14 @@ test('route login/input/cancel/logout lifecycle returns only public metadata and
   assert.equal((await call('/api/auth/login/input', { id, value: 'FAKE_CODE' })).status, 202);
   await f.auth.waitForLogin();
   assert.equal((await call('/api/auth')).value.accounts[1].kind, 'oauth');
-  const stored = JSON.parse(fs.readFileSync(f.authPath)); stored.openai.expires = 1;
+  const stored = JSON.parse(fs.readFileSync(f.authPath)); stored.credentials.openai.expires = 1;
   fs.writeFileSync(f.authPath, JSON.stringify(stored));
   const renewable = (await call('/api/auth')).value.accounts[1];
   assert.equal(renewable.status, 'signed_in'); assert.equal(renewable.renewsOnUse, true);
   await assert.rejects(f.auth.mintAccessToken('openai', { minExpiryMs: 1800000 }), /sign in again/);
   const failed = (await call('/api/auth')).value.accounts[1];
   assert.equal(failed.status, 'expired'); assert.ok(Number.isFinite(Date.parse(failed.renewFailedAt)));
-  assert.equal((await call('/api/models')).value.providers[0].models[0].id, 'fake-catalog');
+  assert.deepEqual((await call('/api/models')).value.providers, [], 'rejected credentials have no available models');
   assert.equal((await call('/api/runs', { request: 'fake controlled run', trustedHost: true })).status, 202);
   assert.equal((await call('/api/auth/logout', { provider: 'openai' })).status, 202, 'logout while run active');
   assert.equal((await call('/api/auth')).value.accounts[1].status, 'signed_out');
@@ -123,17 +112,17 @@ test('route login/input/cancel/logout lifecycle returns only public metadata and
 });
 
 test('model overrides validate catalog and thinking then reach config via child env (regression)', async (t) => {
-  const f = await setup(t);
-  for (const models of [null, [], { dev: {} }, { michael: null }, { michael: { provider: 'evil', model: 'fake-catalog' } }, { michael: { provider: 'openai', model: 'absent' } }, { michael: { provider: 'openai', model: 'fake-catalog', thinking: 'unlimited' } }, { michael: { provider: 'openai', model: 'fake-catalog', extra: true } }]) assert.equal((await request(f.srv, '/api/runs', { request: 'test', trustedHost: true, models })).status, 400);
+  const f = await setup(t); await f.auth.setApiKey('openai', 'FAKE_TEST_KEY');
+  for (const models of [null, [], { dev: {} }, { michael: null }, { michael: { provider: 'evil', model: 'gpt-4o' } }, { michael: { provider: 'openai', model: 'absent' } }, { michael: { provider: 'openai', model: 'gpt-4o', thinking: 'unlimited' } }, { michael: { provider: 'openai', model: 'gpt-4o', extra: true } }]) assert.equal((await request(f.srv, '/api/runs', { request: 'test', trustedHost: true, models })).status, 400);
   assert.equal(f.calls.length, 0);
-  const models = Object.fromEntries(['michael', 'dwight', 'angela'].map((role) => [role, { provider: 'openai', model: 'fake-catalog', thinking: 'high' }]));
+  const models = Object.fromEntries(['michael', 'dwight', 'angela'].map((role) => [role, { provider: 'openai', model: 'gpt-4o', thinking: 'high' }]));
   assert.equal((await request(f.srv, '/api/runs', { request: 'test', trustedHost: true, models })).status, 202);
   const [exe, args, options] = f.calls[0];
-  assert.equal(exe, process.execPath); assert.ok(!args.includes('fake-catalog'));
+  assert.equal(exe, process.execPath); assert.ok(!args.includes('gpt-4o'));
   const config = loadConfig({ cwd: f.workspace, env: options.env });
   for (const role of Object.keys(models)) {
-    assert.equal(options.env[`SCRANTON_${role.toUpperCase()}_MODEL`], 'fake-catalog');
-    assert.equal(config.agents[role].provider, 'openai'); assert.equal(config.agents[role].model, 'fake-catalog'); assert.equal(config.agents[role].thinking, 'high');
+    assert.equal(options.env[`SCRANTON_${role.toUpperCase()}_MODEL`], 'gpt-4o');
+    assert.equal(config.agents[role].provider, 'openai'); assert.equal(config.agents[role].model, 'gpt-4o'); assert.equal(config.agents[role].thinking, 'high');
   }
   assert.equal(fs.existsSync(path.join(f.workspace, 'scranton.config.json')), false);
   f.child.emit('close', 0);
@@ -161,10 +150,10 @@ test('extended key/provider routes return only metadata and keep secrets out of 
   const call = async (...args) => { const r = await request(f.srv, ...args); replies.push(r); return r; };
   assert.ok((await call('/api/auth/providers')).value.providers.some((p) => p.id === 'google'));
   assert.equal((await call('/api/auth/key', { provider: 'google', key })).status, 202);
-  assert.equal((await call('/api/auth/key', { provider: 'deepseek', key })).status, 202);
+  assert.equal((await call('/api/auth/key', { provider: 'anthropic', key })).status, 202);
   assert.equal((await call('/api/auth')).value.accounts.find((a) => a.id === 'google').kind, 'api_key');
   assert.equal((await call('/api/auth/logout', { provider: 'google' })).status, 202);
-  assert.equal((await call('/api/auth')).value.accounts.find((a) => a.id === 'deepseek').status, 'signed_in');
+  assert.equal((await call('/api/auth')).value.accounts.find((a) => a.id === 'anthropic').status, 'signed_in');
   const definition = { id: 'custom-route', label: 'Custom', baseUrl: 'https://example.test/v1', api: 'openai-completions', models: [{ id: 'model-test' }], key };
   assert.equal((await call('/api/providers', definition)).status, 202);
   assert.equal((await call('/api/auth')).value.accounts.find((a) => a.id === definition.id).custom, true);
@@ -178,31 +167,15 @@ test('extended key/provider routes return only metadata and keep secrets out of 
   assert.equal(fs.existsSync(path.join(f.hive, 'state.json')), false);
 });
 
-test('Docker pi-default refusal is actionable for initial and follow-up routes before spawn or lease', async (t) => {
-  const saved = {};
-  for (const role of ['MICHAEL', 'DWIGHT', 'ANGELA']) {
-    for (const suffix of ['PROVIDER', 'MODEL']) {
-      const key = `SCRANTON_${role}_${suffix}`;
-      saved[key] = process.env[key]; delete process.env[key];
-    }
-  }
-  t.after(() => { for (const [key, value] of Object.entries(saved)) {
-    if (value === undefined) delete process.env[key]; else process.env[key] = value;
-  } });
+test('Docker allows Automatic model selection for initial and follow-up routes', async (t) => {
   const f = await setup(t);
-  const expected = 'Docker requires an explicit provider and model for michael, dwight, angela; set the agent default for each role in Agents (pi default cannot be used in the Docker sandbox), or set SCRANTON_<ROLE>_PROVIDER and SCRANTON_<ROLE>_MODEL';
+  const { readRunLease, releaseRunLease } = await import('../../src/core/run-lease.js');
   for (const route of ['/api/runs', '/api/projects/default/chats/default/runs']) {
-    const refused = await request(f.srv, route, { request: 'fake goal', sandbox: 'docker' });
-    assert.equal(refused.status, 400); assert.deepEqual(refused.value, { error: expected });
-    assert.equal(f.calls.length, 0);
-    assert.equal(fs.existsSync(path.join(f.hive, 'control', 'owner.json')), false);
-    assert.equal(fs.existsSync(path.join(f.hive, 'events.jsonl')), false);
+    const accepted = await request(f.srv, route, { request: 'fake goal', sandbox: 'docker' });
+    assert.equal(accepted.status, 202); assert.deepEqual(accepted.value, { ok: true, pid: 123 });
+    const invocation = f.calls.at(-1);
+    assert.equal(invocation[1][invocation[1].indexOf('--sandbox') + 1], 'docker');
+    releaseRunLease(f.hive, readRunLease(f.hive).token); f.child.emit('close', 0);
   }
-  const choice = { provider: 'openai', model: 'fake-catalog' };
-  const partial = await request(f.srv, '/api/runs', { request: 'fake goal', sandbox: 'docker', models: { dwight: choice, angela: choice } });
-  assert.equal(partial.status, 400); assert.match(partial.value.error, /for michael, dwight, angela;/);
-  for (const role of ['dwight', 'angela']) assert.equal((await request(f.srv, `/api/agents/${role}`, { model: choice }, {}, 'PATCH')).status, 200);
-  const accepted = await request(f.srv, '/api/projects/default/chats/default/runs', { request: 'fake follow-up', sandbox: 'docker', noPlan: true, models: { dwight: choice, angela: choice } });
-  assert.equal(accepted.status, 202); assert.deepEqual(accepted.value, { ok: true, pid: 123 });
-  f.child.emit('close', 0);
+  assert.equal(f.calls.length, 2);
 });

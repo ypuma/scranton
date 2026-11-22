@@ -100,7 +100,13 @@ fn startup(app: &tauri::AppHandle) -> Result<(tauri::Url, Arc<Mutex<Vec<u8>>>), 
         platform::TARGET, cfg!(debug_assertions), std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
         &std::env::current_exe().map_err(|e| e.to_string())?,
     )?;
+    let helper_name = if cfg!(debug_assertions) {
+        format!("scranton-sandbox-helper-{}{}", platform::TARGET, if cfg!(windows) { ".exe" } else { "" })
+    } else { format!("scranton-sandbox-helper{}", if cfg!(windows) { ".exe" } else { "" }) };
+    let helper = node.parent().ok_or("Bundled Node has no parent directory")?.join(helper_name);
+    if !helper.is_file() { return Err("Bundled sandbox helper is missing".into()); }
     let mut command = Command::new(&node);
+    command.env("SCRANTON_SANDBOX_HELPER", &helper);
     #[cfg(target_os = "macos")]
     {
         let inherited = std::env::var("PATH").unwrap_or_default();

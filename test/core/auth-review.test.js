@@ -3,144 +3,82 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { createAuthService } from '../../src/core/auth.js';
-import { createProviderStore, builtinCatalog } from '../../src/core/providers.js';
-import { prepareSandbox } from '../../src/core/sandbox.js';
-import { runCli } from '../../src/core/cli.js';
 
 const KEY = 'FAKE_REVIEW_KEY';
 const definition = { id: 'review-custom', label: 'Review', baseUrl: 'https://example.test/v1', api: 'openai-completions', models: [{ id: 'test-model' }] };
 function fixture(t, options = {}) {
-  const root = path.resolve('.scratch/keys-fix'); fs.mkdirSync(root, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(root, 'review-'));
-  const file = path.join(dir, 'auth.json'), models = path.join(dir, 'models.json'), registry = path.join(dir, 'scranton-providers.json');
-  const auth = createAuthService({ authPath: file, env: {}, ...options });
+  const root = path.resolve('.scratch/auth-port/review'); fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, 'case-')), file = path.join(dir, 'store.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, credentials: {}, providers: {}, renewals: {}, deviceId: 'fixture', import: { at: 'fixture' } }));
+  const auth = createAuthService({ env: { SCRANTON_CREDENTIALS_DIR: dir }, ...options });
   t.after(async () => { await auth.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  return { dir, file, models, registry, auth, store: createProviderStore(dir) };
+  return { dir, file, auth };
 }
-
-test('review 1: Pi comment/trailing-comma parsing on reads; comments never rewritten', async (t) => {
+test('legacy provider files are not read or rewritten after one-time import', async (t) => {
   const f = fixture(t);
+  for (const name of ['models.json', 'scranton-providers.json']) fs.writeFileSync(path.join(f.dir, name), '// foreign broken config');
   await f.auth.addProvider({ ...definition, key: KEY });
-  const original = '// user comment\n' + fs.readFileSync(f.models, 'utf8').replace(/\n}$/, ',\n}');
-  fs.writeFileSync(f.models, original);
-  assert.equal(f.store.list()[0].id, definition.id);
-  assert.equal((await f.auth.listAccounts()).find((p) => p.id === definition.id).status, 'signed_in');
-  assert.equal((await f.auth.resolveDockerCredential(definition.id)).value, KEY);
-  await assert.rejects(f.store.add({ ...definition, id: 'another' }), /comments/i);
-  await assert.rejects(f.store.remove(definition.id), /comments/i);
-  assert.equal(fs.readFileSync(f.models, 'utf8'), original);
+  assert.equal((await f.auth.listModels()).providers[0].id, definition.id);
+  for (const name of ['models.json', 'scranton-providers.json']) assert.equal(fs.readFileSync(path.join(f.dir, name), 'utf8'), '// foreign broken config');
 });
-
-test('review 1: damaged/unreadable models or registry do not block built-in accounts, keys, logout, Docker or CLI', async (t) => {
-  for (const target of ['models', 'registry']) for (const unreadable of [false, true]) {
-    const f = fixture(t);
-    if (unreadable) fs.mkdirSync(f[target]); else fs.writeFileSync(f[target], '{broken');
-    assert.deepEqual(f.store.list(), []);
-    const accounts = await f.auth.listAccounts();
-    assert.equal(accounts[0].id, 'anthropic');
-    assert.match(accounts[0].detail, /custom provider configuration/i);
-    await f.auth.setApiKey('google', KEY);
-    assert.equal((await f.auth.resolveDockerCredential('google')).value, KEY);
-    fs.writeFileSync(f.file, JSON.stringify({ anthropic: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 } }));
-    const oauth = createAuthService({ authPath: f.file, env: {}, runtimeFactory: async () => ({ getAuth: async () => ({ source: 'OAuth', auth: { apiKey: 'FAKE_TOKEN' } }) }) });
-    assert.equal((await oauth.resolveDockerCredential('anthropic', { minExpiryMs: 0 })).value, 'FAKE_TOKEN');
-    await f.auth.logout('anthropic');
-    let text = ''; const output = { write: (s) => { text += s; } };
-    assert.equal(await runCli(['accounts'], { cwd: f.dir, env: {}, auth: f.auth, stdout: output, stderr: output }), 0);
-    assert.match(text, /custom provider configuration/i);
-    await assert.rejects(f.store.add(definition), { status: 409 });
-    await assert.rejects(f.store.remove(definition.id), { status: 409 });
-    assert.ok(!text.includes(KEY));
-  }
+test('damaged own store fails closed without overwriting bytes', async (t) => {
+  const f = fixture(t); await f.auth.listModels(); fs.writeFileSync(f.file, '{broken');
+  assert.equal(f.auth.listAccounts()[0].status, 'error');
+  await assert.rejects(f.auth.setApiKey('google', KEY));
+  await assert.rejects(f.auth.logout('google'));
+  assert.equal(fs.readFileSync(f.file, 'utf8'), '{broken');
 });
-
-test('review 2: failed key save/reload leaves no stranded definition and retry succeeds', async (t) => {
-  for (const stage of ['login', 'refresh']) {
-    let fail = true, f;
-    f = fixture(t, { runtimeFactory: async () => ({
-      login: async (id, type, io) => {
-        if (fail && stage === 'login') throw Error('fake failure');
-        fs.writeFileSync(f.file, JSON.stringify({ [id]: { type, key: await io.prompt({ type: 'secret' }) } }));
-      },
-      refresh: async () => { if (fail && stage === 'refresh') throw Error('fake failure'); },
-      logout: async (id) => { const data = JSON.parse(fs.readFileSync(f.file)); delete data[id]; fs.writeFileSync(f.file, JSON.stringify(data)); }
-    }) });
-    await assert.rejects(f.auth.addProvider({ ...definition, key: KEY }));
-    assert.deepEqual(f.store.list(), [], stage);
-    assert.equal(fs.existsSync(f.models), false);
-    assert.equal(fs.existsSync(f.registry), false);
-    fail = false;
-    await f.auth.addProvider({ ...definition, key: KEY });
-    assert.equal(f.store.list()[0].id, definition.id);
-  }
+test('failed provider transaction leaves neither definition nor credential; retry succeeds', async (t) => {
+  const f = fixture(t); await f.auth.listModels();
+  const original = fs.readFileSync(f.file);
+  await assert.rejects(f.auth.addProvider({ ...definition, models: [{ id: 'bad model' }], key: KEY }));
+  assert.deepEqual(fs.readFileSync(f.file), original);
+  await f.auth.addProvider({ ...definition, key: KEY });
+  const data = JSON.parse(fs.readFileSync(f.file));
+  assert.equal(data.providers[definition.id].id, definition.id); assert.equal(data.credentials[definition.id].key, KEY);
 });
-
-test('review 2: re-adding a managed provider without a key repairs it but never replaces foreign/edited entries', async (t) => {
+test('duplicate provider add never replaces a managed definition or key', async (t) => {
+  const f = fixture(t); await f.auth.addProvider({ ...definition, key: KEY });
+  const original = fs.readFileSync(f.file);
+  await assert.rejects(f.auth.addProvider({ ...definition, key: 'REPLACEMENT' }), { status: 409 });
+  assert.deepEqual(fs.readFileSync(f.file), original);
+});
+test('dead PID claim is recovered for own-store mutations', async (t) => {
+  const f = fixture(t); await f.auth.listModels(); const lock = path.join(f.dir, '.lock');
+  fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, '2147483647-00000000-0000-4000-8000-000000000000'), '');
+  await f.auth.addProvider({ ...definition, key: KEY });
+  assert.equal(fs.existsSync(lock), false); await f.auth.removeProvider(definition.id);
+});
+test('supported built-in IDs cannot be shadowed by custom providers', async (t) => {
   const f = fixture(t);
-  await f.store.add(definition);
-  await f.auth.addProvider({ ...definition, key: KEY });
-  assert.equal((await f.auth.listAccounts()).find((p) => p.id === definition.id).status, 'signed_in');
-  await assert.rejects(f.auth.addProvider({ ...definition, key: KEY }), { status: 409 });
+  for (const id of ['anthropic', 'openai', 'google', 'google-antigravity']) await assert.rejects(f.auth.addProvider({ ...definition, id, key: KEY }), { status: 400 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file)).providers, {});
 });
-
-test('review 3: crash-stale directory locks are recovered for add and remove', async (t) => {
-  const f = fixture(t), lock = path.join(f.dir, 'models.json.scranton-lock');
-  const stale = () => {
-    fs.mkdirSync(lock);
-    const old = new Date(Date.now() - 60000); fs.utimesSync(lock, old, old);
-  };
-  stale();
-  await f.store.add(definition);
-  stale();
-  await f.store.remove(definition.id);
-  assert.deepEqual(f.store.list(), []);
-  assert.equal(fs.existsSync(lock), false);
+test('custom add refuses unmanaged credentials without changing bytes', async (t) => {
+  for (const credential of [{ type: 'api_key', key: 'FOREIGN' }, null]) {
+    const f = fixture(t); await f.auth.listModels(); const data = JSON.parse(fs.readFileSync(f.file)); data.credentials[definition.id] = credential;
+    fs.writeFileSync(f.file, JSON.stringify(data)); const original = fs.readFileSync(f.file);
+    await assert.rejects(f.auth.addProvider({ ...definition, key: KEY }), { status: 409 }); assert.deepEqual(fs.readFileSync(f.file), original);
+  }
 });
-
-test('review 4: a new built-in ID collision is reported as conflicting without breaking reads', async (t) => {
+test('auth facade has no container credential projection', async (t) => {
+  const f = fixture(t); await f.auth.setApiKey('google', KEY); await f.auth.setApiKey('openai', 'OTHER_KEY');
+  assert.equal(f.auth.resolveDockerCredential, undefined);
+  assert.ok(!JSON.stringify(await f.auth.listModels()).includes(KEY));
+});
+test('unsupported key providers require an explicit custom declaration', async (t) => {
   const f = fixture(t);
-  await f.auth.addProvider({ ...definition, key: KEY });
-  builtinCatalog.push({ id: definition.id, name: 'New built-in', auth: {} });
-  t.after(() => { builtinCatalog.splice(builtinCatalog.findIndex((p) => p.id === definition.id), 1); });
-  const custom = f.store.list().find((p) => p.id === definition.id);
-  assert.ok(custom, 'conflicting managed provider remains visible');
-  assert.match(custom.detail, /conflict.*built-in/i);
-  const accounts = await f.auth.listAccounts();
-  assert.equal(accounts[0].id, 'anthropic');
-  assert.equal(accounts.find((p) => p.id === definition.id).status, 'error');
-  assert.match(accounts.find((p) => p.id === definition.id).detail, /conflict.*built-in/i);
-  await assert.rejects(f.auth.resolveDockerCredential(definition.id), /sign in again/);
+  assert.equal(f.auth.listProviders().providers.some((p) => p.id === 'deepseek'), false);
+  await assert.rejects(f.auth.setApiKey('deepseek', KEY), { status: 400 });
+  await f.auth.addProvider({ ...definition, id: 'deepseek', key: KEY });
+  assert.equal((await f.auth.listModels()).providers[0].id, 'deepseek');
+});
+test('unknown removals retain the established HTTP conflict status', async (t) => {
+  const f = fixture(t); await assert.rejects(f.auth.removeProvider('unknown'), { status: 409 });
 });
 
-test('review 5: custom add refuses an unmanaged stored credential without modifying any file', async (t) => {
-  for (const credential of [{ type: 'api_key', key: 'FAKE_FOREIGN_KEY' }, { type: 'oauth', access: 'FAKE_FOREIGN_ACCESS' }, null]) {
-    const f = fixture(t);
-    const original = JSON.stringify({ [definition.id]: credential });
-    fs.writeFileSync(f.file, original);
-    await assert.rejects(f.auth.addProvider({ ...definition, key: KEY }), { status: 409 });
-    assert.equal(fs.readFileSync(f.file, 'utf8'), original);
-    assert.equal(fs.existsSync(f.models), false);
-    assert.equal(fs.existsSync(f.registry), false);
-  }
-});
-
-test('review 1 Docker preparation: corrupted custom config does not block explicit built-in OAuth/key launches', async (t) => {
-  const f = fixture(t, { runtimeFactory: async () => ({ getAuth: async () => ({ source: 'OAuth', auth: { apiKey: 'FAKE_DOCKER_TOKEN' } }) }) });
-  fs.writeFileSync(f.file, JSON.stringify({ anthropic: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 }, google: { type: 'api_key', key: KEY } }));
-  fs.writeFileSync(f.models, '{broken');
-  const workspace = path.join(f.dir, 'work'), sessionDir = path.join(f.dir, 'session'), systemPromptFile = path.join(f.dir, 'prompt.md');
-  fs.mkdirSync(workspace); fs.mkdirSync(sessionDir); fs.writeFileSync(systemPromptFile, 'test'); fs.writeFileSync(path.join(workspace, '.git'), 'gitdir: unused');
-  for (const provider of ['anthropic', 'google']) {
-    const launch = await prepareSandbox({ sandbox: { mode: 'docker' }, workspace, sessionDir, systemPromptFile, provider, env: {} }, { auth: f.auth, executable: 'fake-docker', run: async (_exe, args) => ['info', 'image'].includes(args[0]) ? 'linux' : '' });
-    assert.equal(launch.env[provider === 'anthropic' ? 'ANTHROPIC_OAUTH_TOKEN' : 'GEMINI_API_KEY'], provider === 'anthropic' ? 'FAKE_DOCKER_TOKEN' : KEY);
-    assert.ok(!launch.argsPrefix.join(' ').includes(KEY));
-    await launch.cleanup();
-  }
-});
-
-test('review 3: PID-bearing abandoned locks give explicit recovery instructions without deleting contents', async (t) => {
-  const f = fixture(t), lock = path.join(f.dir, 'models.json.scranton-lock');
-  fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'pid'), '2147483647');
-  await assert.rejects(f.store.add(definition), /remove models\.json\.scranton-lock/);
-  assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), '2147483647');
+test('trimmed key cannot leak through declared provider metadata', async (t) => {
+  const f = fixture(t); await f.auth.listModels(); const before = fs.readFileSync(f.file);
+  await assert.rejects(f.auth.addProvider({ ...definition, label: KEY, key: ` ${KEY} ` }), { status: 400 });
+  assert.deepEqual(fs.readFileSync(f.file), before);
 });

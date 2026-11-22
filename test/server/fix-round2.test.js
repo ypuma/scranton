@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { ModelsError } from '@earendil-works/pi-ai';
 import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
@@ -51,27 +50,27 @@ for (const registryMode of [false, true]) test(`configured models are exposed an
   for (const route of ['/api/control', scoped + '/control']) assert.deepEqual((await request(server, route)).value.defaults.models, expected);
   const choice = { provider: 'openai', model: 'request-model' };
   assert.equal((await request(server, scoped + '/runs', { request: 'fake', sandbox: 'docker', models: { dwight: choice } })).status, 202);
-  assert.equal(calls.length, 1); assert.equal(calls[0][2].env.SCRANTON_DWIGHT_MODEL, 'configured-model');
+  assert.equal(calls.length, 1); assert.equal(calls[0][2].env.SCRANTON_DWIGHT_MODEL, 'request-model');
   assert.equal(calls[0][2].env.SCRANTON_MICHAEL_MODEL, 'configured-model');
   assert.deepEqual((await request(server, scoped + '/control')).value.defaults.models, expected, 'request overrides are not defaults');
 });
 
 for (const rejected of [false, true]) test(`GET auth returns before proactive renewal; later poll shows ${rejected ? 'rejection' : 'success'}`, async (t) => {
-  const dir = fixture(t), authPath = path.join(dir, 'auth.json');
-  fs.writeFileSync(authPath, JSON.stringify({ openai: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: 1 } }));
+  const dir = fixture(t);
+  fs.writeFileSync(path.join(dir, 'store.json'), JSON.stringify({ version: 1, credentials: { openai: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: 1 } }, providers: {}, renewals: {}, deviceId: 'fixture', import: { at: 'fixture' } }));
   let complete, calls = 0; const logs = [], notices = [], responses = [];
   t.mock.method(console, 'error', (...args) => logs.push(args)); t.mock.method(console, 'warn', (...args) => logs.push(args));
-  const auth = createAuthService({ authPath, env: {}, onChange: (v) => notices.push(v), runtimeFactory: async () => ({ getAuth: async () => {
+  const auth = createAuthService({ env: { SCRANTON_CREDENTIALS_DIR: dir, PI_CODING_AGENT_DIR: path.join(dir, 'legacy') }, onChange: (v) => notices.push(v), oauth: { openai: { refresh: async () => {
     calls++;
     await new Promise((resolve) => { complete = resolve; });
-    if (rejected) throw new ModelsError('oauth', 'OAuth refresh failed for openai', { cause: new Error('OpenAI OAuth token request failed (400): invalid_grant FAKE_ACCESS FAKE_REFRESH') });
-    fs.writeFileSync(authPath, JSON.stringify({ openai: { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 } }));
-    return { source: 'OAuth', auth: { apiKey: 'FAKE_ACCESS' } };
-  } }) });
+    if (rejected) throw Object.assign(Error('invalid_grant FAKE_ACCESS FAKE_REFRESH'), { code: 'SCRANTON_OAUTH_REJECTED', provider: 'openai' });
+    return { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', expires: Date.now() + 3600000 };
+  } } } });
   const server = await startVisualizerServer({ hiveDir: path.join(dir, 'hive'), publicDir: dir, port: 0, control: { workspace: path.join(dir, 'ws'), auth } });
   t.after(async () => { complete?.(); await server.close(); });
   const poll = async () => { const response = await request(server, '/api/auth'); responses.push(response); assert.equal(response.status, 200); return response.value.accounts.find((a) => a.id === 'openai'); };
-  assert.equal((await poll()).renewsOnUse, true); assert.equal(calls, 1);
+  const untilRefresh = async () => { for (let i = 0; i < 100 && !complete; i++) await sleep(5); };
+  assert.equal((await poll()).renewsOnUse, true); await untilRefresh(); assert.equal(calls, 1);
   assert.equal((await poll()).renewsOnUse, true); assert.equal(calls, 1);
   complete();
   let account;

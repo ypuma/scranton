@@ -132,7 +132,7 @@ test('parseAgents: catalog order, custom agents after the built-ins, settings an
   assert.equal(roleView({ ...seclint, prompt: { ...seclint.prompt, source: 'custom' } }).source, 'Custom');
   assert.equal(roleView(p.roles[0]).model, 'openai/gpt-a (set here) \u00b7 thinking high');
   assert.equal(roleView(hank).model, 'anthropic/claude-x (scranton.config.json)');
-  assert.equal(roleView(p.roles[1]).model, 'pi default');
+  assert.equal(roleView(p.roles[1]).model, 'Automatic');
   assert.equal(roleView({ ...p.roles[0], title: 'Planner' }).kind, '', 'a title that says the kind is not repeated');
   assert.equal(roleView(p.roles[0]).kind, 'Planner');
 });
@@ -216,11 +216,11 @@ test('list: built-in and custom agents with kind, keywords, model and prompt sou
   });
   assert.deepEqual(seen, [
     ['Michael', 'Orchestrator', 'Planner', 'Built-in', 'openai/gpt-a (set here) \u00b7 thinking high'],
-    ['Dwight', 'Developer', '', 'Built-in', 'pi default'],
-    ['Oscar', 'Reviewer', 'Gate', 'Built-in', 'pi default'],
+    ['Dwight', 'Developer', '', 'Built-in', 'Automatic'],
+    ['Oscar', 'Reviewer', 'Gate', 'Built-in', 'Automatic'],
     ['Hank', 'Security', 'Gate', 'Built-in', 'anthropic/claude-x (scranton.config.json)'],
-    ['Angela', 'QA', 'Gate', 'Built-in', 'pi default \u00b7 thinking low'],
-    ['Seclint', 'Lint', 'Gate \u00b7 custom', 'Starter', 'pi default'],
+    ['Angela', 'QA', 'Gate', 'Built-in', 'Automatic \u00b7 thinking low'],
+    ['Seclint', 'Lint', 'Gate \u00b7 custom', 'Starter', 'Automatic'],
   ]);
   assert.deepEqual(h.row(5).keywords.childNodes.map((c) => c.textContent), ['SECLINT_PASSED', 'SECLINT_FAILED', 'BLOCKED']);
   assert.equal(h.row(5).tools.textContent, 'read \u00b7 grep');
@@ -326,7 +326,7 @@ test('settings of a built-in gate: model and thinking with PATCH, the instructio
   assert.equal(h.$('settings-instruction').value, 'Review only the parser.');
   assert.equal(h.$('settings-instruction-reset').hidden, false, 'it differs from the default');
   assert.equal(h.$('settings-model').value, '');
-  assert.equal(h.$('settings-model').childNodes[0].textContent, 'pi default');
+  assert.equal(h.$('settings-model').childNodes[0].textContent, 'Automatic');
   assert.equal(h.$('settings-model').disabled, false);
   assert.equal(globalThis.document.activeElement, h.$('settings-model'));
   assert.equal(h.$('settings-save').disabled, true, 'nothing changed');

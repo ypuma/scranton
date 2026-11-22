@@ -1,4 +1,5 @@
 import '../core/isolation-test-root.js';
+import './runtime-env.js';
 import { modelWindows } from './model-windows-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

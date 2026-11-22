@@ -124,7 +124,7 @@ test('parseChatContext: the section 9 document as it is, malformed parts as safe
   assert.deepEqual(d.sections.map((s) => [s.id, s.chars, s.tokens, s.exact]), [['notes', 11, 3, true], ['recent', 40, 10, true]]);
   assert.equal(d.sections[1].text, '#5 [success] add login\n<b>not html</b>', 'the text is kept verbatim, line breaks included');
   assert.deepEqual(d.developer, { model: { id: null, window: 128000, known: false }, budget: { tokens: 1280, used: 450 }, chars: 30, tokens: 8, text: 'Notes: Use tabs.\n#5 [success] add login' });
-  assert.equal(developerText(d.developer), '≈450 of 1,280 tokens (35% of the brief\'s budget) · pi default, 128,000-token window (assumed)');
+  assert.equal(developerText(d.developer), '≈450 of 1,280 tokens (35% of the brief\'s budget) · Automatic, 128,000-token window (assumed)');
 
   // the 0.3.0 document, and every other version, is one this page cannot read
   const v1 = { ...chatDoc(), v: 1, budget: { limit: 24000, used: 10321 } };
@@ -172,7 +172,7 @@ test('parseChatContext: hostile values in the v2 fields never reach the view as 
     sections: [{ id: 'recent', text: 'abc', chars: 'many', tokens: 2.5 }],
   }));
   assert.deepEqual(bad.model, { id: null, window: 128000, known: false }, 'a window that is no integer is unknown, and so is the id with a space');
-  assert.deepEqual(bad.budget, { tokens: 0, used: 0, mode: null, value: null, source: 'project', capped: null }, 'an override of pi default is no override');
+  assert.deepEqual(bad.budget, { tokens: 0, used: 0, mode: null, value: null, source: 'project', capped: null }, 'an override of Automatic is no override');
   assert.deepEqual([bad.notes.tokens, bad.notes.cut, bad.memory.tokens], [0, false, 0]);
   assert.equal(bad.settings.crossChat, false);
   assert.deepEqual(bad.settings.budget, RULE, 'a rule out of range is the default rule');
@@ -197,7 +197,7 @@ test('the window and capped hints: unknown windows say what is assumed; each cap
   const unknown = parseChatContext(chatDoc({ model: { id: null, window: 128000, known: false } }));
   assert.equal(windowNote(unknown.model), 'Model window unknown - assuming 128,000 tokens');
   assert.equal(windowNote(parseChatContext(chatDoc()).model), '');
-  assert.deepEqual(summaryRows(unknown).at(-2), ['Model', 'pi default · 128,000-token window (assumed)']);
+  assert.deepEqual(summaryRows(unknown).at(-2), ['Model', 'Automatic · 128,000-token window (assumed)']);
   assert.equal(contextLine(unknown), 'Context: 5 turns · 2 other chats · notes · ≈1.1k tokens (0.8%)', 'the percentage is of the assumed window');
   const capped = (c, model = { id: 'x', window: 32000, known: true }) => cappedText(parseChatContext(chatDoc({ model, budget: { ...chatDoc().budget, capped: c } })));
   assert.equal(capped(null), '');
@@ -423,7 +423,7 @@ test('drawer: summary, one block per section with its verbatim text, and the Tea
   assert.deepEqual(meter.childNodes.map((c) => c.dataset.fill), ['full', ...Array(19).fill('')]);
   assert.deepEqual(['aria-valuenow', 'aria-valuemax', 'aria-valuetext'].map((k) => meter.getAttribute(k)), ['1053', '20000', h.$('context-usage').textContent]);
   assert.deepEqual([h.$('context-window-note').hidden, h.$('context-capped').hidden], [true, true], 'a known window, nothing capped');
-  assert.equal(h.$('context-developer-usage').textContent, '≈450 of 1,280 tokens (35% of the brief\'s budget) · pi default, 128,000-token window (assumed)');
+  assert.equal(h.$('context-developer-usage').textContent, '≈450 of 1,280 tokens (35% of the brief\'s budget) · Automatic, 128,000-token window (assumed)');
   assert.equal(h.$('context-developer').childNodes[0].childNodes[0].childNodes[2].textContent, '≈8 tokens');
   const blocks = h.$('context-sections').childNodes;
   assert.deepEqual(blocks.map((b) => b.dataset.section), ['notes', 'recent']);
@@ -495,8 +495,8 @@ test('a pipeline chat reads its document with the planner pick; without one the 
   assert.equal(none.$('context-window-note').textContent, 'Model window unknown - assuming 128,000 tokens');
   assert.equal(none.$('context-window-note').hidden, false);
   assert.equal(none.$('context-capped').hidden, true, 'the stub computes the plain rule here');
-  assert.equal(none.$('context-budget-only-row').hidden, true, 'pi default has no id to keep an override under');
-  assert.equal(none.$('context-figures').childNodes[9].textContent, 'pi default · 128,000-token window (assumed)');
+  assert.equal(none.$('context-budget-only-row').hidden, true, 'Automatic has no id to keep an override under');
+  assert.equal(none.$('context-figures').childNodes[9].textContent, 'Automatic · 128,000-token window (assumed)');
 
   // a Team chat never sends the pick
   const team = harness({ plannerModel: () => pick });
@@ -775,12 +775,12 @@ test('a Pipeline chat previews a rule within the Pipeline budget range of the pr
   await h.scope('a');
   await h.open();
   const keeps = '; the Pipeline engine keeps the budget between 4,000 and 18,750 tokens.';
-  assert.equal(h.$('context-budget-preview').textContent, `≈12,800 tokens with the 128,000-token window of pi default${keeps}`);
+  assert.equal(h.$('context-budget-preview').textContent, `≈12,800 tokens with the 128,000-token window of Automatic${keeps}`);
   // 1 % of 128,000 is 1,280 tokens, which the engine raises
-  assert.equal(await set(h, '1'), `≈4,000 tokens with the 128,000-token window of pi default${keeps}`);
-  assert.equal(await set(h, '50'), `≈18,750 tokens with the 128,000-token window of pi default${keeps}`);
+  assert.equal(await set(h, '1'), `≈4,000 tokens with the 128,000-token window of Automatic${keeps}`);
+  assert.equal(await set(h, '50'), `≈18,750 tokens with the 128,000-token window of Automatic${keeps}`);
   h.$('context-budget-mode').value = 'tokens';
-  assert.equal(await set(h, '1000'), `≈4,000 tokens with the 128,000-token window of pi default${keeps}`);
+  assert.equal(await set(h, '1000'), `≈4,000 tokens with the 128,000-token window of Automatic${keeps}`);
 
   // a Team chat has no such range
   const team = harness();
@@ -792,7 +792,7 @@ test('a Pipeline chat previews a rule within the Pipeline budget range of the pr
   bare.server.chats.a = pipeDoc();
   await bare.scope('a');
   await bare.open();
-  assert.equal(await set(bare, '1'), '≈1,280 tokens with the 128,000-token window of pi default; the Pipeline engine\'s prompt budget can raise or lower it.');
+  assert.equal(await set(bare, '1'), '≈1,280 tokens with the 128,000-token window of Automatic; the Pipeline engine\'s prompt budget can raise or lower it.');
 });
 
 test('wording: one token is "≈1 token" wherever a count is printed with the word', async () => {
@@ -803,7 +803,7 @@ test('wording: one token is "≈1 token" wherever a count is printed with the wo
   assert.equal(contextLine(one), 'Context: 5 turns · 2 other chats · notes · memory · ≈1 token (<0.1%)');
   assert.equal(usageText(one), '≈1 token (<0.1% of the 200,000-token window)');
   assert.deepEqual(summaryRows(one).slice(2, 4).map(([, v]) => v), ['1 of 16,000 characters · ≈1 token', '1 character · ≈1 token']);
-  assert.equal(developerText(one.developer), '≈1 token · pi default, 128,000-token window (assumed)');
+  assert.equal(developerText(one.developer), '≈1 token · Automatic, 128,000-token window (assumed)');
   assert.equal(notesCount('a'), '1 / 16,000 · ≈1 token');
   assert.equal(notesCount(''), '0 / 16,000 · ≈0 tokens');
   const h = harness();

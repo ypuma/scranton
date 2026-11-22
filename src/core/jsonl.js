@@ -1,7 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 
 /**
- * Strict JSONL framing as pi documents it: split on LF only (optional CR stripped).
+ * Strict JSONL framing: split on LF only (optional CR stripped).
  * node:readline is unsuitable because it also splits on U+2028/U+2029, which are legal inside JSON strings.
  */
 export class JsonlSplitter {
