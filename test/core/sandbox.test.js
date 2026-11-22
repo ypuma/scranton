@@ -41,6 +41,22 @@ test('orphan cleanup removes only the matching labeled Scranton container and ve
 });
 test('tool image recipe contains no inference installation or host copy', () => {
   const recipe = fs.readFileSync('sandbox/Dockerfile', 'utf8');
-  assert.match(recipe, /FROM node:24-bookworm-slim/); assert.match(recipe, /git bash ripgrep fd-find/);
+  assert.match(recipe, /^FROM node:24-bookworm-slim$/m);
+  assert.deepEqual([...recipe.matchAll(/apt-get install -y --no-install-recommends ([^\r\n]+)/g)].map(match => match[1].trim()), ['git bash ca-certificates \\']);
+  const lock = JSON.parse(fs.readFileSync('tools-lock.json', 'utf8'));
+  for (const tool of ['rg', 'fd']) {
+    const prefix = tool.toUpperCase();
+    assert.ok(recipe.includes(`${prefix}_VERSION='${lock.tools[tool].version}'`));
+    for (const target of ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu']) {
+      const pin = lock.tools[tool].targets[target];
+      assert.ok(recipe.includes(`${prefix}_URL='${pin.url}'`));
+      assert.ok(recipe.includes(`${prefix}_SHA256='${pin.sha256}'`));
+    }
+    const check = `printf '%s  %s\\n' "$${prefix}_SHA256" '/tmp/${tool}.tar.gz' | sha256sum -c -`;
+    const extract = `tar -xzf /tmp/${tool}.tar.gz`;
+    assert.ok(recipe.includes(check));
+    assert.ok(recipe.indexOf(extract) > recipe.indexOf(check));
+    assert.ok(recipe.includes(`install -m 0755 "/tmp/search-tools/$${prefix}_BINARY" /usr/local/bin/${tool}`));
+  }
   assert.match(recipe, /USER 10001:10001/); assert.doesNotMatch(recipe, /npm install|earendil|^COPY |^ADD /m);
 });

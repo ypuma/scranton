@@ -26,9 +26,9 @@ node bin/scranton.js accounts
 
 # 2. Optional Modelle je Agent wählen (sonst Automatic) (Beispiel für die drei Standardrollen)
 node bin/scranton.js agents --hive .scranton-hive
-node bin/scranton.js agent set-model michael --provider openai --model gpt-5.3-codex --hive .scranton-hive
-node bin/scranton.js agent set-model dwight --provider openai --model gpt-5.3-codex --hive .scranton-hive
-node bin/scranton.js agent set-model angela --provider openai --model gpt-5.3-codex --hive .scranton-hive
+node bin/scranton.js agent set-model michael --provider openai --model gpt-6.2-sol --hive .scranton-hive
+node bin/scranton.js agent set-model dwight --provider openai --model gpt-6.2-sol --hive .scranton-hive
+node bin/scranton.js agent set-model angela --provider openai --model gpt-6.2-sol --hive .scranton-hive
 
 # 3. C:\Projekte\MeineApp durch einen eigenen Projektordner ersetzen
 node bin/scranton.js doctor --workspace "C:\Projekte\MeineApp" --hive .scranton-hive
@@ -54,7 +54,7 @@ node bin/scranton.js demo --scenario breaker --delay 50 --on-breaker skip
 Für optionale Docker-Läufe Docker separat einrichten und das Image bewusst bauen:
 
 ```powershell
-docker build --pull=false -t scranton-tools:24-r1 sandbox
+docker build --pull=false -t scranton-tools:24-r2 sandbox
 node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --parallel 3 --sandbox docker
 ```
 
@@ -75,7 +75,7 @@ node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --
 - `src/core/durable/`: eigener SQLite-Workflowmotor je Chat in `<hive>/dbos.sqlite`, Marker in `<hive>/agent-step-markers`. Nur `DBOS_SYSTEM_DATABASE_URL` oder `DBOS_DATABASE_URL` wählen echtes DBOS auf Postgres; `DATABASE_URL` wird absichtlich ignoriert. DBOS wird nur dafür geladen. Datenbank und uncheckpointierte Marker gemeinsam aufbewahren.
 - `src/core/agent/`: Agentenloop als Workflow, dauerhafte `output`-/`history`-Streams und `agent_state` mit `thinking`, `tool_call`, `waiting_approval`, `compaction_failed`, `done`. Terminaler Workflowstatus ist maßgeblich; Exactly-once für externe Effekte wird nicht garantiert.
 
-**Automatic** wählt das erste angemeldete unterstützte Konto in fester Reihenfolge: `anthropic/claude-sonnet-4-5`, `openai/gpt-5.3-codex`, `google/gemini-2.5-pro`, `google-antigravity/gemini-3-pro`. Ohne passendes Konto folgt ein Fehler; keine Auswahl nach Katalogsortierung und keine automatische Wahl eigener Provider. Explizite Provider-/Modellpaare haben Vorrang. Dieselbe Regel gilt in allen Team-Sandboxmodi; der Katalog garantiert keine Modellberechtigung.
+**Automatic** wählt das erste angemeldete unterstützte Konto in fester Reihenfolge: Anthropic, OpenAI/ChatGPT, Gemini, Antigravity, Vertex. Innerhalb des Providers gilt die explizite Neueste-Markierung des lokalen Katalogs (Stand 2026-11-22): `claude-opus-5-5`, `gpt-6.2-sol` (ChatGPT gemäß Nutzerwahl), `gemini-4-argon`, `gemini-3.8-flash`, `gemini-4-argon`. Keine lexikografische Sortierung und keine Netzwerkanfrage bei der Auswahl; neue Veröffentlichungen benötigen ein Katalogupdate. Antigravity nutzt die angebotenen Low/Medium/High-Wire-IDs, nicht deaktivierte Gemini-4-Einträge. ChatGPT-OAuth bietet einen eigenen Codex-Modellkatalog, OpenAI-API-Keys behalten den API-Katalog. Vertex unterstützt Express-Mode-API-Keys (`GOOGLE_CLOUD_API_KEY` oder importierter/gespeicherter Key), nicht ADC oder Service-Account-Dateien. Ohne passendes Konto folgt ein Fehler; eigene Provider brauchen eine explizite Wahl. Explizite Provider-/Modellpaare haben Vorrang. Dieselbe Regel gilt in allen Team-Sandboxmodi; der lokale Katalog garantiert keine aktuelle Konto-/Modellberechtigung.
 
 ```powershell
 node bin/scranton.js run "Prüfe die Änderung" --sandbox scranton --sandbox-network allow --approve write,edit --approval-timeout 600
@@ -273,7 +273,7 @@ Bei Integrationskonflikten ist **Retry kein Rebase**: Der Entwickler-Worktree be
 | `--workspace DIR`, `--hive DIR`, `--config FILE` | Ziel, Laufzeitdaten, Konfiguration |
 | `--parallel N` | Maximale aktive Pipelines (Standard 3); Parallelität erfordert Worktrees |
 | `--sandbox docker` | Optionaler Container-Modus, kein stiller Host-Fallback |
-| `--sandbox-image IMAGE` | Lokal vorhandenes Linux-Image, Standard `scranton-tools:24-r1` |
+| `--sandbox-image IMAGE` | Lokal vorhandenes Linux-Image, Standard `scranton-tools:24-r2` |
 | `--sandbox-network allow\|none` | `allow` erlaubt Tool-Netzwerkzugang (`bridge` nur als Alias); `none` sperrt ihn, nicht die hostseitigen LLM-Aufrufe |
 | `--trusted-host` | Explizit auf dem Host ausführen, Worktrees bleiben getrennt |
 | `--no-plan` | Eine Aufgabe ohne Modellplanung |

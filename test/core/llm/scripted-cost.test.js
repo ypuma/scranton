@@ -29,7 +29,7 @@ test('scripted delays abort, errors classify and result can be awaited with iter
 test('catalogue is immutable and resolves known and custom refs', () => {
   assert.ok(models.length >= 80);
   assert.ok(getModel('anthropic', 'claude-haiku-4-5'));
-  assert.equal(resolveModel({ provider: 'google-antigravity', model: 'gemini-3-pro' }).api, 'google-antigravity');
+  assert.equal(resolveModel({ provider: 'google-antigravity', model: 'gemini-3.8-flash' }).api, 'google-antigravity');
   assert.throws(() => resolveModel({ provider: 'unknown', model: 'nope' }));
   assert.throws(() => { models[0].cost.input = 0; });
   const m = model('openai-completions', 'http://127.0.0.1'); assert.equal(resolveModel(m), m);

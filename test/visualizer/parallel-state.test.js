@@ -20,7 +20,7 @@ const PLAN = [
   { id: 'm2', title: 'CLI', description: '', acceptanceCriteria: [], dependsOn: [] },
   { id: 'm3', title: 'Docs', description: '', acceptanceCriteria: [], dependsOn: ['m1', 'm2'] },
 ];
-const EXECUTION = { maxParallel: 3, isolation: 'worktree', persistentSessions: true, maxReplans: 2, sandbox: { mode: 'docker', image: 'scranton-tools:24-r1', network: 'bridge' } };
+const EXECUTION = { maxParallel: 3, isolation: 'worktree', persistentSessions: true, maxReplans: 2, sandbox: { mode: 'docker', image: 'scranton-tools:24-r2', network: 'bridge' } };
 
 // The shapes the orchestrator writes: instance_started carries id and instanceId, hive_write.instanceId is the recipient.
 function started(e, id, agent, milestoneId) {
@@ -51,7 +51,7 @@ test('parallel milestones: both pipelines are active, the oldest stays the scala
   assert.equal(s.currentMilestoneId, 'm1');
   assert.equal(s.milestoneIndex, 0, 'a second pipeline does not move the current index');
   assert.deepEqual(s.milestones.map((m) => [m.id, m.status]), [['m1', 'active'], ['m2', 'active'], ['m3', 'pending']]);
-  assert.deepEqual(s.execution, { maxParallel: 3, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-tools:24-r1', network: 'bridge' }, persistentSessions: true, simulated: false, trustedHost: false });
+  assert.deepEqual(s.execution, { maxParallel: 3, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-tools:24-r2', network: 'bridge' }, persistentSessions: true, simulated: false, trustedHost: false });
 });
 
 test('instances get their own lane with session, worktree and sandbox', () => {

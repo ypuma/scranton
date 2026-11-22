@@ -25,7 +25,7 @@ Helper build, adapter guarantees and native-platform verification limits: [nativ
 ## Optional Docker tool executor
 
 ```powershell
-docker build --pull=false -t scranton-tools:24-r1 sandbox
+docker build --pull=false -t scranton-tools:24-r2 sandbox
 node bin/scranton.js run "Implement and test the task" --sandbox docker --sandbox-network none
 ```
 

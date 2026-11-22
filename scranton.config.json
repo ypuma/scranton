@@ -25,7 +25,7 @@
     "isolation": "worktree",
     "sandbox": {
       "mode": "scranton",
-      "image": "scranton-tools:24-r1",
+      "image": "scranton-tools:24-r2",
       "network": "allow"
     },
     "persistentSessions": true,

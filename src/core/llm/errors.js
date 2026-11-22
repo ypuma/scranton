@@ -36,8 +36,10 @@ export async function httpError(response) {
   } else await response.body?.cancel();
   const overflow = response.status === 413 || response.status === 400 &&
     /context[_ -](?:length|window)[_ -]exceeded|prompt is too long|input token count exceeds (?:the )?maximum|maximum context length|context window (?:is )?exceeded|(?:tokens|input|prompt)[^\n]{0,80}exceeds?[^\n]{0,40}(?:context (?:window|length)|token limit)|exceed[^\n]{0,40}(?:context window|context length)/i.test(text);
+  let unavailable = false;
+  try { unavailable = JSON.parse(text).error?.code === 'model_not_found'; } catch {}
   return Object.assign(new Error('Provider rejected request'), { status: response.status,
-    ...(overflow ? { code: 'CONTEXT_WINDOW_EXCEEDED' } : {}) });
+    ...(overflow ? { code: 'CONTEXT_WINDOW_EXCEEDED' } : unavailable ? { code: 'MODEL_NOT_AVAILABLE' } : {}) });
 }
 
 export function classifyError(error) {
@@ -48,6 +50,7 @@ export function classifyError(error) {
     const [transient, message] = credentialErrors[code];
     return { transient, status, code, message };
   }
+  if (code === 'MODEL_NOT_AVAILABLE') return { transient: false, status, code, message: 'Model unavailable; select a model offered for your signed-in account or configure an API key with model access' };
   if (code === 'CONTEXT_WINDOW_EXCEEDED') return { transient: false, status, code, message: 'Provider context window exceeded' };
   const transient = status !== null ? status === 408 || status === 429 || status >= 500 && status <= 599
     : /^(TIMEOUT|NETWORK_ERROR|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_)/.test(code);

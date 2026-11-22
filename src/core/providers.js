@@ -6,7 +6,7 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const apis = ['openai-completions', 'openai-responses', 'anthropic-messages'];
 export const builtinCatalog = Object.freeze([...new Set(models.map((m) => m.provider))].map((id) => Object.freeze({
-  id, name: { anthropic: 'Claude (Pro/Max)', openai: 'ChatGPT', google: 'Gemini', 'google-antigravity': 'Google Antigravity' }[id] ?? id,
+  id, name: { anthropic: 'Claude (Pro/Max)', openai: 'ChatGPT', google: 'Gemini', 'google-antigravity': 'Google Antigravity', 'google-vertex': 'Google Vertex AI' }[id] ?? id,
   auth: { ...(['anthropic', 'openai', 'google-antigravity'].includes(id) ? { oauth: true } : {}),
     ...(id !== 'google-antigravity' ? { apiKey: { login: true } } : {}) }
 })));

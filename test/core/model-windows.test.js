@@ -80,7 +80,7 @@ test('real Scranton catalogue resolves a known model offline; cold and warm timi
   const next = performance.now(), warmResult = await createModelWindows({ providers: empty }).resolve(ref), warm = performance.now() - next;
   assert.equal(result.known, true); assert.ok(result.window > 0); assert.deepEqual(result, warmResult);
   t.diagnostic(`Real Scranton catalogue cold=${cold.toFixed(3)} ms warm=${warm.toFixed(3)} ms window=${result.window}`);
-  assert.deepEqual(await resolver.resolve({ provider: 'google-antigravity', model: 'gemini-3-pro' }), known('google-antigravity/gemini-3-pro', 1048576));
+  assert.deepEqual(await resolver.resolve({ provider: 'google-antigravity', model: 'gemini-3.8-flash' }), known('google-antigravity/gemini-3.8-flash', 1048576));
 });
 
 // Removing warm/load reuse makes this fail without touching own catalogue models or providers.

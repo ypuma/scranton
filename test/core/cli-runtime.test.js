@@ -31,8 +31,9 @@ test('CLI maps sandbox, network alias and approval flags including empty-clears 
     assert.equal(configs.at(-1).execution.sandbox.network, 'allow');
     assert.deepEqual(configs.at(-1).approvals, { tools: ['write', 'edit'], timeoutSeconds: 12 });
   }
+  fs.writeFileSync(path.join(f.dir, 'scranton.config.json'), JSON.stringify({ approvals: { tools: ['read'], timeoutSeconds: 45 } }));
   assert.equal(await f.invoke(['run', 'follow-up', '--approve', '']), 0);
-  assert.deepEqual(configs.at(-1).approvals.tools, []);
+  assert.deepEqual(configs.at(-1).approvals, { tools: [], timeoutSeconds: 45 });
   assert.equal(await f.invoke(['run', 'goal', '--approval-timeout', '86400']), 0);
   assert.equal(configs.at(-1).approvals.timeoutSeconds, 86400);
   for (const flags of [['--sandbox', 'host'], ['--approve', 'bogus'], ...['0', '86401', '2147484', '1.5', 'NaN'].map(value => ['--approval-timeout', value]), ['--sandbox-network', 'off'], ['--sandbox-image', 'image']]) assert.equal(await f.invoke(['run', 'goal', ...flags]), 2);

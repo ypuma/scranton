@@ -61,7 +61,7 @@ test('reasoning unsupported levels clamp; adaptive Claude never sends off as eff
 test('Responses default endpoint selection uses direct and subscription paths', async () => {
   const urls = [];
   const llm = createLLM({ fetcher: async (url, options) => { urls.push(url); assert.equal(options.redirect, 'error'); return new Response(sse(terminal('openai-responses', 'stop'))); } });
-  const m = getModel('openai', 'gpt-5');
+  const m = getModel('openai', 'gpt-6.2-sol');
   await llm.complete(m, context, { auth: { type: 'oauth', access: 'fake' } });
   await llm.complete(m, context, { auth: { type: 'oauth', access: 'fake', mode: 'chatgpt', accountId: 'account' } });
   await llm.complete(m, context, { auth: { type: 'api_key', key: 'fake' } });

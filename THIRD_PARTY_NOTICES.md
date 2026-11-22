@@ -2,7 +2,7 @@
 
 ## Pi / @earendil-works/pi-ai 1.5.2
 
-`src/core/llm/models.json` is a snapshot (2026-11-21) of the Anthropic, OpenAI and Google chat catalogue in pi-ai 1.5.2. The tier/cache cost algorithm in `catalogue.js` and Claude subscription identity/tool-name constants in `anthropic-messages.js` are adapted from that package. Provider protocol methodology was studied there; Scranton's fetch clients, SSE parser and stream implementation are independent and do not import Pi or provider SDKs.
+`src/core/llm/models.json` is a snapshot (2026-11-21) of the Anthropic, OpenAI and Google chat catalogue in pi-ai 1.5.2. `src/core/llm/account-models.json` adds projected ChatGPT/Codex and Google Vertex chat metadata from the same MIT snapshot (2026-11-22); GPT-6.2 Sol metadata is from https://developers.openai.com/api/docs/models/gpt-6.2-sol (2026-11-22). Antigravity Gemini 3.8 Flash wire variants were confirmed by the account's Cloud Code Assist model listing. The tier/cache cost algorithm in `catalogue.js` and Claude subscription identity/tool-name constants in `anthropic-messages.js` are adapted from that package. Provider protocol methodology was studied there; Scranton's fetch clients, SSE parser and stream implementation are independent and do not import Pi or provider SDKs.
 
 Source: https://github.com/earendil-works/pi (packages/ai).
 

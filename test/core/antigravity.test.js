@@ -75,7 +75,7 @@ test('own store refreshes Antigravity once under lock and returns a raw OAuth ac
   const oauth = createOAuthProviders({fetcher: async () => {count++; return json({access_token:ACCESS, expires_in:3600});}});
   const service = createAuthService({env:{SCRANTON_CREDENTIALS_DIR:root}, oauth}); t.after(() => service.close());
   assert.deepEqual(service.listProviders().providers.find((p) => p.id === 'google-antigravity').methods, ['oauth']);
-  assert.equal((await service.listModels()).providers.find((p) => p.id === 'google-antigravity').models.length, 2);
+  assert.deepEqual((await service.listModels()).providers.find((p) => p.id === 'google-antigravity').models.map(m => m.id), ['gemini-3.8-flash']);
   assert.equal(count, 0);
   const keys = await Promise.all([service.mintAccessToken('google-antigravity', {minExpiryMs:0}), service.mintAccessToken('google-antigravity', {minExpiryMs:0})]);
   assert.equal(count, 1); assert.deepEqual(keys, [ACCESS, ACCESS]);
@@ -101,7 +101,7 @@ test('CLI Antigravity OAuth alias and Google/Gemini key login/logout remain sepa
 });
 
 test('Antigravity catalogue is offline', async () => {
-  assert.equal(models.filter((m) => m.provider === 'google-antigravity').length, 2);
+  assert.deepEqual(models.filter((m) => m.provider === 'google-antigravity').map(m => m.id), ['gemini-3.8-flash']);
 
 
 });

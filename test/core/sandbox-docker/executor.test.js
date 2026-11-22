@@ -111,3 +111,15 @@ test('a lost idle container fails clearly without launching a tool', async t => 
   assert.throws(() => sandbox.spawn('/bin/bash'), /no longer running or reachable/);
   await sandbox.dispose();
 });
+
+test('search executable paths use the pinned archive binaries', async t => {
+  const f = fakeCli(t), sandbox = createSandbox(f, f.deps); sandbox.prepare();
+  t.after(() => sandbox.dispose());
+  for (const tool of ['rg', 'fd', 'fdfind']) {
+    const child = sandbox.spawn(`C:\\tools\\${tool}.exe`, ['--version']);
+    assert.equal((await once(child, 'close'))[0], 7);
+  }
+  const calls = fs.readFileSync(f.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.filter(args => args[0] === 'exec').map(args => args[9]), ['/usr/local/bin/rg', '/usr/local/bin/fd', '/usr/local/bin/fd']);
+  await sandbox.dispose();
+});

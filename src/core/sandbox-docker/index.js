@@ -23,7 +23,7 @@ function executableInContainer(file, worktree) {
   if (typeof file !== 'string' || !file || /[\x00\r\n]/.test(file)) throw new Error('Invalid Docker tool executable');
   if (path.isAbsolute(file) && within(worktree, file)) return '/workspace/' + path.relative(worktree, file).split(path.sep).join('/');
   const base = path.win32.basename(file).replace(/\.exe$/i, '');
-  const known = { bash: '/bin/bash', sh: '/bin/sh', git: '/usr/bin/git', rg: '/usr/bin/rg', fd: '/usr/local/bin/fd', fdfind: '/usr/bin/fdfind', node: '/usr/local/bin/node' };
+  const known = { bash: '/bin/bash', sh: '/bin/sh', git: '/usr/bin/git', rg: '/usr/local/bin/rg', fd: '/usr/local/bin/fd', fdfind: '/usr/local/bin/fd', node: '/usr/local/bin/node' };
   if (known[base]) return known[base];
   if (/^[a-zA-Z0-9_-]+$/.test(file) || file.startsWith('/') && !file.includes('\\')) return file;
   throw new Error('Tool executable is not available in the Linux tool image');

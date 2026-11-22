@@ -22,7 +22,7 @@ const noKey = (v) => assert.ok(!JSON.stringify(v).includes(KEY));
 
 test('Own store API-key login stores key, accounts never disclose it, logout removes only selected provider', async (t) => {
   const { auth, file, notices } = fixture(t);
-  assert.deepEqual((await auth.listAccounts()).map((a) => a.id), ['anthropic', 'openai', 'google', 'google-antigravity']);
+  assert.deepEqual((await auth.listAccounts()).map((a) => a.id), ['anthropic', 'openai', 'google', 'google-antigravity', 'google-vertex']);
   await auth.setApiKey('google', ` ${KEY} `);
   await auth.setApiKey('anthropic', KEY);
   const stored = JSON.parse(fs.readFileSync(file));
@@ -94,7 +94,7 @@ test('every supported built-in key provider accepts a literal key offline', asyn
   const auth = createAuthService({ dir, env: { SCRANTON_CREDENTIALS_DIR: dir, CLOUDFLARE_ACCOUNT_ID: 'fake-account', CLOUDFLARE_GATEWAY_ID: 'fake-gateway' } });
   t.after(() => auth.close());
   const providers = (await auth.listProviders()).providers.filter((p) => p.methods.includes('api_key'));
-  assert.deepEqual(providers.map((p) => p.id).sort(), ['anthropic', 'google', 'openai']);
+  assert.deepEqual(providers.map((p) => p.id).sort(), ['anthropic', 'google', 'google-vertex', 'openai']);
   for (const { id } of providers) {
     await auth.setApiKey(id, KEY);
     const credential = JSON.parse(fs.readFileSync(file)).credentials[id];

@@ -8,8 +8,13 @@ export const AUTH_PROVIDERS = Object.freeze([
   { id: 'anthropic', label: 'Claude (Pro/Max)', methods: ['oauth', 'api_key'] },
   { id: 'openai', label: 'ChatGPT', methods: ['oauth', 'api_key'] },
   { id: 'google', label: 'Gemini', methods: ['api_key'] },
-  { id: 'google-antigravity', label: 'Google Antigravity', methods: ['oauth'] }
+  { id: 'google-antigravity', label: 'Google Antigravity', methods: ['oauth'] },
+  { id: 'google-vertex', label: 'Google Vertex AI', methods: ['api_key'] }
 ]);
+export function credentialMode(provider, c) {
+  return provider === 'openai' && (c.grantKind === 'codex' || c.accountId) ? { mode: 'chatgpt' }
+    : ['direct', 'chatgpt'].includes(c.mode) ? { mode: c.mode } : {};
+}
 const terminal = new Set(['done', 'failed', 'cancelled']);
 const httpFailure = (status, message) => Object.assign(new Error(message), { status });
 const builtins = () => [...AUTH_PROVIDERS.map((p) => structuredClone(p)), ...Object.keys(PROVIDER_ENV_NAMES).filter((id) => !AUTH_PROVIDERS.some((p) => p.id === id)).map((id) => ({ id, label: id, methods: ['api_key'] }))];
@@ -44,7 +49,7 @@ export async function createCredentials({ env = process.env, dir = credentialsDi
       if (credential.type === 'api_key') return { ...p, status: 'signed_in', kind: 'api_key' };
       const metadata = data.renewals[id];
       const renewFailedAt = metadata?.expires === credential.expires && Number.isFinite(Date.parse(metadata.failedAt)) ? metadata.failedAt : undefined;
-      return { ...p, status: renewFailedAt ? 'expired' : 'signed_in', kind: 'oauth', expiresAt: new Date(credential.expires).toISOString(),
+      return { ...p, status: renewFailedAt ? 'expired' : 'signed_in', kind: 'oauth', ...credentialMode(id, credential), expiresAt: new Date(credential.expires).toISOString(),
         renewsOnUse: !renewFailedAt && credential.expires <= now(), ...(renewFailedAt ? { renewFailedAt } : {}) };
     });
   }
@@ -54,7 +59,7 @@ export async function createCredentials({ env = process.env, dir = credentialsDi
     return { type: 'oauth', access: c.access,
       ...(typeof c.accountId === 'string' ? { accountId: c.accountId } : {}),
       ...(typeof c.projectId === 'string' ? { projectId: c.projectId } : {}),
-      ...(provider === 'openai' && (c.grantKind === 'codex' || c.accountId) ? { mode: 'chatgpt' } : ['direct', 'chatgpt'].includes(c.mode) ? { mode: c.mode } : {}) };
+      ...credentialMode(provider, c) };
   }
   async function resolveAuth(provider, { minExpiryMs = minValidityMs, signal } = {}) {
     if (!validId(provider)) throw failure('SCRANTON_CREDENTIAL_INVALID', 'Invalid provider ID');

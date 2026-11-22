@@ -11,7 +11,7 @@ const HTML = readFileSync(new URL('../../visualizer/public/index.html', import.m
 const ACK = 'Confirm that the agents may run commands directly on this computer, or pick a sandbox.';
 const SOL = { provider: 'openai', model: 'gpt-6.1-sol' };
 const MODELS = Object.fromEntries(['michael', 'dwight', 'oscar', 'hank', 'angela'].map((r) => [r, SOL]));
-const exec = (mode, network = 'allow') => ({ ...CONTROL, defaults: { models: MODELS, execution: { maxParallel: 3, sandbox: { mode, image: 'scranton-tools:24-r1', network } } } });
+const exec = (mode, network = 'allow') => ({ ...CONTROL, defaults: { models: MODELS, execution: { maxParallel: 3, sandbox: { mode, image: 'scranton-tools:24-r2', network } } } });
 // [Scranton, Docker, Trusted host, acknowledgement]
 const radios = (h) => [h.$('f-sandbox-scranton').checked, h.$('f-sandbox-docker').checked, h.$('f-sandbox-host').checked, h.$('f-trusted').checked];
 

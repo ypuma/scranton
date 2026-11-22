@@ -38,7 +38,7 @@ export const IMAGE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/;
 // The engine defaults (contract) for a server that does not report defaults.execution yet. trustedHost stays false:
 // the host acknowledgement is only ever given by the human.
 export const EXECUTION_DEFAULTS = Object.freeze({
-  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'scranton', image: 'scranton-tools:24-r1', network: 'allow' }),
+  maxParallel: 3, isolation: 'worktree', sandbox: Object.freeze({ mode: 'scranton', image: 'scranton-tools:24-r2', network: 'allow' }),
   persistentSessions: true, simulated: false, trustedHost: false,
 });
 

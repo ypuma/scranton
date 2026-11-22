@@ -11,7 +11,7 @@ const runner = startAgent({
   invocationKey: 'm1/cycle-1/implement', // same key replays, new key invokes again
   sandbox, // optional object exposing Node-compatible spawn; or supply spawn directly
   cwd: workspace, hive, sessionId,
-  agentConfig: { provider: 'openai', model: 'gpt-5.3-codex',
+  agentConfig: { provider: 'openai', model: 'gpt-6.2-sol',
     tools: ['read', 'write', 'edit'], keywords: ['TASK_COMPLETE'] },
   systemPromptFile,
   onAssistantMessage, onLive, onTool, onToolEnd, onUsage, onMessage,
@@ -22,6 +22,14 @@ const outcome = await runner.done;
 Exports: `startAgent`, `registerAgentWorkflow`, `agentWorkflowId`, `agentAppVersion`,
 `approveToolCall`, `readAgentHistory`, `readAgentOutput`, `shutdownAgentRuntimes`,
 `selectModel`, `AUTOMATIC_MODELS`, and `describeTool`.
+
+Automatic uses the first signed-in account in Anthropic, OpenAI/ChatGPT, Gemini,
+Antigravity, Vertex order. It selects the catalogue's explicit newest marker, not
+lexical model ordering: Opus 5.5, GPT-6.2 Sol (user-pinned ChatGPT choice), Gemini 4
+Argon, Gemini 3.8 Flash, Gemini 4 Argon respectively (2026-11-22). Selection is
+offline; newer releases need a catalogue update and account access is not guaranteed.
+ChatGPT OAuth uses a separate supported model snapshot; API keys retain the OpenAI
+API catalogue. Custom providers still require explicit selection.
 
 For deterministic tests inject `llm: createScriptedProvider(turns)` and a full `model`
 descriptor. This avoids credential lookup. Inject credentials explicitly when testing

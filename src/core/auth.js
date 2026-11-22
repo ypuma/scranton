@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { createCredentials, createCredentialStore, credentialsDirectory, AUTH_PROVIDERS,
-  openAuthBrowser, validateAuthUrl, PROVIDER_ENV_NAMES } from './credentials/index.js';
+  openAuthBrowser, validateAuthUrl, PROVIDER_ENV_NAMES, credentialMode } from './credentials/index.js';
 import { validateKey, validateProvider, discoverModels, builtinCatalog } from './providers.js';
-import { models } from './llm/catalogue.js';
+import { models, accountModels } from './llm/catalogue.js';
 
 export { AUTH_PROVIDERS, openAuthBrowser, validateAuthUrl };
 const failure = (status, message) => Object.assign(new Error(message), { status });
@@ -64,7 +64,7 @@ export function createAuthService({ env = process.env, dir = credentialsDirector
         if (c?.type === 'api_key') { try { validateKey(c.key); return { ...p, status: 'signed_in', kind: 'api_key' }; } catch {} }
         if (c?.type === 'oauth' && c.access && c.refresh && Number.isFinite(c.expires) && Math.abs(c.expires) <= 8.64e15) {
           const failed = data.renewals[id], renewFailedAt = failed?.expires === c.expires && Number.isFinite(Date.parse(failed.failedAt)) ? failed.failedAt : undefined;
-          return { ...p, status: renewFailedAt ? 'expired' : 'signed_in', kind: 'oauth', expiresAt: new Date(c.expires).toISOString(), renewsOnUse: !renewFailedAt && c.expires <= now(), ...(renewFailedAt ? { renewFailedAt } : {}) };
+          return { ...p, status: renewFailedAt ? 'expired' : 'signed_in', kind: 'oauth', ...credentialMode(id, c), expiresAt: new Date(c.expires).toISOString(), renewsOnUse: !renewFailedAt && c.expires <= now(), ...(renewFailedAt ? { renewFailedAt } : {}) };
         }
         return { ...p, status: 'error', kind: null, detail: 'Invalid credential; sign in again' };
       });
@@ -99,11 +99,12 @@ export function createAuthService({ env = process.env, dir = credentialsDirector
   }
   async function listModels() {
     await ready;
-    const signedIn = new Set(listAccounts().filter((a) => a.status === 'signed_in').map((a) => a.id));
+    const accounts = listAccounts();
+    const signedIn = new Set(accounts.filter((a) => a.status === 'signed_in').map((a) => a.id));
     const custom = Object.values(store.read().providers);
     const catalog = listProviders().providers;
     return { providers: catalog.filter((p) => signedIn.has(p.id)).map((p) => ({ id: p.id, label: p.label, signedIn: true,
-      models: (custom.find((c) => c.id === p.id)?.models ?? models.filter((m) => m.provider === p.id)).map((m) => ({ id: m.id, name: m.name ?? m.id,
+      models: (custom.find((c) => c.id === p.id)?.models ?? accountModels(p.id, accounts.find(a => a.id === p.id))).map((m) => ({ id: m.id, name: m.name ?? m.id,
         ...(m.reasoning !== undefined ? { reasoning: m.reasoning } : {}), ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}) })) })) };
   }
   return { listAccounts, listProviders, listModels, discoverModels, startLogin, getLogin: snapshot,

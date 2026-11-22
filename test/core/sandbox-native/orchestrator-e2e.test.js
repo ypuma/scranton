@@ -3,7 +3,26 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { resolveSandboxHelper } from '../../../src/core/sandbox-native/index.js';
+
+async function storeHashes(dir) {
+  if (!fs.existsSync(dir)) return null;
+  const entries = {};
+  async function visit(folder) {
+    for (const name of fs.readdirSync(folder).sort()) {
+      const file = path.join(folder, name), stat = fs.lstatSync(file), relative = path.relative(dir, file);
+      if (stat.isDirectory()) { entries[relative] = 'directory'; await visit(file); }
+      else if (stat.isFile()) {
+        const hash = createHash('sha256');
+        for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+        entries[relative] = hash.digest('hex');
+      } else throw new Error('Unexpected credential store entry type');
+    }
+  }
+  await visit(dir);
+  return entries;
+}
 
 const quote = value => `'${value.replaceAll("'", "''")}'`;
 const text = result => typeof result.content === 'string' ? result.content : result.content.map(block => block.text ?? '').join('\n');
@@ -39,8 +58,8 @@ test('default orchestrator sandbox enforces Windows writes through integration',
   });
   for (const folder of [workspace, credentials, env.PI_CODING_AGENT_DIR, env.TEMP]) fs.mkdirSync(folder);
   Object.assign(process.env, env);
-  assert.equal(fs.existsSync(appdataCredentials), false, 'Precondition: real APPDATA credentials must be absent; never alter an existing user store');
-  t.after(() => assert.equal(fs.existsSync(appdataCredentials), false, 'Orchestration must not create the real APPDATA credential directory'));
+  const beforeHashes = await storeHashes(appdataCredentials);
+  t.after(async () => assert.ok(JSON.stringify(await storeHashes(appdataCredentials)) === JSON.stringify(beforeHashes), 'Orchestration must leave the real APPDATA credential store unchanged'));
 
   const [{ loadConfig }, { Orchestrator }, { startAgent }, { createScriptedProvider, getModel }] = await Promise.all([
     import('../../../src/core/config.js'), import('../../../src/core/orchestrator.js'),
@@ -101,5 +120,5 @@ test('default orchestrator sandbox enforces Windows writes through integration',
   assert.match(text(qaResult), /native sandbox wrote this/);
   assert.equal(fs.existsSync(path.join(workspace, '.scranton-sandbox-owned')), false, 'Ownership marker must not leak into the integration target');
   assert.ok(!orchestrator.worktrees.changedFiles({ milestoneId: 'm1' }).includes('.scranton-sandbox-owned'), 'Ownership marker must not enter the integrated snapshot');
-  assert.equal(fs.existsSync(appdataCredentials), false, 'Real APPDATA credentials must remain absent');
+  assert.ok(JSON.stringify(await storeHashes(appdataCredentials)) === JSON.stringify(beforeHashes), 'Real APPDATA credential file hashes must remain unchanged');
 });

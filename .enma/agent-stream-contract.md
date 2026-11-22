@@ -85,11 +85,14 @@ Completed steps skip callbacks on replay. **Exactly-once external journal callba
 
 Explicit provider+model must both be set. Built-ins resolve through the catalogue; custom declarations come from credentials.store.read().providers (only projected model metadata enters workflow inputs). Auth is resolved per request through createCredentials().resolveAuth, never from Pi settings.
 
-Automatic selects the first signed-in account in this fixed order with pinned defaults:
-1. anthropic / claude-sonnet-4-5
-2. openai / gpt-5.3-codex
-3. google / gemini-2.5-pro
-4. google-antigravity / gemini-3-pro
+Automatic selects the first signed-in account in this fixed order, using explicit newest-per-provider markers in `llm/catalogue.js`:
+1. anthropic / claude-opus-5-5
+2. openai / gpt-6.2-sol (user choice for ChatGPT mode; direct OAuth and API keys use the API catalogue)
+3. google / gemini-4-argon
+4. google-antigravity / gemini-3.8-flash
+5. google-vertex / gemini-4-argon
+
+Markers require catalogue updates for new releases; selection is offline, not live entitlement discovery.
 
 No supported signed-in account is an explicit error. There is no inference from catalogue sort order and no automatic custom-provider selection.
 

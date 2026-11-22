@@ -63,13 +63,14 @@ function current(workspace, hive, name) {
     });
   } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; }
 }
+function atomicTarget(root, name) {
+  const file = safePath(root, name);
+  try { const s = fs.lstatSync(file); if (!s.isFile()) throw Error('Restore path is not a regular file'); if (s.nlink !== 1) throw Error('Restore file has hardlinks'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return file;
+}
 function atomic(root, name, data, mode = 0o600) {
-  const verify = () => {
-    const file = safePath(root, name);
-    try { const s = fs.lstatSync(file); if (!s.isFile()) throw Error('Restore path is not a regular file'); if (s.nlink !== 1) throw Error('Restore file has hardlinks'); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-    return file;
-  };
+  const verify = () => atomicTarget(root, name);
   const file = verify(), directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 }); verify();
   const temp = path.join(directory, '.scranton-' + randomUUID() + '.tmp'); let fd;
@@ -79,12 +80,37 @@ function atomic(root, name, data, mode = 0o600) {
     verify(); fs.renameSync(temp, file);
   } finally { if (fd !== undefined) fs.closeSync(fd); fs.rmSync(safePath(root, path.relative(root, temp).split(path.sep).join('/')), { force: true }); }
 }
+const yieldTurn = () => new Promise(setImmediate);
+async function atomicUndo(root, name, data, mode = 0o600, beforeRename = () => {}) {
+  const file = atomicTarget(root, name), directory = path.dirname(file);
+  await yieldTurn();
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 }); atomicTarget(root, name);
+  const temp = path.join(directory, '.scranton-' + randomUUID() + '.tmp'); let fd;
+  try {
+    fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), mode);
+    await new Promise((resolve, reject) => fs.writeFile(fd, data, (error) => error ? reject(error) : resolve()));
+    // Keep both journal barriers durable without blocking heartbeats on a disk flush.
+    await new Promise((resolve, reject) => fs.fsync(fd, (error) => error ? reject(error) : resolve()));
+    fs.closeSync(fd); fd = undefined;
+    atomicTarget(root, name); beforeRename(); fs.renameSync(temp, file);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    await yieldTurn();
+    fs.rmSync(safePath(root, path.relative(root, temp).split(path.sep).join('/')), { force: true });
+  }
+  await yieldTurn();
+}
+async function saveUndo(hive, point) {
+  const data = JSON.stringify(point) + '\n';
+  if (Buffer.byteLength(data) > MAX_MANIFEST_BYTES) throw Error('Restore manifest limit exceeded');
+  await atomicUndo(pointDir(hive, point.runId), 'manifest.json', data);
+}
 function save(hive, point) {
   const data = JSON.stringify(point) + '\n';
   if (Buffer.byteLength(data) > MAX_MANIFEST_BYTES) throw Error('Restore manifest limit exceeded');
   atomic(pointDir(hive, point.runId), 'manifest.json', data);
 }
-function load(hive, runId) {
+function* loadSteps(hive, runId) {
   let point;
   try { point = JSON.parse(bytes(pointDir(hive, runId), 'manifest.json', MAX_MANIFEST_BYTES).toString('utf8')); }
   catch (error) { if (error.code === 'ENOENT') return null; throw Error('Cannot read restore manifest'); }
@@ -101,18 +127,42 @@ function load(hive, runId) {
         (e.original && e.restorable ? e.original.size > MAX_PREIMAGE_BYTES || e.preimage !== 'preimages/' + e.original.sha256 : e.preimage !== null) ||
         (!e.restorable && (typeof e.reason !== 'string' || e.reason !== `Pre-image exceeds ${MAX_PREIMAGE_BYTES} bytes` || !e.original || e.original.size <= MAX_PREIMAGE_BYTES))) throw Error('Invalid restore manifest');
     paths.add(e.path);
+    yield;
   }
-  for (const name of point.createdDirs) { if (typeof name !== 'string') throw Error('Invalid restore manifest'); target(point.workspace, hive, name, false); }
+  for (const name of point.createdDirs) { if (typeof name !== 'string') throw Error('Invalid restore manifest'); target(point.workspace, hive, name, false); yield; }
   return point;
 }
+function load(hive, runId) {
+  const steps = loadSteps(hive, runId); let step;
+  do { step = steps.next(); } while (!step.done);
+  return step.value;
+}
+async function loadUndo(hive, runId) {
+  const steps = loadSteps(hive, runId); let step;
+  do { step = steps.next(); if (!step.done) await yieldTurn(); } while (!step.done);
+  return step.value;
+}
+async function allPointsUndo(hive) {
+  const root = safePath(hive, 'restore-points');
+  let names;
+  try { names = fs.readdirSync(root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const points = [];
+  for (const runId of names.filter((name) => /^[a-zA-Z0-9_-]{1,128}$/.test(name))) {
+    try { const point = await loadUndo(hive, runId); if (point) { points.push(point); continue; } } catch {}
+    points.push({ runId, unreadable: true, createdAt: null, workspace: null, files: null, undoneAt: null, remaining: null });
+    await yieldTurn();
+  }
+  return sortPoints(points);
+}
+const sortPoints = (points) => points.sort((a, b) => Number(Boolean(a.unreadable)) - Number(Boolean(b.unreadable)) || (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || b.runId.localeCompare(a.runId));
 function allPoints(hive) {
   const root = safePath(hive, 'restore-points');
   let names;
   try { names = fs.readdirSync(root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  return names.filter((name) => /^[a-zA-Z0-9_-]{1,128}$/.test(name)).map((runId) => {
+  return sortPoints(names.filter((name) => /^[a-zA-Z0-9_-]{1,128}$/.test(name)).map((runId) => {
     try { const point = load(hive, runId); if (point) return point; } catch {}
     return { runId, unreadable: true, createdAt: null, workspace: null, files: null, undoneAt: null, remaining: null };
-  }).sort((a, b) => Number(Boolean(a.unreadable)) - Number(Boolean(b.unreadable)) || (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || b.runId.localeCompare(a.runId));
+  }));
 }
 
 export function listRestorePoints(hiveDir) {
@@ -206,10 +256,10 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
       if (siblings.some((other) => path.resolve(other) !== hive && readRunLease(other) && !cliRecoveryStatus(other).automatic)) throw refusal('A run is active in another chat of this project; stop or recover it before undo.');
     };
     checkSiblings();
-    const entries = allPoints(hive), points = entries.filter((p) => !p.unreadable);
+    const entries = await allPointsUndo(hive), points = entries.filter((p) => !p.unreadable);
     const selected = runId === undefined ? (points.find((p) => !settled(p)) ?? points.find((p) => !p.undoneAt)) : points.find((p) => p.runId === runId);
     if (!selected) {
-      if (runId !== undefined && allPoints(hive).some((p) => p.runId === runId && p.unreadable)) throw refusal(`Restore point ${runId} is unreadable.`);
+      if (runId !== undefined && entries.some((p) => p.runId === runId && p.unreadable)) throw refusal(`Restore point ${runId} is unreadable.`);
       throw Error('No restore point available');
     }
     const newer = points.slice(0, points.indexOf(selected)).filter((p) => !settled(p)).map((p) => p.runId);
@@ -219,11 +269,11 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
     return await withWorkspaceLock(selected.workspace, async () => {
       checkSiblings();
       if (readRunLease(hive)?.token !== lease.token) throw refusal('This chat needs recovery before undo.');
-      const point = load(hive, selected.runId);
+      const point = await loadUndo(hive, selected.runId);
       if (!point || point.workspace !== selected.workspace) throw Error('Restore point changed');
       const result = { runId: point.runId, restored: [], removed: [], conflicts: [], warnings: [] };
       if (settled(point)) {
-        if (!point.undoneAt) { point.undoneAt = new Date().toISOString(); save(hive, point); }
+        if (!point.undoneAt) { point.undoneAt = new Date().toISOString(); await saveUndo(hive, point); }
         result.conflicts = point.files.filter((e) => e.undoUnrestorable || !e.restorable).map((e) => ({ path: e.path, reason: e.undoUnrestorable ?? e.reason, code: 'unrestorable' }));
         return result;
       }
@@ -250,14 +300,16 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
               if (!force && !equal(actual, e.lastWritten) && !(e.pending !== undefined && equal(actual, e.pending)) && !(e.undoPending && equal(actual, e.original))) {
                 result.conflicts.push({ path: e.path, reason: 'File no longer matches what the run wrote', code: 'changed' }); continue;
               }
-              e.undoPending = true; save(hive, point);
+              e.undoPending = true; await saveUndo(hive, point);
               const file = target(point.workspace, hive, e.path);
               if (!equal(current(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
               if (!equal(actual, e.original)) {
-                if (e.original) { atomic(point.workspace, e.path, data, e.permissions); result.restored.push(e.path); }
+                if (e.original) { await atomicUndo(point.workspace, e.path, data, e.permissions, () => {
+                  if (!equal(current(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
+                }); result.restored.push(e.path); }
                 else if (actual) { fs.unlinkSync(file); result.removed.push(e.path); }
               }
-              e.undoneAt = new Date().toISOString(); delete e.undoPending; save(hive, point);
+              e.undoneAt = new Date().toISOString(); delete e.undoPending; await saveUndo(hive, point);
             } catch (error) {
               const code = error.message === 'Invalid pre-image' ? 'unrestorable' : error.message === 'Restore target changed' ? 'changed' : 'blocked';
               const reason = code === 'blocked' ? error.message === 'Restore path is not a regular file' && result.conflicts.some((c) => c.code === 'changed' && c.path.startsWith(e.path + '/')) ? 'Could not restore the file; resolve the changed conflict below this directory first' : blockedReason(error) : error.message;
@@ -277,7 +329,7 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
         }
       }
       if (!point.undoneAt && settled(point)) point.undoneAt = new Date().toISOString();
-      save(hive, point);
+      await saveUndo(hive, point);
       return result;
     });
   } finally {

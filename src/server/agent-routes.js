@@ -137,6 +137,7 @@ export function createAgentRoutes({ createClient = createDurableClient } = {}) {
             for await (const { offset, value } of client.readStream(record.workflowId, 'output', { fromOffset: 0 })) {
               if (signal.aborted) break;
               length = offset + 1;
+              // Child-only env (including dotenv) is already masked at write time; server env masking is defense in depth.
               if (base + offset >= fromOffset) await write(`id: ${base + offset}\nevent: chunk\ndata: ${JSON.stringify(value.type === 'error' ? errorRecord(value, process.env) : value)}\n\n`);
             }
             base += length;

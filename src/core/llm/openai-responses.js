@@ -1,8 +1,9 @@
 import { count, textContent } from './stream.js';
 import { protocolError } from './errors.js';
+import { isChatGPT } from './catalogue.js';
 
 export function responsesRequest(model, context, options, auth) {
-  const legacy = auth.type === 'oauth' && auth.mode === 'chatgpt';
+  const legacy = isChatGPT(auth);
   const input = [];
   if (context.systemPrompt && !legacy) input.push({ role: model.reasoning ? 'developer' : 'system', content: context.systemPrompt });
   for (const message of context.messages) {

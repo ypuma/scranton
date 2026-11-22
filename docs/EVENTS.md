@@ -125,7 +125,7 @@ Scoped Live-SSE und archiviertes JSON-Replay verwenden die unveränderten Ereign
 
 ## Parallel execution extension (additive v1)
 
-Real runs default to own agent workflows, private shadow worktrees and the Scranton OS sandbox. Explicit Docker (`scranton-tools:24-r1`) is tool-only; host requires explicit trust. No automatic installation/pull/build or silent host fallback. Demo uses the scripted provider and labels simulated host execution.
+Real runs default to own agent workflows, private shadow worktrees and the Scranton OS sandbox. Explicit Docker (`scranton-tools:24-r2`) is tool-only; host requires explicit trust. No automatic installation/pull/build or silent host fallback. Demo uses the scripted provider and labels simulated host execution.
 
 - `run_started.execution`: `{maxParallel,isolation,sandbox:{mode,image,network},persistentSessions,maxReplans,simulated?}`. `simulated:true` is set only by the explicit scripted demo command; real trusted-host runs do not set it. The slot limit counts complete developer → QA → integration pipelines, not individual role invocations.
 - `plan_ready.milestones[].dependsOn: string[]`. IDs are `m1` through `m7`. Omission means the previous milestone; explicit `[]` means independent. Unknown, duplicate and cyclic prerequisites are rejected. Only successful integration satisfies an edge. Skipped/rejected prerequisites yield `milestone_finished {status:"blocked",reason}` for dependents, without launching them.

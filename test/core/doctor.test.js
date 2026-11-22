@@ -6,7 +6,7 @@ import { runDoctor, satisfiesMin } from '../../src/core/doctor.js';
 import { loadConfig } from '../../src/core/config.js';
 import { createAuthService } from '../../src/core/auth.js';
 
-async function doctor(t, { credentials = {}, agents = {}, sandbox = { available: true, backend: 'fake-native' }, mode = 'host', docker = { available: true, image: 'scranton-tools:24-r1' }, platform = process.platform, gitBash = false } = {}) {
+async function doctor(t, { credentials = {}, agents = {}, sandbox = { available: true, backend: 'fake-native' }, mode = 'host', docker = { available: true, image: 'scranton-tools:24-r2' }, platform = process.platform, gitBash = false } = {}) {
   const root = path.resolve('.scratch/auth-port/doctor'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'case-')), file = path.join(dir, 'store.json');
   fs.writeFileSync(file, JSON.stringify({ version: 1, credentials, providers: {}, renewals: {}, deviceId: 'fixture', import: { at: 'fixture' } }));
@@ -26,22 +26,22 @@ const oauth = { type: 'oauth', access: 'FAKE_ACCESS', refresh: 'FAKE_REFRESH', e
 test('doctor reports credential metadata without refreshing or printing secrets', async (t) => {
   const { code, output } = await doctor(t, { credentials: { anthropic: oauth, openai: { type: 'api_key', key: 'FAKE_KEY' } } });
   assert.equal(code, 0); assert.match(output, /Claude \(Pro\/Max\): signed_in \(oauth\)/); assert.match(output, /ChatGPT: signed_in \(api_key\)/);
-  assert.match(output, /Automatic model: anthropic\/claude-sonnet-4-5/);
+  assert.match(output, /Automatic model: anthropic\/claude-opus-5-5/);
 });
 test('doctor reports Automatic unavailable and fails active roles without accounts', async (t) => {
   const { code, output } = await doctor(t);
-  assert.equal(code, 1); assert.match(output, /Automatic model: unavailable/);
+  assert.equal(code, 1); assert.match(output, /Automatic model: unavailable; sign in to Claude, ChatGPT, Gemini, Google Antigravity or Vertex/);
   for (const id of ['michael', 'dwight', 'angela']) assert.match(output, new RegExp(id + ': model Automatic \\(unavailable\\)'));
   assert.doesNotMatch(output, /oscar:|hank:/);
 });
 test('doctor uses the runner Automatic priority rather than catalogue ordering', async (t) => {
   const { code, output } = await doctor(t, { credentials: { openai: oauth, google: { type: 'api_key', key: 'FAKE_KEY' } } });
-  assert.equal(code, 0); assert.match(output, /Automatic model: openai\/gpt-5.3-codex/);
+  assert.equal(code, 0); assert.match(output, /Automatic model: openai\/gpt-6.2-sol/);
 });
 test('doctor verifies explicit models against own catalogue and available accounts', async (t) => {
   const { code, output } = await doctor(t, { credentials: { openai: oauth }, agents: { dwight: { provider: 'openai', model: 'unknown-model' } } });
   assert.equal(code, 1); assert.match(output, /dwight: model openai\/unknown-model; credentials unavailable or model unknown/);
-  assert.match(output, /michael: model openai\/gpt-5.3-codex/);
+  assert.match(output, /michael: model openai\/gpt-6.2-sol/);
 });
 test('search and shell checks are offline and native fallback is explained', async (t) => {
   const { output } = await doctor(t, { credentials: { google: { type: 'api_key', key: 'FAKE_KEY' } } });
@@ -77,7 +77,7 @@ test('credential inspection failure does not suppress independent workspace diag
 
 test('Docker doctor checks tool executor readiness without explicit-model rules', async t => {
   const { code, output } = await doctor(t, { mode: 'docker', credentials: { openai: oauth } });
-  assert.equal(code, 0); assert.match(output, /Docker tool executor ready: scranton-tools:24-r1/);
+  assert.equal(code, 0); assert.match(output, /Docker tool executor ready: scranton-tools:24-r2/);
   assert.match(output, /Only tools run inside Docker/); assert.match(output, /credentials stay on the host/);
   const failed = await doctor(t, { mode: 'docker', credentials: { openai: oauth }, docker: { available: false, reason: 'daemon unreachable' } });
   assert.equal(failed.code, 1); assert.match(failed.output, /daemon unreachable/); assert.match(failed.output, /angela: tools/);

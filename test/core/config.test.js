@@ -226,3 +226,23 @@ test('custom Docker gate defaults retain bash and PowerShell overrides are rejec
   assert.deepEqual(loadConfig({...options, fileConfig}).agents.reviewer.tools, ['read', 'bash']);
   assert.throws(() => loadConfig({...options, fileConfig: {...fileConfig, agents: {reviewer: {tools: ['powershell']}}}}), /agents.reviewer.tools: powershell.*Docker.*bash/);
 });
+
+test('approval flags override file settings, deduplicate tools and allow empty-clears', () => {
+  const fileConfig = { approvals: { tools: ['read'], timeoutSeconds: 90 } };
+  const load = flags => loadConfig({ ...base, env: {}, fileConfig, flags }).approvals;
+  assert.deepEqual(load({ approve: ' write,edit,write ', approvalTimeout: '12' }), { tools: ['write', 'edit'], timeoutSeconds: 12 });
+  assert.deepEqual(load({ approve: '' }), { tools: [], timeoutSeconds: 90 });
+  assert.deepEqual(load({ approvalTimeout: 86400 }), { tools: ['read'], timeoutSeconds: 86400 });
+  assert.deepEqual(fileConfig.approvals, { tools: ['read'], timeoutSeconds: 90 });
+});
+
+test('loadConfig rejects invalid approval flags with the CLI diagnostics', () => {
+  const load = flags => loadConfig({ ...base, env: {}, fileConfig: {}, flags });
+  for (const approve of ['unknown', 'write,', ' ', 'write,,read', null, true, ['write']]) {
+    assert.throws(() => load({ approve }), { name: 'ConfigError', message: '--approve requires a comma-separated list of known tools' });
+  }
+  for (const approvalTimeout of ['', 'NaN', 'Infinity', '1.5', '0', '-1', '86401', null, true, [], {}]) {
+    assert.throws(() => load({ approvalTimeout }), { name: 'ConfigError', message: '--approval-timeout must be an integer from 1 to 86400 seconds' });
+  }
+  for (const approvalTimeout of ['1', 1, '86400', 86400]) assert.equal(load({ approvalTimeout }).approvals.timeoutSeconds, Number(approvalTimeout));
+});

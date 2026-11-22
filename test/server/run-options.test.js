@@ -6,12 +6,15 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
 import { readRunLease, releaseRunLease } from '../../src/core/run-lease.js';
-import { PACKAGE_ROOT } from '../../src/core/config.js';
+import { PACKAGE_ROOT, loadConfig } from '../../src/core/config.js';
+import { runCli } from '../../src/core/cli.js';
+import { Orchestrator } from '../../src/core/orchestrator.js';
 
 for (const route of ['/api/runs', '/api/projects/default/chats/default/runs']) test(`own runtime options map unchanged for ${route}`, async t => {
   const base = path.resolve('.scratch/server-switch'); fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'options-')), hive = path.join(dir, 'hive');
-  let invocation, child;
+  let invocation, child, cliConfig;
+  t.mock.method(Orchestrator.prototype, 'run', async function () { cliConfig = this.config; return { status: 'success' }; });
   const server = await startVisualizerServer({ hiveDir: hive, publicDir: dir, port: 0, control: { workspace: path.join(dir, 'ws'), auth: { close() {} }, runner(exe, args, opts) { invocation = { exe, args, opts }; child = Object.assign(new EventEmitter(), { pid: 123 }); return child; } } });
   const finish = () => { const lease = readRunLease(hive); if (lease) releaseRunLease(hive, lease.token); child?.emit('close', 0); child = null; };
   t.after(async () => { finish(); await server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -38,7 +41,17 @@ for (const route of ['/api/runs', '/api/projects/default/chats/default/runs']) t
     assert.equal(args[args.indexOf('--sandbox') + 1], sandbox); assert.equal(args.includes('--trusted-host'), sandbox === 'host');
     assert.equal(args[args.indexOf('--sandbox-network') + 1], 'allow');
     assert.equal(args[args.indexOf('--approve') + 1], 'write,edit'); assert.equal(args[args.indexOf('--approval-timeout') + 1], '90');
-    assert.deepEqual(args.slice(-2), ['--', 'Task']); finish();
+    assert.deepEqual(args.slice(-2), ['--', 'Task']);
+    const flags = { approve: args[args.indexOf('--approve') + 1], approvalTimeout: args[args.indexOf('--approval-timeout') + 1] };
+    const expected = loadConfig({ cwd: dir, env: {}, fileConfig: {}, flags }).approvals;
+    assert.deepEqual(expected, { tools: ['write', 'edit'], timeoutSeconds: 90 });
+    let err = '';
+    assert.equal(await runCli(['run', 'Task', '--approve', flags.approve, '--approval-timeout', flags.approvalTimeout, '--hive', path.join(dir, 'cli-hive')], {
+      cwd: dir, env: { SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), PI_CODING_AGENT_DIR: path.join(dir, 'legacy') },
+      stdout: { write() {} }, stderr: { write(s) { err += s; } }
+    }), 0, err);
+    assert.deepEqual(cliConfig.approvals, expected);
+    finish();
   }
   assert.equal((await post({ sandboxNetwork: 'bridge', approvals: { tools: [] } })).status, 202);
   assert.equal(invocation.args[invocation.args.indexOf('--sandbox-network') + 1], 'allow');

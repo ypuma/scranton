@@ -157,7 +157,9 @@ test('Automatic uses fixed provider order, pinned catalogue entries and no Pi se
 
 test('workflow identity escapes separators and app version fingerprints sources', async () => {
   assert.equal(agentWorkflowId({ projectId: 'a/b', instanceId: 'i' }), 'scr:a%2Fb/hive/single/i/default');
-  assert.match(await agentAppVersion(), /^0\.5\.0-[a-f0-9]{16}$/);
+  const { version } = JSON.parse(await fs.readFile(new URL('../../../package.json', import.meta.url), 'utf8'));
+  const appVersion = await agentAppVersion();
+  assert.equal(appVersion.slice(0, -17), version); assert.match(appVersion.slice(-17), /^-[a-f0-9]{16}$/);
 });
 
 test('custom providers resolve only their declared models from credentials', () => {
@@ -170,7 +172,7 @@ test('custom providers resolve only their declared models from credentials', () 
 test('Automatic selection is checkpointed in a real workflow', async t => {
   const s = await setup(t, [{ text: '[TASK_COMPLETE]' }]);
   const r = s.start({ model: undefined, credentials: { listAccounts: () => [{ id: 'google', status: 'signed_in' }] } });
-  assert.equal((await r.done).ok, true); assert.equal(s.llm.calls[0].model.id, 'gemini-2.5-pro');
+  assert.equal((await r.done).ok, true); assert.equal(s.llm.calls[0].model.id, 'gemini-4-argon');
 });
 
 test('compaction overflow removes oldest history and retries as a new durable step', async t => {

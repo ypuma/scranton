@@ -10,7 +10,7 @@ import { reduceAll, normalizeExecution } from '../../visualizer/public/js/state.
 import { executionBadges } from '../../visualizer/public/js/lanes.js';
 
 const RUN = { pid: 42, mode: 'run', request: 'Todo', workspace: 'C:\\ws', startedAt: '2026-11-08T12:00:00.000Z', runId: 'r1', exitCode: null };
-const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-tools:24-r1', network: 'none' } } };
+const DEFAULTS = { execution: { maxParallel: 4, isolation: 'worktree', sandbox: { mode: 'docker', image: 'scranton-tools:24-r2', network: 'none' } } };
 
 function doc(fields = {}) {
   return { v: 1, enabled: true, workspace: 'C:\\ws', scenarios: ['happy'], run: null, lastExit: null, pendingHuman: null, ...fields };
@@ -64,8 +64,8 @@ test('parseControl reads defaults.execution, instances and recovery', () => {
 });
 
 test('executionDefaults: the server defaults, else the engine defaults; the Scranton sandbox unless the configuration names another', () => {
-  assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-tools:24-r1', network: 'none' });
-  assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'scranton', image: 'scranton-tools:24-r1', network: 'allow' });
+  assert.deepEqual(executionDefaults(parseControl(doc({ defaults: DEFAULTS }))), { maxParallel: 4, sandbox: 'docker', image: 'scranton-tools:24-r2', network: 'none' });
+  assert.deepEqual(executionDefaults(parseControl(doc())), { maxParallel: 3, sandbox: 'scranton', image: 'scranton-tools:24-r2', network: 'allow' });
   const host = { execution: { ...DEFAULTS.execution, sandbox: { mode: 'host' } } };
   assert.equal(executionDefaults(parseControl(doc({ defaults: host }))).sandbox, 'host');
   const own = { execution: { ...DEFAULTS.execution, sandbox: { mode: 'scranton', network: 'bridge' } } };
@@ -97,7 +97,7 @@ test('buildRunRequest: parallelism and the docker sandbox by default', () => {
   for (const bad of ['0', '33', '1.5', 'x']) assert.equal(buildRunRequest(form({ maxParallel: bad }), c).field, 'maxParallel', bad);
   assert.equal(buildRunRequest(form({ maxParallel: '32' }), c).body.maxParallel, 32);
   assert.equal(buildRunRequest(form({ sandboxImage: '-rm -rf' }), c).field, 'sandboxImage');
-  assert.match(buildRunRequest(form({ sandboxImage: '-rm -rf' }), c).error, /such as scranton-tools:24-r1\.$/);
+  assert.match(buildRunRequest(form({ sandboxImage: '-rm -rf' }), c).error, /such as scranton-tools:24-r2\.$/);
   const own = parseControl(doc({ defaults: { execution: { ...DEFAULTS.execution, sandbox: { mode: 'docker', image: 'my/tools:9' } } } }));
   assert.match(buildRunRequest(form({ sandboxImage: '-rm -rf' }), own).error, /such as my\/tools:9\.$/, 'the example is the configured image');
   assert.equal(buildRunRequest(form({ sandboxNetwork: 'host' }), c).field, 'sandboxNetwork');
@@ -181,7 +181,7 @@ test('control gates: an orphaned owner disables New run; a stop request needs it
 
 test('exitHint names the missing prerequisite without claiming anything works', () => {
   assert.match(exitHint({ outputTail: 'error: docker: command not found' }), /scranton doctor/);
-  assert.match(exitHint({ outputTail: 'Sandbox image scranton-tools:24-r1 not found' }), /Scranton sandbox or with trusted host/);
+  assert.match(exitHint({ outputTail: 'Sandbox image scranton-tools:24-r2 not found' }), /Scranton sandbox or with trusted host/);
   assert.match(exitHint({ outputTail: 'Hive is owned by another run' }), /recover ownership/);
   assert.equal(exitHint({ outputTail: 'TypeError: x is undefined' }), '');
   assert.equal(exitHint(null), '');

@@ -6,7 +6,7 @@ Authoritative integration decisions; implementation lanes may propose changes vi
 
 Runtime modules: core/tools (contained deterministic tools/schemas/truncation), core/llm (own clients), core/credentials (own store/OAuth/import), core/durable (SQLite or real DBOS), core/agent (workflow runner). Current task ownership is assigned per task, not by the original migration lane matrix.
 
-Defaults: execution.maxParallel=3, isolation=worktree, sandbox.mode=scranton, sandbox.network=allow, persistentSessions=true, maxReplans=0. Docker is an optional tool-only executor (scranton-tools:24-r1), host requires explicit trust. No fallback/download/install. Shared mode needs explicit host and maxParallel:1. Windows Low uses PowerShell instead of Bash and rejects network:none. Full OS limitations: docs/ISOLATION.md. CLI/API fields: run-options-contract.md.
+Defaults: execution.maxParallel=3, isolation=worktree, sandbox.mode=scranton, sandbox.network=allow, persistentSessions=true, maxReplans=0. Docker is an optional tool-only executor (scranton-tools:24-r2), host requires explicit trust. No fallback/download/install. Shared mode needs explicit host and maxParallel:1. Windows Low uses PowerShell instead of Bash and rejects network:none. Full OS limitations: docs/ISOLATION.md. CLI/API fields: run-options-contract.md.
 
 Plans: omitted dependsOn means predecessor (first -> []); explicit [] is independent. Reject malformed/unknown/self/cyclic dependencies. Only QA plus safe integration satisfies an edge. Skipped/failed prerequisites block successors. maxParallel counts milestone pipelines, not roles.
 

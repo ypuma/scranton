@@ -3,7 +3,7 @@
 `createSandbox({worktree, tempDir, image?, network?, runId?, env?, limits?})`
 returns the native adapter interface: synchronous, idempotent `prepare()`, Node-compatible
 `spawn(file, argv, options)`, asynchronous idempotent `dispose()`, and `available()`.
-`available(options)` is also exported. Default image: `scranton-tools:24-r1`.
+`available(options)` is also exported. Default image: `scranton-tools:24-r2`.
 The orchestrator selects this adapter for `execution.sandbox.mode: 'docker'`;
 its `shells` capability supplies `/bin/bash` without host-shell discovery.
 
@@ -35,6 +35,8 @@ retain the mask and surface as errors.
 Host crashes require existing run recovery; this adapter does not install a daemon.
 
 Build only after `docker images` confirms `node:24-bookworm-slim` exists locally:
-`docker build --pull=false -t scranton-tools:24-r1 sandbox`.
+`docker build --pull=false -t scranton-tools:24-r2 sandbox`.
+Revision r2 installs rg/fd from pinned, SHA-256-verified release archives rather than apt.
+Rebuild explicitly; an existing r1 image does not satisfy the new default tag.
 The existing base-tag/apt version policy is unchanged (not digest-reproducible).
 No automatic build, pull, installation or host fallback occurs.

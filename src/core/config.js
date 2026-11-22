@@ -158,7 +158,7 @@ export function loadConfig({
     maxReplans: 0,
     sandbox: {
       mode: flags.trustedHost ? 'host' : pick(flags.sandbox, file.execution?.sandbox?.mode, 'scranton'),
-      image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-tools:24-r1'),
+      image: pick(flags.sandboxImage, file.execution?.sandbox?.image, 'scranton-tools:24-r2'),
       network: pick(flags.sandboxNetwork, file.execution?.sandbox?.network, 'allow')
     }
   };
@@ -170,10 +170,21 @@ export function loadConfig({
   if (!['none', 'allow'].includes(execution.sandbox.network)) throw new ConfigError('execution.sandbox.network must be allow or none (bridge is an alias for allow)');
   if (platform === 'win32' && execution.sandbox.mode === 'scranton' && execution.sandbox.network === 'none') throw new ConfigError('Windows Scranton sandbox cannot block network; use --sandbox docker with --sandbox-network none');
   if (flags.sandbox === 'host' && !flags.trustedHost) throw new ConfigError('--sandbox host requires --trusted-host');
+  const knownApprovalTools = ['read', 'write', 'edit', 'bash', 'powershell', 'grep', 'find', 'ls', 'agent_chat'];
   const approvals = file.approvals ?? { tools: [], timeoutSeconds: 600 };
-  if (!approvals || typeof approvals !== 'object' || Array.isArray(approvals) || Object.keys(approvals).some((key) => !['tools', 'timeoutSeconds'].includes(key)) || !Array.isArray(approvals.tools) || approvals.tools.some((tool) => !['read', 'write', 'edit', 'bash', 'powershell', 'grep', 'find', 'ls', 'agent_chat'].includes(tool))) throw new ConfigError('approvals must contain a tools array of known tool names and optional timeoutSeconds');
+  if (!approvals || typeof approvals !== 'object' || Array.isArray(approvals) || Object.keys(approvals).some((key) => !['tools', 'timeoutSeconds'].includes(key)) || !Array.isArray(approvals.tools) || approvals.tools.some((tool) => !knownApprovalTools.includes(tool))) throw new ConfigError('approvals must contain a tools array of known tool names and optional timeoutSeconds');
   const approvalConfig = { tools: [...new Set(approvals.tools)], timeoutSeconds: approvals.timeoutSeconds ?? 600 };
   if (!Number.isInteger(approvalConfig.timeoutSeconds) || approvalConfig.timeoutSeconds < 1 || approvalConfig.timeoutSeconds > 86400) throw new ConfigError('approvals.timeoutSeconds must be an integer from 1 to 86400');
+  if (flags.approve !== undefined) {
+    const tools = typeof flags.approve === 'string' ? (flags.approve === '' ? [] : flags.approve.split(',').map(t => t.trim())) : null;
+    if (!tools || tools.some(t => !knownApprovalTools.includes(t))) throw Object.assign(new ConfigError('--approve requires a comma-separated list of known tools'), { usage: true });
+    approvalConfig.tools = [...new Set(tools)];
+  }
+  if (flags.approvalTimeout !== undefined) {
+    const seconds = typeof flags.approvalTimeout === 'string' || typeof flags.approvalTimeout === 'number' ? Number(flags.approvalTimeout) : NaN;
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400) throw Object.assign(new ConfigError('--approval-timeout must be an integer from 1 to 86400 seconds'), { usage: true });
+    approvalConfig.timeoutSeconds = seconds;
+  }
 
   const promptsDir = fromCwd(env.SCRANTON_PROMPTS_DIR) ?? path.join(dataDir ?? hiveDir, 'prompts');
   const settingsDir = fromCwd(env.SCRANTON_SETTINGS_DIR) ?? dataDir ?? hiveDir;

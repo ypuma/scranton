@@ -664,3 +664,44 @@ test('fix7: a changed child must be resolved before undo can restore the file ab
   assert.equal(read(f.workspace, 'a/b'), 'human');
   assert.equal(listRestorePoints(f.hiveDir)[0].remaining, 2);
 });
+
+// Undo flushes must leave the event loop available without weakening the journal.
+test('undo awaits asynchronous flushes and keeps the pending journal retryable on flush failure', async (t) => {
+  const f = fixture(t); record(f, 'run'); write(f.workspace, 'file', 'after');
+  const flush = fs.fsync; let calls = 0, ticked = false;
+  const mock = t.mock.method(fs, 'fsync', (fd, callback) => {
+    if (calls++ > 0) return flush(fd, callback);
+    setTimeout(() => { ticked = true; }, 10);
+    setTimeout(() => callback(Object.assign(Error('disk failure'), { code: 'EIO' })), 40);
+  });
+  const result = await undoRun({ hiveDir: f.hiveDir });
+  mock.mock.restore();
+  assert.ok(calls > 0, 'undo must use asynchronous flushes'); assert.ok(ticked);
+  assert.equal(result.conflicts[0].code, 'blocked');
+  assert.equal(read(f.workspace, 'file'), 'after'); assert.equal(manifest(f).files[0].undoneAt, null);
+  assert.equal(fs.fsync, flush);
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).restored, ['file']);
+  assert.equal(read(f.workspace, 'file'), 'before');
+});
+
+test('undo rechecks user content after an asynchronous workspace flush before renaming', async (t) => {
+  const f = fixture(t); record(f, 'run'); write(f.workspace, 'file', 'after');
+  const open = fs.openSync, flush = fs.fsync, workspaceFds = new Set(); let edited = false;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    const fd = open(file, ...args);
+    if (String(file).startsWith(f.workspace + path.sep) && path.basename(String(file)).startsWith('.scranton-')) workspaceFds.add(fd);
+    else workspaceFds.delete(fd);
+    return fd;
+  });
+  const mock = t.mock.method(fs, 'fsync', (fd, callback) => {
+    if (workspaceFds.has(fd) && !edited) { edited = true; write(f.workspace, 'file', 'human'); }
+    flush(fd, callback);
+  });
+  const result = await undoRun({ hiveDir: f.hiveDir }); mock.mock.restore();
+  assert.ok(edited); assert.equal(result.conflicts[0].code, 'changed');
+  assert.equal(read(f.workspace, 'file'), 'human');
+  assert.equal(manifest(f).files[0].undoPending, true); assert.equal(manifest(f).undoneAt, null);
+  assert.deepEqual(fs.readdirSync(f.workspace), ['file']);
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir, force: true })).restored, ['file']);
+  assert.equal(read(f.workspace, 'file'), 'before');
+});

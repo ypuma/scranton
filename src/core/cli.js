@@ -192,6 +192,8 @@ function toFlags(values) {
     sandbox: values.sandbox,
     sandboxImage: values['sandbox-image'],
     sandboxNetwork: values['sandbox-network'],
+    approve: values.approve,
+    approvalTimeout: values['approval-timeout'],
     workspace: values.workspace,
     hive: values.hive,
     config: values.config,
@@ -203,16 +205,6 @@ function toFlags(values) {
 
 function runOptions(config, values) {
   if (values['sandbox-image'] !== undefined && config.execution.sandbox.mode !== 'docker') throw new UsageError('--sandbox-image requires --sandbox docker');
-  if (values.approve !== undefined) {
-    const tools = values.approve === '' ? [] : values.approve.split(',').map(t => t.trim());
-    if (tools.some(t => !['read', 'write', 'edit', 'bash', 'powershell', 'grep', 'find', 'ls', 'agent_chat'].includes(t))) throw new UsageError('--approve requires a comma-separated list of known tools');
-    config.approvals = { ...config.approvals, tools: [...new Set(tools)] };
-  }
-  if (values['approval-timeout'] !== undefined) {
-    const seconds = Number(values['approval-timeout']);
-    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400) throw new UsageError('--approval-timeout must be an integer from 1 to 86400 seconds');
-    config.approvals = { ...config.approvals, timeoutSeconds: seconds };
-  }
   return config;
 }
 
@@ -301,7 +293,7 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
         ? 'Invalid authentication options; enter keys through hidden prompt or stdin, never argv'
         : err.message;
       stderr.write(`${c.red('scranton:')} ${message}\n`);
-      if (!(err instanceof ConfigError)) stderr.write('Run "scranton help" for usage.\n');
+      if (!(err instanceof ConfigError) || err.usage) stderr.write('Run "scranton help" for usage.\n');
       return 2;
     }
     throw err;

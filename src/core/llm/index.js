@@ -1,4 +1,4 @@
-import { resolveModel } from './catalogue.js';
+import { resolveModel, chatgptModels, isChatGPT } from './catalogue.js';
 import { Blocks, createResultStream } from './stream.js';
 import { jsonEvents } from './sse.js';
 import { protocolError, httpError } from './errors.js';
@@ -7,6 +7,7 @@ import { anthropicRequest, anthropicEvents } from './anthropic-messages.js';
 import { responsesRequest, responsesEvents } from './openai-responses.js';
 import { completionsRequest, completionsEvents } from './openai-completions.js';
 import { googleRequest, googleEvents } from './google-generative.js';
+import { vertexRequest } from './google-vertex.js';
 import { antigravityRequest } from './google-antigravity.js';
 
 export { createScriptedProvider } from './scripted.js';
@@ -19,6 +20,7 @@ const clients = {
   'openai-responses': [responsesRequest, responsesEvents],
   'openai-completions': [completionsRequest, completionsEvents],
   'google-generative': [googleRequest, googleEvents],
+  'google-vertex': [vertexRequest, googleEvents],
   'google-generative-ai': [googleRequest, googleEvents],
   'google-antigravity': [antigravityRequest, (events, blocks, output) => googleEvents(events, blocks, output, { envelope: true })]
 };
@@ -40,6 +42,11 @@ export function createLLM({ resolveAuth = () => undefined, fetcher = (...args) =
       if (!client) throw protocolError('Unsupported provider API');
       const auth = options.auth ?? await resolveWithSignal(resolveAuth, model.provider, signal);
       signal.throwIfAborted();
+      if (model.provider === 'openai' && isChatGPT(auth)) {
+        const supported = chatgptModels.find(m => m.id === model.id);
+        if (!supported) throw Object.assign(protocolError(), { code: 'MODEL_NOT_AVAILABLE' });
+        model = { ...model, ...supported, baseUrl: model.baseUrl };
+      }
       const token = auth?.type === 'api_key' ? auth.key : auth?.type === 'oauth' ? auth.access : null;
       if (typeof token !== 'string' || !token || /[\x00-\x20\x7f]/.test(token)) throw Object.assign(protocolError(), { code: 'AUTH_REQUIRED' });
       const [request, map] = client;

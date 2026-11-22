@@ -70,7 +70,7 @@ export async function runDoctor({ config, env = process.env, stdout = process.st
       `${account.label}: ${account.status} (${account.kind ?? 'none'})${account.renewFailedAt ? ` - renewal failed ${account.renewFailedAt}; sign in again` : account.renewsOnUse ? ' - renews automatically on use' : ''}`);
     let automatic;
     try { const m = selectModel({}, { listAccounts: () => accounts }); automatic = { provider: m.provider, model: m.id }; report('ok', `Automatic model: ${m.provider}/${m.id}`); }
-    catch { report('warn', 'Automatic model: unavailable; sign in to Claude, ChatGPT, Gemini or Google Antigravity'); }
+    catch { report('warn', 'Automatic model: unavailable; sign in to Claude, ChatGPT, Gemini, Google Antigravity or Vertex'); }
     for (const id of config.workflowWarning ? [] : activeRoles(config)) {
       try {
       const a = config.agents[id];

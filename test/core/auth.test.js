@@ -47,13 +47,13 @@ function write(file, credentials) { const data = read(file); data.credentials = 
 
 test('status is read-only for signed-out, OAuth, expired, API-key, env and malformed store; no secrets', async (t) => {
   const f = fixture(t);
-  assert.deepEqual((await f.service.listAccounts()).map((a) => a.status), ['signed_out', 'signed_out', 'signed_out', 'signed_out']);
+  assert.deepEqual((await f.service.listAccounts()).map((a) => a.status), ['signed_out', 'signed_out', 'signed_out', 'signed_out', 'signed_out']);
   assert.equal(Object.keys(read(f.authPath).credentials).length, 0);
   const data = { anthropic: credential(), openai: { type: 'api_key', key: KEY } };
   write(f.authPath, data);
   const before = fs.readFileSync(f.authPath);
   const accounts = await f.service.listAccounts(); noSecrets(accounts);
-  assert.deepEqual(accounts.map((a) => [a.status, a.kind]), [['signed_in', 'oauth'], ['signed_in', 'api_key'], ['signed_out', null], ['signed_out', null]]);
+  assert.deepEqual(accounts.map((a) => [a.status, a.kind]), [['signed_in', 'oauth'], ['signed_in', 'api_key'], ['signed_out', null], ['signed_out', null], ['signed_out', null]]);
   assert.deepEqual(fs.readFileSync(f.authPath), before);
   data.anthropic.expires = 1; write(f.authPath, data);
   assert.equal((await f.service.listAccounts())[0].status, 'signed_in');
@@ -158,4 +158,25 @@ test('OAuth expiry stays renewable until real rejection; metadata persists and c
   assert.equal(other.listAccounts()[1].status, 'signed_in');
   await f.service.logout('openai');
   assert.deepEqual(read(f.authPath).renewals, {}); noSecrets(f.service.listAccounts());
+});
+
+test('model listing separates ChatGPT OAuth from OpenAI API-key models and includes Vertex', async t => {
+  const f = fixture(t);
+  write(f.authPath, { openai: { ...credential(), mode: 'chatgpt', accountId: 'fake' }, 'google-vertex': { type: 'api_key', key: KEY } });
+  let listing = await f.service.listModels();
+  const ids = listing.providers.find(p => p.id === 'openai').models.map(m => m.id);
+  assert.ok(ids.includes('gpt-6.2-sol')); assert.ok(!ids.includes('gpt-5.3-codex')); assert.ok(!ids.includes('gpt-5'));
+  assert.ok(listing.providers.find(p => p.id === 'google-vertex').models.some(m => m.id === 'gemini-4-argon'));
+  write(f.authPath, { openai: { type: 'api_key', key: KEY } });
+  listing = await f.service.listModels();
+  assert.ok(listing.providers[0].models.some(m => m.id === 'gpt-5.3-codex'));
+  noSecrets(listing);
+});
+
+test('Vertex environment key appears as a signed-in supported account without a stored record', async t => {
+  const f = fixture(t);
+  const auth = createAuthService({ dir: f.dir, env: { GOOGLE_CLOUD_API_KEY: KEY } }); t.after(() => auth.close());
+  const listing = await auth.listModels();
+  assert.equal(auth.listAccounts().find(a => a.id === 'google-vertex').status, 'signed_in');
+  assert.ok(listing.providers.find(p => p.id === 'google-vertex').models.length > 0); noSecrets(listing);
 });

@@ -8,7 +8,7 @@ Own-runtime revision, 2026-11-21. This supersedes the Pi storage/runtime semanti
 - Credentials and custom declarations live in `store.json` under `%APPDATA%\dev.scranton.desktop\credentials` on Windows, `~/Library/Application Support/dev.scranton.desktop/credentials` on macOS, or `$XDG_DATA_HOME/dev.scranton.desktop/credentials` on Linux (default `~/.local/share`). `SCRANTON_CREDENTIALS_DIR` overrides the directory. See `src/core/credentials/README.md` for locking, permissions, metadata and import format.
 - Only the credentials module's one-time import reads Pi `auth.json`/`models.json`, honoring `PI_CODING_AGENT_DIR`. Existing Scranton entries win. The marker and imported state commit together. No subsequent auth/provider/model-window operation reads or writes a Pi profile. Legacy `authPath` and `runtimeFactory` integration options are rejected; tests inject `dir`/`store`/`oauth` instead.
 - Writes, refresh and custom-provider/key mutations use the own store's cross-process lock and atomic replacement. Permanent renewal metadata (`expires`, `failedAt` only) lives in the same transaction. The store is private app data, not an encrypted OS keychain.
-- Corrupt own-store data fails closed without overwrite. `listAccounts()` returns safe error rows for the four primary accounts. JSONC is accepted on one-time import only, never for normal own-store writes. Legacy provider files and backups are no longer managed.
+- Corrupt own-store data fails closed without overwrite. `listAccounts()` returns safe error rows for the five primary accounts. JSONC is accepted on one-time import only, never for normal own-store writes. Legacy provider files and backups are no longer managed.
 
 ## Providers and accounts
 
@@ -20,13 +20,14 @@ Always listed:
 | openai | ChatGPT | oauth, api_key |
 | google | Gemini | api_key |
 | google-antigravity | Google Antigravity | oauth |
+| google-vertex | Google Vertex AI | api_key |
 
-`listAccounts()` returns `[{ id, label, status:'signed_in'|'signed_out'|'expired'|'error', kind:'oauth'|'api_key'|null, methods:string[], expiresAt?:ISO, renewsOnUse?:boolean, renewFailedAt?:ISO, detail?:string, custom?:boolean, baseUrl?:string, api?:string }]`.
+`listAccounts()` returns `[{ id, label, status:'signed_in'|'signed_out'|'expired'|'error', kind:'oauth'|'api_key'|null, methods:string[], mode?:'direct'|'chatgpt', expiresAt?:ISO, renewsOnUse?:boolean, renewFailedAt?:ISO, detail?:string, custom?:boolean, baseUrl?:string, api?:string }]`.
 
 - Also includes stored credential IDs and all own custom declarations. A stored unsupported credential can be inspected/logout, but does not advertise an unsupported built-in client or models.
 - Stored credentials win over environment keys. Malformed stored credentials block ambient fallback. API keys are literal: trim surrounding spaces, reject empty, embedded whitespace, controls, `!`/`$` prefixes and more than 4096 characters. No command execution or environment interpolation in stored keys.
 - Renewable expired OAuth access remains `signed_in` with `renewsOnUse:true`. Only refresh-specific 400/401 or permanent OpenAI direct-grant errors mark `expired`/`renewFailedAt`. Temporary network, timeout, lock and insufficient-validity failures do not. Successful refresh/login/key/logout clears failure metadata; changed expiry invalidates stale metadata.
-- `listProviders()` -> `{providers:[{id,label,methods}]}` lists only built-ins supported by the own LLM catalogue plus declared custom providers. The former broad Pi picker (Bedrock, Vertex, Cloudflare, etc.) is no longer offered as built-in support. Configure compatible endpoints as explicit custom providers. Some imported names reserved by the credentials layer remain reserved there; auth integration validates against the supported built-in catalogue.
+- `listProviders()` -> `{providers:[{id,label,methods}]}` lists only built-ins supported by the own LLM catalogue plus declared custom providers. The former broad Pi picker (Bedrock, Cloudflare, etc.) is no longer offered as built-in support. Configure compatible endpoints as explicit custom providers. Some imported names reserved by the credentials layer remain reserved there; auth integration validates against the supported built-in catalogue.
 - `listModels()` -> `{providers:[{id,label,signedIn:true,models:[{id,name,reasoning?,contextWindow?}]}]}` joins signed-in accounts with `src/core/llm/catalogue.js` and custom declarations. No network discovery or token refresh; rejected/error/signed-out credentials do not advertise available models. Custom model names default to their IDs. Catalogue order is not an Automatic selection rule.
 - `createModelRuntime()` remains an offline compatibility adapter exporting `getModel`, `getModels`, `getAllModels`, `getAvailable`, `close`; it is not a Pi runtime and cannot register extensions or perform Pi login.
 
@@ -68,7 +69,7 @@ Behind loopback peer/Host, matching Origin when present, `X-Scranton-Client: 1`,
 
 `login <claude|chatgpt|antigravity>` uses the same OAuth session. `login gemini` and `login <provider> --api-key` read keys from hidden prompt/stdin, never argv. `logout`, `accounts`, and `provider add/remove` retain their external forms. Accounts/UI selectors use metadata only. Dark monochrome UI, browser retry, manual input and poll semantics remain unchanged; no UI files are changed by this port.
 
-`doctor` reports Node, credential metadata, the exact runner Automatic rule (Claude -> ChatGPT -> Gemini -> Antigravity, pinned refs in `agent/model.js`), rg/fd PATH availability with native fallbacks, shells, and native sandbox `available()`. Active configured/default model availability is checked offline; no Pi subprocess/version/auth check or provider refresh occurs.
+`doctor` reports Node, credential metadata, the exact runner Automatic rule (Claude -> OpenAI -> Gemini -> Antigravity -> Vertex, explicit newest-per-provider markers in `llm/catalogue.js`; ChatGPT mode uses user-chosen `gpt-6.2-sol`, while direct OAuth/API keys use the API catalogue. Markers require updates for new releases), rg/fd PATH availability with native fallbacks, shells, and native sandbox `available()`. Active configured/default model availability is checked offline; no Pi subprocess/version/auth check or provider refresh occurs.
 
 ## Tool-only Docker boundary
 

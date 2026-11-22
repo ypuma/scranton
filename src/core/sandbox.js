@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawnSync } from 'node:child_process';
 
-export const DEFAULT_DOCKER_IMAGE = 'scranton-tools:24-r1';
+export const DEFAULT_DOCKER_IMAGE = 'scranton-tools:24-r2';
 const hostEnvNames = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH'];
 export function dockerEnv(source = process.env) {
   return Object.fromEntries(hostEnvNames.filter(name => source[name] !== undefined).map(name => [name, source[name]]));

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLLM } from '../../../src/core/llm/index.js';
+import { getModel } from '../../../src/core/llm/catalogue.js';
 import { cases, context, model, server, sse, authFor, anthropic, responses, google } from './helpers.js';
 
 for (const [api, fixture] of cases) {
@@ -8,7 +9,9 @@ for (const [api, fixture] of cases) {
     const local = await server(t, (_req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(sse(fixture)); });
     let resolved = 0;
     const llm = createLLM({ resolveAuth: id => { assert.equal(id, api === 'google-antigravity' ? api : 'test'); resolved++; return authFor(api); } });
-    const stream = llm.stream(model(api, local.url), context, { maxTokens: 3000, temperature: 0.2, reasoning: 'low' });
+    const requestModel = model(api, local.url);
+    if (api === 'google-antigravity') Object.assign(requestModel, getModel(api, 'gemini-3.8-flash'), { baseUrl: local.url, cost: requestModel.cost });
+    const stream = llm.stream(requestModel, context, { maxTokens: 3000, temperature: 0.2, reasoning: 'low' });
     const events = await Array.fromAsync(stream), result = await stream.result();
     assert.equal(resolved, 1);
     assert.equal(result.stopReason, 'toolUse', JSON.stringify(result));
@@ -38,7 +41,7 @@ for (const [api, fixture] of cases) {
       assert.equal(body.generationConfig.maxOutputTokens, 3000); assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, 'LOW');
       assert.deepEqual(body.tools[0].functionDeclarations[0].parametersJsonSchema, context.tools[0].parameters);
       assert.equal(body.systemInstruction.parts[0].text, context.systemPrompt);
-      if (api === 'google-antigravity') { assert.equal(r.url, '/v1internal:streamGenerateContent?alt=sse'); assert.equal(r.headers.authorization, 'Bearer fake-access'); assert.equal(r.body.project, 'fake-project'); assert.equal(r.body.model, 'gemini-3-pro-low'); assert.match(r.body.request.sessionId, /^scranton-/); }
+      if (api === 'google-antigravity') { assert.equal(r.url, '/v1internal:streamGenerateContent?alt=sse'); assert.equal(r.headers.authorization, 'Bearer fake-access'); assert.equal(r.body.project, 'fake-project'); assert.equal(r.body.model, 'gemini-3.8-flash-low'); assert.match(r.body.request.sessionId, /^scranton-/); }
       else { assert.equal(r.url, '/models/gemini-3-pro:streamGenerateContent?alt=sse'); assert.equal(r.headers['x-goog-api-key'], 'fake-key'); }
     }
   });

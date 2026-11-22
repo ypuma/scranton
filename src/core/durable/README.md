@@ -169,6 +169,58 @@ and uncheckpointed markers together.
 - Optional `logger` receives DBOS log messages with PostgreSQL URL credentials
   masked. Raw SDK error objects/metadata are deliberately not forwarded.
 
-Run `node --test "test/core/durable/*.test.js"`. SQLite always runs; the shared
-DBOS contract runs only with `SCRANTON_TEST_DBOS_URL` pointing at a disposable
-PostgreSQL database. No server or container is installed by the tests.
+## Optional DBOS verification
+
+SQLite always runs; the shared DBOS contract runs only with
+`SCRANTON_TEST_DBOS_URL` pointing at a **disposable** PostgreSQL database. The
+contract writes workflow records and owns its test executor. No server or container
+is installed by the tests. From the project root in cmd.exe:
+
+```cmd
+set "SCRANTON_TEST_DBOS_URL=postgresql://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB"
+node --test "test/core/durable/*.test.js"
+node --test test/core/agent/dbos-backend.test.js
+set "SCRANTON_TEST_DBOS_URL="
+node --test "test/core/durable/*.test.js"
+```
+
+The optional agent test isolates the SDK process singleton in a child process. It
+injects a scripted provider (no credentials or real model requests), executes a
+write tool, checks the final keyword, terminal status, agent state, history and
+output through a separate durable client, then reattaches without another model
+call. Its fixtures and credential paths are project-local. Without the URL it
+skips explicitly; with a URL, connection/execution errors fail rather than skip.
+
+### PGlite compatibility probe (2026-11-22)
+
+Attempted SDK **5.6.0** against **PGlite 0.5.17** and **pglite-socket 0.2.20**, not
+a real PostgreSQL server. Scratch-only setup, commands and an independent
+reproducer are in `.scratch/dbos-pglite/README.md` (gitignored, not a shipped
+PostgreSQL substitute). No project dependencies or production configuration changed.
+
+System-schema migration and SDK launch succeeded, but **DBOS workflow execution
+could not be verified**. Two PGlite limitations block this configuration:
+
+- The SDK's LISTEN/NOTIFY self-test does not receive its notification and falls
+  back to polling. Socket multiplexing does not provide independent PostgreSQL
+  sessions; native cross-session notifications remain unverified.
+- Even with `maxConnections: 64`, the socket `QueryQueueManager.processQueue`
+  dispatches only the transaction owner's messages while PGlite is in a
+  transaction. SDK `SystemDatabase.lockedBackgroundJob` holds a transaction-scoped
+  advisory lock while `runBackgroundJobs` executes jobs through other pool
+  connections. Those queries cannot run until the lock transaction ends. An
+  independent two-client probe confirms that even `SELECT 42` on the second
+  connection waits for the first connection's `ROLLBACK`. The advisory-lock SQL
+  itself succeeds. A single-connection SDK pool with notifications disabled also
+  stalls; it is not a viable workaround.
+
+No SDK operations, locks or query results were replaced to make tests pass, and no
+Scranton adapter defect was demonstrated by these blocked runs. A timed-out or
+failed PGlite run is **not** a passing DBOS contract. Restart the scratch server
+with a fresh data directory after a killed client, since its transaction/queue may
+otherwise prevent even a subsequent connection from completing.
+
+A disposable real PostgreSQL server is still required to verify the contract and
+agent test end to end, native LISTEN/NOTIFY, normal pool concurrency, recovery
+across processes, and DBOS retention against actual persisted records. SQLite
+coverage and mocked SDK tests do not establish those properties.
