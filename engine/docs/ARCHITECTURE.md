@@ -366,6 +366,48 @@ Reparaturzähler werden innerhalb ihres Scopes nicht nach einer guten Antwort zu
 
 `finalize` ist der einzige normale Endknoten. `succeeded`, `failed`, `rejected`, `cancelled` sind terminal. `awaiting_approval` und `suspended` sind nicht terminal, sondern wiederaufnehmbar. Planablehnung ergibt `rejected`; abgelehnte Lieferung ergibt dagegen `succeeded` mit `applied:false`. `blocked` kann begrenzte Neuplanung auslösen; Sicherheitsverletzungen, erschöpfte globale Budgets, nicht ausführbare Checks und Lieferkonflikte führen zum Abschluss als Fehler. Ein Cancel-Sentinel wird vor normalen Knoten und während Prozessen geprüft. `apply_to_source` und `finalize` überspringen die Stop-Prüfung bewusst: eine begonnene Übernahme muss konsistent abgeschlossen werden. Cancel ist kein Undo bereits angewandter Änderungen.
 
+## Repository instructions (AGENTS.md)
+
+`instructions.py` reads the root `AGENTS.md` once from the initial prepared workspace,
+before setup or baseline checks. Only a regular file with a contained real path is accepted.
+UTF-8 is strict, a leading BOM is removed, and NUL is rejected. Discovery reads at most
+32768 bytes, including for files larger than 1 MiB; an incomplete final code point is
+removed at the cap, preferably ending at the last newline. The exact notice is
+`[AGENTS.md truncated at 32 KiB; read the file for the rest]`.
+The normal snapshot retains its existing copy limits; for a root omitted because of size
+or a contained link, discovery captures the bounded initial source prefix instead, under
+source path protection. Nested files come only from the prepared snapshot inventory,
+with the repository-index walk exclusions applied, sorted and listed without content:
+at most 50 paths, followed by `(+N more)` when needed.
+
+The operator config has a strict root boolean `agentsMd` (default true).
+`SCRANTON_AGENTS_MD=0|1` overrides the file/default at **new run start**; this engine
+has no separate AGENTS.md CLI flag. The effective choice is pinned in `config.json`;
+changing the environment on resume does not change an existing run. The default true
+field is omitted during serialization to preserve legacy configuration digests.
+`artifacts/instructions.json` pins the rendered block and content-free summary before
+setup, including an empty result when disabled or absent. Completed preparation stores
+that record in `PipelineState.instructions`; replay and all private lanes use the same
+block even if the workspace file is edited later.
+
+Planner, implementer and reviewer append the mandatory block after the engine role/tool
+instructions in the **system** prompt. It cannot grant permissions or override role,
+tool, sandbox or approval rules. `Prompt.instructions_bytes` and the matching gateway
+argument give the exact rendered block its own allowance on top of `max_prompt_bytes`
+(default 200000), independently of procedural guidance. Context evidence and historical
+allowances are not reduced by repository instructions; only discovery's 32 KiB cap cuts
+root text. Instructions are not grounding evidence.
+
+Schema 1 adds nullable `RunStatus.instructions`: `{file:"AGENTS.md",bytes,sha256,truncated,nested}`
+for a used root, `{file:null,nested:n}` for nested-only discovery, otherwise null.
+`bytes` and lowercase hexadecimal SHA-256 describe exactly the inlined UTF-8 root text
+without BOM or notice; `nested` is the total count, not just the displayed 50.
+After snapshot discovery, the additive `instructions` event carries `data:{instructions:<summary>}`.
+`run_started` retains its original empty data and emission before graph execution, even when snapshotting fails. Warnings use `log` with `level:"warn"`, `file:"AGENTS.md"` and
+`reason:escape|not_regular|binary|invalid_utf8|read_error`. Neither event contains text.
+Status retains the pinned summary even if setup fails before the preparation checkpoint.
+Legacy statuses without the additive field validate with null.
+
 ## Zustand und Ownership
 
 `state.py:PipelineState` ist `TypedDict(total=False)`. Fehlende Schlüssel sind erlaubt; Laufzeitmodelle werden bei Zugriff wieder validiert. Gespeichert werden nur JSON-Primitiven (`dict`, `list`, Strings, Zahlen, Bool, null), keine Pfad-, Pydantic-, Modellclient- oder Verbindungsinstanzen. Das hält Checkpoints untersuchbar und vermeidet die Deserialisierung unregistrierter Python-Typen.

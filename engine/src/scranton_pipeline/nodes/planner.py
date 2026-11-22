@@ -63,7 +63,7 @@ def plan(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         prompt = build_planner_prompt(state, deps.cfg, graph=deps.procedure)
         system, user = prompt
         deps.procedure_event("planner", state)
-        turn = cast(PlannerTurn | ConversationPlannerTurn, deps.gateway.complete("planner", system=system, user=user, schema=ConversationPlannerTurn if deps.cfg.conversation and initial_planning(state) else PlannerTurn, guidance_bytes=prompt.guidance_bytes).parsed)
+        turn = cast(PlannerTurn | ConversationPlannerTurn, deps.gateway.complete("planner", system=system, user=user, schema=ConversationPlannerTurn if deps.cfg.conversation and initial_planning(state) else PlannerTurn, guidance_bytes=prompt.guidance_bytes, instructions_bytes=prompt.instructions_bytes).parsed)
         evaluation = evaluate(state, deps, "planner", prompt, turn.model_dump(mode="json"))
         if evaluation.reject(deps):
             return {**invalid(state, deps, "plan", planning_key(state, "repairs"), str(evaluation.violations) + " Valid IDs: " + str(prompt.shown)),

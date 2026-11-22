@@ -25,6 +25,7 @@ from scranton_pipeline.graph import build_graph
 from scranton_pipeline.grounding import append_trace
 from scranton_pipeline.guidance import pinned
 from scranton_pipeline.history import load_history
+from scranton_pipeline.instructions import enabled as instructions_enabled
 from scranton_pipeline.limits import recursion_limit
 from scranton_pipeline.models import RunStatus
 from scranton_pipeline.nodes.common import Dependencies, cleanup_provider
@@ -125,6 +126,7 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
           workspace_root: Path | None = None, delivery: str = "patch", trust_host: bool = False,
           guarded: bool = False, demo: bool = False, demo_scenario: str = "basic",
           history_file: Path | None = None) -> RunStatus:
+    cfg = cfg.model_copy(update={"agents_md": instructions_enabled(cfg.agents_md)})
     procedure = load_procedure(Path(cfg.procedure.graph) if cfg.procedure.graph else None) if cfg.procedure.enabled else None
     validate_trust(cfg, trust_host)
     history = load_history(history_file, request_redactor(cfg)) if history_file is not None else None

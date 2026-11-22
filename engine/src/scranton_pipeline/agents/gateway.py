@@ -31,7 +31,7 @@ class Completion(Generic[T]):  # noqa: UP046
 
 
 class ModelGateway(Protocol):
-    def complete(self, role: Role, *, system: str, user: str, schema: type[T], guidance_bytes: int = 0) -> Completion[T]: ...
+    def complete(self, role: Role, *, system: str, user: str, schema: type[T], guidance_bytes: int = 0, instructions_bytes: int = 0) -> Completion[T]: ...
 
 
 def first_object(text: str) -> Any:
@@ -74,12 +74,12 @@ class ChatModelGateway:
                  ledger: UsageLedger, events: EventLog) -> None:
         self.models, self.cfg, self.ledger, self.events = models, cfg, ledger, events
 
-    def complete(self, role: Role, *, system: str, user: str, schema: type[T], guidance_bytes: int = 0) -> Completion[T]:
+    def complete(self, role: Role, *, system: str, user: str, schema: type[T], guidance_bytes: int = 0, instructions_bytes: int = 0) -> Completion[T]:
         cfg = getattr(self.cfg.models, role)
         model = self.models[role]
         if cfg.structured_output == "json_text":
             system = json_system(system, schema)
-        cap = self.cfg.limits.max_prompt_bytes - len(system.encode())
+        cap = self.cfg.limits.max_prompt_bytes + max(0, instructions_bytes) - len(system.encode())
         if cap < 0:
             raise EngineError(FailureClass.LIMIT, "prompt_budget_exhausted", "System/schema exceeds prompt budget")
         allowance = min(max(0, guidance_bytes), self.cfg.procedure.max_bytes) if self.cfg.procedure.enabled else 0

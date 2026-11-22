@@ -1,6 +1,7 @@
 """The deterministic work nodes and the two remaining bounded model turns."""
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from scranton_pipeline.conversation import agent_message
 from scranton_pipeline.dreaming import attempt_counter_key, emit_attempt
 from scranton_pipeline.errors import EngineError, FailureClass, SuspendRequested
 from scranton_pipeline.grounding import check_id, digest, recompute_summary, register, registry_row
+from scranton_pipeline.instructions import discover, regular
 from scranton_pipeline.models import ContextRequest, ImplementerTurn, Review
 from scranton_pipeline.nodes.common import Dependencies, planning_key, scope_id
 from scranton_pipeline.nodes.grounding import decide_criteria, evaluate, repair_evidence
@@ -53,6 +55,27 @@ def prepare_workspace(state: PipelineState, deps: Dependencies) -> dict[str, Any
                                limits=deps.cfg.limits, manifest_path=manifest)
     repo = WorkspaceRepo.init(deps.workspace, deps.run_dir / "git", timeout_s=deps.cfg.limits.git_timeout_s)
     base = repo.commit_all("Pipeline snapshot")
+    files = list(json.loads(manifest.read_text(encoding="utf-8")))
+    receipt = deps.run_dir / "artifacts" / "instructions.json"
+    if receipt.exists():
+        instructions = json.loads(receipt.read_text(encoding="utf-8"))
+    else:
+        active = deps.cfg.agents_md
+        found = discover(deps.workspace, files, active=active)
+        # Oversized files and links are not copied, but root instructions still have their own cap.
+        skipped_root = any(row["path"] == "AGENTS.md" and row["reason"] in {"file_too_large", "symlink"} for row in snapshot.skipped)
+        source = Path(state["source_dir"])
+        reason = regular(source, source / "AGENTS.md") if active and "AGENTS.md" not in files else None
+        source_policy = PathPolicy(source, deps.policy().protected, deps.policy().write_protected)
+        if active and skipped_root and reason is None and not source_policy.is_protected("AGENTS.md"):
+            found = replace(discover(source, [], active=True), nested=found.nested)
+        elif reason not in {None, "absent"}:
+            found = replace(found, warnings=(reason,))
+        instructions = {"block": found.render(), "summary": found.summary()}
+        json_write(receipt, instructions)
+        for reason in found.warnings:
+            deps.events.emit("log", level="warn", reason=reason, file="AGENTS.md")
+        deps.events.emit("instructions", instructions=found.summary())
     for command in deps.cfg.setup:
         result = box.run(command.argv, timeout_s=command.timeout_s, network=command.network, writable_state=True,
                          log_path=deps.run_dir / "artifacts" / "logs" / f"setup-{command.id}.log", stop=deps.stop,
@@ -64,8 +87,7 @@ def prepare_workspace(state: PipelineState, deps: Dependencies) -> dict[str, Any
         if result.exit_code != 0 or result.timed_out:
             raise EngineError(FailureClass.INFRASTRUCTURE, "setup_failed", f"Setup {command.id} failed")
     deps.repo().restore_tracked()
-    files = list(json.loads(manifest.read_text(encoding="utf-8")))
-    return {"workspace": {"path": str(deps.workspace), "base_commit": base, "head_commit": base,
+    return {"instructions": instructions, "workspace": {"path": str(deps.workspace), "base_commit": base, "head_commit": base,
                            "green_commit": base, "manifest_path": str(manifest), "files": files,
                            "used_git": snapshot.used_git}, "step_index": -1, "mode": "step",
             "review": None if deps.cfg.review.enabled else {"verdict": "disabled"}}
@@ -182,7 +204,7 @@ def implement(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         prompt = build_implementer_prompt(state, deps.cfg, graph=deps.procedure)
         system, user = prompt
         deps.procedure_event("implementer", state)
-        turn = deps.gateway.complete("implementer", system=system, user=user, schema=ImplementerTurn, guidance_bytes=prompt.guidance_bytes).parsed
+        turn = deps.gateway.complete("implementer", system=system, user=user, schema=ImplementerTurn, guidance_bytes=prompt.guidance_bytes, instructions_bytes=prompt.instructions_bytes).parsed
         evaluation = evaluate(state, deps, "implementer", prompt, turn.model_dump(mode="json"))
         if evaluation.reject(deps) and (turn.kind != "blocked" or evaluation.retry_block):
             return {**invalid(state, deps, "implement", key, str(evaluation.violations) + " Valid IDs: " + str(prompt.shown)),
@@ -310,7 +332,7 @@ def review(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         prompt = build_reviewer_prompt(prompt_state, deps.cfg, graph=deps.procedure)
         system, user = prompt
         deps.procedure_event("reviewer", prompt_state)
-        result = deps.gateway.complete("reviewer", system=system, user=user, schema=Review, guidance_bytes=prompt.guidance_bytes).parsed
+        result = deps.gateway.complete("reviewer", system=system, user=user, schema=Review, guidance_bytes=prompt.guidance_bytes, instructions_bytes=prompt.instructions_bytes).parsed
         plan = get_plan(state)
         assert plan is not None
         evaluation = evaluate(prompt_state, deps, "reviewer", prompt, result.model_dump(mode="json"))

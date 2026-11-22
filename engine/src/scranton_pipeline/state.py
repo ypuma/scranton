@@ -35,6 +35,7 @@ class PipelineState(TypedDict, total=False):
     cross_run_history: dict[str, Any]
     source_dir: str
     delivery_mode: str
+    instructions: dict[str, Any]
     workspace: dict[str, Any]
     repo: dict[str, Any]
     baseline: list[dict[str, Any]]

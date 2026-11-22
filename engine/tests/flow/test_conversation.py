@@ -58,14 +58,18 @@ def test_legacy_run_projection(tmp_path, scenario):
         status = resume(run_dir, gate=status.pending["gate"], decision="approve", digest=status.pending["digest"])
     assert status.status == "succeeded"
     files = sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if p.is_file() and not any(x in p.relative_to(run_dir).parts for x in ("git", "git-hooks", ".git", "demo-source.git", "__pycache__", "sandbox-state")) and not p.name.endswith((".pyc", "-wal", "-shm")))
-    assert files == golden["files"]
-    assert legacy_status(status.model_dump(by_alias=True), run_dir) == golden["status"]
-    assert sorted(status.model_dump(by_alias=True)) == golden["status_keys"]
+    assert json.loads((run_dir / "artifacts/instructions.json").read_text()) == {"block": "", "summary": None}
+    assert [p for p in files if p != "artifacts/instructions.json"] == golden["files"]
+    legacy = status.model_dump(by_alias=True)
+    assert legacy.pop("instructions") is None
+    assert legacy_status(legacy, run_dir) == golden["status"]
+    assert sorted(legacy) == golden["status_keys"]
     assert sorted(status.progress) == golden["progress_keys"]
     events = _rows(run_dir / "events.jsonl")
-    # Legacy status/files remain pinned; only dreaming's additive events extend the fixture.
+    assert [e["data"] for e in events if e["type"] == "instructions"] == [{"instructions": None}]
+    assert [e["data"] for e in events if e["type"] == "run_started"] == [{}]
     # Independent prepare and lane events have no total-order guarantee.
-    projection = [[e["type"], e["node"]] for e in events if e["node"] not in ("index_repo", "baseline_checks") and e["type"] != "check_finished"]
+    projection = [[e["type"], e["node"]] for e in events if e["node"] not in ("index_repo", "baseline_checks") and e["type"] not in {"check_finished", "instructions"}]
     if scenario == "parallel":
         from collections import Counter
         assert Counter(map(tuple, projection)) == Counter(map(tuple, golden["events"]))

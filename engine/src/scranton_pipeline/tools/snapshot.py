@@ -43,6 +43,9 @@ def snapshot_source(source: Path, workspace: Path, *, policy: Policy, limits: Li
         path = path_policy.resolve(rel)
         if not path.is_file():
             continue
+        if path.stat().st_size > limits.max_file_bytes:
+            skipped.append({"path": rel, "reason": "file_too_large"})
+            continue
         with path.open("rb") as stream:
             data = stream.read(limits.max_file_bytes + 1)
             if os.name != "nt":

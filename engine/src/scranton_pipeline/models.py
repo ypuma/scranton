@@ -234,6 +234,7 @@ class Usage(StrictModel):
 
 class RunStatus(StrictModel):
     reply: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
+    instructions: dict[str, Any] | None = None
     grounding: dict[str, Any] = Field(default_factory=dict)
     procedure: dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "name": None, "digest": None, "situation": None})
     schema_version: Literal[1] = Field(default=1, alias="schema", serialization_alias="schema")

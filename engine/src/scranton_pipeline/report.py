@@ -40,6 +40,10 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
     phase = {"prepare_workspace": "prepare", "index_repo": "prepare", "baseline_checks": "prepare", "plan": "plan",
              "plan_context": "plan", "replan": "plan", "approve_plan": "approve_plan", "review": "review", "ground": "review", "package": "deliver",
              "approve_delivery": "deliver", "apply_to_source": "deliver", "finalize": "done"}.get(node, "implement")
+    instructions = state.get("instructions")
+    receipt = deps.run_dir / "artifacts" / "instructions.json"
+    if instructions is None and receipt.exists():
+        instructions = json.loads(receipt.read_text(encoding="utf-8"))
     plan = get_plan(state)
     index = min(state.get("step_index", -1), len(plan.steps) - 1) if plan else -1
     visible_state: PipelineState = {**state, "step_index": index}
@@ -50,6 +54,7 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
                  "report_md": str(deps.run_dir / "delivery" / "report.md") if (deps.run_dir / "delivery" / "report.md").exists() else None,
                  "report_json": str(deps.run_dir / "delivery" / "report.json") if (deps.run_dir / "delivery" / "report.json").exists() else None}
     return RunStatus.model_validate({**({"reply": terminal_reply(state, deps, status)} if deps.cfg.conversation and status in {"succeeded", "failed", "rejected", "cancelled"} else {}),"procedure": procedure_status(deps.run_dir, deps.cfg.procedure.enabled, metadata.get("procedure", {})), "grounding": recompute_summary(deps.run_dir), "run_id": state["run_id"], "status": status, "phase": phase, "node": node,
+        "instructions": instructions.get("summary") if instructions else None,
         "task": deps.redactor.redact(state["task"])[:500], "source_dir": state["source_dir"], "delivery_mode": state["delivery_mode"],
         "progress": {"step_index": index, "step_count": len(plan.steps) if plan else 0,
                      "step_title": step.title if step else "", "attempt": state.get("counters", {}).get("attempts:" + scope_id(visible_state), 0),

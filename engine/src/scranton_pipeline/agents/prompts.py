@@ -1,4 +1,4 @@
-"""Versioned, pure prompt builders. Repository text never has instruction authority."""
+"""Versioned prompt builders with pinned instructions and untrusted repository data."""
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -45,6 +45,7 @@ class Prompt:
     items: list[dict[str, Any]]
     unverifiable: list[str] = field(default_factory=list)
     guidance_bytes: int = 0
+    instructions_bytes: int = 0
 
     @property
     def shown(self) -> list[str]:
@@ -83,13 +84,15 @@ def fresh_evidence(state: PipelineState, cfg: EngineConfig, key: str) -> list[di
     return result
 
 
-def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg: EngineConfig, *, guidance: str = "", answers: bool = False, reserved_bytes: int = 0) -> Prompt:
+def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg: EngineConfig, *, guidance: str = "", answers: bool = False, reserved_bytes: int = 0, instructions: str = "") -> Prompt:
     system = f"{PROMPT_VERSION}: {role}\n{RULES}"
     schemas: dict[str, type[BaseModel]] = {"planner": PlannerTurn, "implementer": ImplementerTurn, "reviewer": Review}
     schema = schemas[role.split(":")[0]]
     if cfg.conversation and answers and role.startswith("planner:"):
         schema = ConversationPlannerTurn
         system += "\nFor an informational question requiring no edits, return kind answer with answer.text and optional citations of shown evidence IDs. Request context first when needed. For changes return a plan. Never claim edits or checks ran when answering."
+    instructions_block = "\n\n" + instructions if instructions else ""
+    system += instructions_block
     if getattr(cfg.models, role.split(":")[0]).structured_output == "json_text":
         system = json_system(system, schema)
     advice = ""
@@ -107,12 +110,12 @@ def bounded(role: str, data: dict[str, Any], evidence: list[dict[str, Any]], cfg
             data[key] = [{**r, "output_tail": str(r.get("output_tail", ""))[-min(4096, cfg.limits.max_prompt_bytes // 32):]} for r in data[key]]
     entries = unique_evidence(evidence)
     marker = ""
-    cap = max(0, cfg.limits.max_prompt_bytes - len(system.encode()) - reserved_bytes)
+    cap = max(0, cfg.limits.max_prompt_bytes - len(system.encode()) + len(instructions_block.encode()) - reserved_bytes)
     def finish(user: str) -> Prompt:
         candidates = [*entries, *[r for k in ("baseline", "checks", "replan_checks", "hunks") for r in (data.get(k) or []) if "evidence_id" in r]]
         kept = [r for r in candidates if r.get("evidence_id") and json.dumps(r, ensure_ascii=True) in user]
         unavailable = [i["request"]["path"] for i in evidence if i.get("python_read") and (i not in kept or not i.get("ok") or i.get("truncated"))]
-        return Prompt(system, user + advice, kept, sorted(set(unavailable)), len(advice.encode()))
+        return Prompt(system, user + advice, kept, sorted(set(unavailable)), len(advice.encode()), len(instructions_block.encode()))
     while True:
         user = marker + block("request", data) + "\n" + "\n".join(block(str(i.get("request", {})), i) for i in entries)
         if len(user.encode()) <= cap:
@@ -158,17 +161,17 @@ def build_planner_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Grap
         "task": state["task"], "baseline": state.get("baseline"), "replan_checks": brief.get("checks", []),
         "repo": overview, "previous_plan": state.get("previous_plan"),
         "feedback": state.get("feedback"), "context_rounds_left": max(0, cfg.limits.max_plan_context_rounds - state.get("counters", {}).get(planning_key(state, "context"), 0)),
-    }, fresh_evidence(state, cfg, "plan_evidence"), cfg, reserved_bytes=reserved, answers=initial_planning(state), guidance=guidance_text(graph, "planner", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
+    }, fresh_evidence(state, cfg, "plan_evidence"), cfg, instructions=state.get("instructions", {}).get("block", ""), reserved_bytes=reserved, answers=initial_planning(state), guidance=guidance_text(graph, "planner", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
     if history:
         # Guidance has a separate allowance; history never borrows it.
-        room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes
+        room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes + prompt.instructions_bytes
         budget = history.get("budget")
         history_cap = min(budget["history_bytes"], cfg.limits.max_prompt_bytes // 4) if budget else min(12000, cfg.limits.max_prompt_bytes // 8)
         context_cap = min(budget["context_bytes"], cfg.limits.max_prompt_bytes // 8) if budget else min(4000, cfg.limits.max_prompt_bytes // 32)
         section = history_block(history, min(history_cap, room) - len(policy.encode()))
         if section:
             prompt.user += policy + section
-        room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes
+        room = cfg.limits.max_prompt_bytes - len((prompt.system + prompt.user).encode()) + prompt.guidance_bytes + prompt.instructions_bytes
         omitted = "\n[TRUNCATED: historical data omitted; live prompt has priority]" if not section and (history["runs"] or history.get("project_memory")) else ""
         if len(omitted.encode()) > min(room, 12000, cfg.limits.max_prompt_bytes // 8):
             omitted = ""
@@ -191,7 +194,7 @@ def build_implementer_prompt(state: PipelineState, cfg: EngineConfig, *, graph: 
         "review": state.get("review") if state.get("mode") == "revision" else None,
         "integration_steps": [steps[i] for i in state["wave"]["indices"]] if state.get("mode") == "integration" else None,
         "feedback": state.get("feedback"), "context_rounds_left": max(0, cfg.limits.max_step_context_rounds - state.get("counters", {}).get(f"context:{scope}", 0)),
-    }, fresh_evidence(state, cfg, "step_evidence"), cfg, guidance=guidance_text(graph, "implementer", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
+    }, fresh_evidence(state, cfg, "step_evidence"), cfg, instructions=state.get("instructions", {}).get("block", ""), guidance=guidance_text(graph, "implementer", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
 
 
 def build_reviewer_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Graph | None = None) -> Prompt:
@@ -203,4 +206,4 @@ def build_reviewer_prompt(state: PipelineState, cfg: EngineConfig, *, graph: Gra
         "files": (state.get("delivery") or {}).get("files", []),
         "deviations": state.get("deviations", []), "checks": state.get("checks", []),
         "validation_feedback": state.get("feedback") if (state.get("feedback") or {}).get("kind") == "output_invalid" else None,
-    }, [], cfg, guidance=guidance_text(graph, "reviewer", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")
+    }, [], cfg, instructions=state.get("instructions", {}).get("block", ""), guidance=guidance_text(graph, "reviewer", state, hops=cfg.procedure.hops, max_bytes=cfg.procedure.max_bytes) if cfg.procedure.enabled else "")

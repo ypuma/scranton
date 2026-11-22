@@ -197,6 +197,7 @@ class ProcedureConfig(StrictModel):
 
 
 class EngineConfig(StrictModel):
+    agents_md: bool = Field(default=True, alias="agentsMd", strict=True, exclude_if=lambda value: value)
     conversation: bool = Field(default=False, strict=True, exclude_if=lambda value: not value)
     procedure: ProcedureConfig = Field(default_factory=ProcedureConfig)
     grounding: GroundingConfig = Field(default_factory=GroundingConfig)
