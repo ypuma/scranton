@@ -1416,6 +1416,12 @@
           <form class="keyform" id="context-project" novalidate aria-labelledby="context-project-title">
             <h3 class="keyform-title" id="context-project-title">Project <span class="hint" id="context-project-name"></span></h3>
             <p class="form-error" id="context-project-error" role="alert" hidden></p>
+            <p class="hint" id="context-instructions" hidden></p>
+            <details class="context-block" id="context-instructions-nested" hidden>
+              <summary><span class="context-block-title">AGENTS.md files in subfolders</span></summary>
+              <p class="hint context-block-note">Agents read the nearest one before they change files below it.</p>
+              <pre class="context-text" id="context-instructions-paths" tabindex="0" aria-label="AGENTS.md files in subfolders"></pre>
+            </details>
             <label class="check" id="context-cross-row"><input type="checkbox" id="context-cross"><span>Share context between the chats of this project<span class="hint" id="context-cross-hint">Off: no chat of this project receives or provides the other chats part. Projects never share anything with each other.</span></span></label>
             <span class="hint form-status" id="context-cross-status" role="status" aria-live="polite"></span>
             <div class="field">

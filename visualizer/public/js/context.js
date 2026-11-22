@@ -34,6 +34,8 @@ const CHATS_MAX = 200;
 const MODEL_ID_MAX = 513;
 const QUERY_MAX = 256;
 const SECTION_ID_RE = /^[a-z][a-z0-9-]{0,39}$/;
+// the server lists at most 50 nested AGENTS.md files; nestedCount is the full total
+const NESTED_MAX = 50;
 // no whitespace and no control characters (the recipient ids and query values of section 3)
 const BARE_RE = /^[^\s\u0000-\u001F\u007F-\u009F]+$/u;
 // model ids are map keys on the server
@@ -167,6 +169,7 @@ export function parseProjectContext(doc) {
     settings: settingsOf(d?.settings, valid),
     defaults: defaultsOf(valid && d.defaults),
     notes: { text, chars: given(notes.chars, text.length), tokens: given(notes.tokens, tokens(text)), limit: count(notes.limit) || NOTES_MAX, updatedAt: iso(notes.updatedAt) },
+    instructions: valid ? parseInstructions(d.instructions) : undefined,
     chats: (valid && Array.isArray(d.chats) ? d.chats.slice(0, CHATS_MAX) : []).map(obj).filter((c) => c && typeof c.id === 'string' && CHAT_ID_RE.test(c.id)).map((c) => ({
       id: c.id, title: line(c.title, 120) || 'Untitled chat', engine: c.engine === 'pipeline' ? 'pipeline' : 'team',
       turns: count(c.turns), lastActiveAt: iso(c.lastActiveAt), reset: c.reset === true,
@@ -226,7 +229,25 @@ export function parseChatContext(doc) {
     degraded: valid && d.degraded === true,
     sections: (valid && Array.isArray(d.sections) ? d.sections.slice(0, SECTIONS_MAX) : []).map(parseSection).filter((s) => s && !ids.has(s.id) && ids.add(s.id)),
     developer,
+    instructions: valid ? parseInstructions(d.instructions) : undefined,
   };
+}
+
+// The AGENTS.md summary of the project workspace (.enma/agents-md-contract.md, Audit and visibility). -> undefined
+// when the server sends none or something unreadable (a server from before), null for no file at all, else
+// { root, bytes, tokens, truncated, nested: [paths], more: the files not listed, partial: the subfolder scan stopped early }
+export function parseInstructions(v) {
+  if (v === null) return null;
+  const i = obj(v);
+  if (!i) return undefined;
+  const nested = (Array.isArray(i.nested) ? i.nested.slice(0, NESTED_MAX) : []).map((p) => line(p, 300)).filter(Boolean);
+  const total = Number.isSafeInteger(i.nestedCount) && i.nestedCount >= nested.length ? i.nestedCount : nested.length;
+  const more = total - nested.length;
+  const root = typeof i.file === 'string' && i.file !== '';
+  const partial = i.partial === true;
+  // a scan that stopped early cannot say there is none
+  if (!root && !total && !partial) return null;
+  return { root, bytes: count(i.bytes), tokens: count(i.tokens), truncated: root && i.truncated === true, nested, more, partial };
 }
 
 // ------------------------------------------------------------ what is shown
@@ -323,6 +344,26 @@ export const resetQuestion = (d) => {
   const what = k ? `the ${plural(k, 'earlier turn', 'earlier turns')} of this chat` : 'the earlier turns of this chat';
   return `Leave ${what} out of the next turns? They are also left out of what the other chats of this project see of this chat. Project notes and project memory stay as they are. Nothing is deleted, and Restore earlier turns brings them back.`;
 };
+
+// 300 -> '0.3', 12345 -> '12'
+const kb = (b) => {
+  const v = b / 1024;
+  return v >= 10 || v === 0 ? n(Math.round(v)) : String(Math.max(0.1, Math.round(v * 10) / 10));
+};
+
+// -> 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - 2 more in subfolders'; '' when the server says nothing
+export function instructionsText(i) {
+  if (i === undefined) return '';
+  if (i === null) return 'No AGENTS.md in this project';
+  const k = i.nested.length + i.more;
+  const partial = i.partial ? ' - subfolder scan incomplete' : '';
+  if (!i.root) return `No AGENTS.md at the project root${k ? ` - ${n(k)} in subfolders` : ''}${partial}`;
+  const size = `${kb(i.bytes)} KB, ~${n(i.tokens)} ${i.tokens === 1 ? 'token' : 'tokens'}`;
+  return `Repository instructions: AGENTS.md (${size})${i.truncated ? ' - truncated at 32 KiB' : ''}${k ? ` - ${n(k)} more in subfolders` : ''}${partial}`;
+}
+
+// the nested paths, one per line; '' for none
+export const instructionsPaths = (i) => (i ? [...i.nested, ...(i.more ? [`(+${n(i.more)} more)`] : [])].join('\n') : '');
 
 export const sectionNote = (s) => (s.exact ? 'Exact text the next turn receives.' : 'A readable summary of what the planner receives, not the literal text.');
 

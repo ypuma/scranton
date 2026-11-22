@@ -11,7 +11,7 @@ import {
   ENGINE_LABEL, UNREADABLE, DEFAULTS, BUDGET_MODES, METER_CELLS, contextUrl, chatContextUrl, parseProjectContext, parseChatContext, contextLine,
   summaryRows, usageText, meterFill, windowNote, cappedText, developerText, modelText, ruleText, flagsText, resetText, resetQuestion,
   sectionNote, budgetState, previewText, switchMode, rangeText, buildBudget, buildBudgetReset, atDefault, buildCrossChat, buildNotes,
-  notesCount, unsupported, contextError, tokenText,
+  notesCount, unsupported, contextError, tokenText, instructionsText, instructionsPaths,
 } from './context.js';
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +68,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
     historyNote: $('context-history-note'), reset: $('context-reset'), restore: $('context-restore'), actionStatus: $('context-action-status'),
     confirmBox: $('context-reset-confirm'), question: $('context-reset-question'), resetCancel: $('context-reset-cancel'), resetOk: $('context-reset-ok'),
     form: $('context-project'), projectName: $('context-project-name'), projectError: $('context-project-error'),
+    instructions: $('context-instructions'), instructionsNested: $('context-instructions-nested'), instructionsPaths: $('context-instructions-paths'),
     crossRow: $('context-cross-row'), cross: $('context-cross'), crossHint: $('context-cross-hint'), crossStatus: $('context-cross-status'),
     notes: $('context-notes'), count: $('context-notes-count'), notesError: $('context-notes-error'), notesStatus: $('context-notes-status'),
     undo: $('context-notes-undo'), save: $('context-notes-save'), foot: $('context-foot'),
@@ -457,6 +458,7 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
 
     setText(e.projectName, findProject(navDoc, scope?.project)?.name ?? '');
     showError(e.projectError, projectError);
+    renderInstructions(d);
     const shared = (pdoc ?? d).settings.crossChat;
     if (busy !== 'settings') e.cross.checked = shared;
     // the line under the box says what the box says now
@@ -491,6 +493,17 @@ export function createContextPanel({ getProjects = () => null, confirm = null, p
     const capped = cappedText(d);
     setText(e.capped, capped);
     e.capped.hidden = !capped;
+  }
+
+  // the project document carries the AGENTS.md summary; a chat document that has it stands in until that is read
+  function renderInstructions(d) {
+    const i = pdoc?.instructions !== undefined ? pdoc.instructions : d.instructions;
+    const text = instructionsText(i);
+    setText(e.instructions, text);
+    e.instructions.hidden = !text;
+    const paths = instructionsPaths(i);
+    setText(e.instructionsPaths, paths);
+    e.instructionsNested.hidden = !paths;
   }
 
   function renderBudget(d) {
