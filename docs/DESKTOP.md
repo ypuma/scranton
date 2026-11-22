@@ -26,7 +26,7 @@ npm.cmd run app:build
 ```
 
 Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Der NSIS-Installer liegt anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.5.0_x64-setup.exe`.
+`src-tauri\target\release\bundle\nsis\Scranton_0.6.0_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
 
 ## Smartphone-Steuerung ohne Checkout (Windows)
@@ -88,7 +88,7 @@ Gemini (`google`) verwendet **Add API key**; OAuth für dieses Provider-ID ist d
 
 Eigene Provider: ID, HTTPS-/Loopback-Basis-URL, API-Typ, Key und deklarierte oder per **Fetch models** ermittelte Modelle. Definition und Key liegen atomar im eigenen Store; bestehende IDs werden nicht überschrieben. Remove entfernt nur die eigene Deklaration und deren Zugang. Keine Änderungen an Pi-Dateien; [README](../README.md#anmelden).
 
-Unter **Options → Models** gelten Rollenwahlen in jedem Team-Sandboxmodus. Leere Wahl übernimmt den Agent-Default, sonst **Automatic** (Claude → ChatGPT → Gemini → Antigravity mit gepinnten Modellrefs). Ohne passendes Konto scheitert der Start; eigene Provider brauchen explizite Auswahl. Katalogpräsenz garantiert keine Modellberechtigung. Overrides gelten nur für den gestarteten Run.
+Unter **Options → Models** gelten Rollenwahlen in jedem Team-Sandboxmodus. Leere Wahl übernimmt den Agent-Default, sonst **Automatic** (Claude → OpenAI → Gemini → Antigravity → Vertex, jeweils mit explizitem Neuestes-Modell-Marker in `llm/catalogue.js`; ChatGPT-Modus: `gpt-6.2-sol` nach Nutzerwahl, direktes OAuth und API-Keys: API-Katalog. Neue Releases benötigen Katalogupdates, keine Live-Modellabfrage). Ohne passendes Konto scheitert der Start; eigene Provider brauchen explizite Auswahl. Katalogpräsenz garantiert keine Modellberechtigung. Overrides gelten nur für den gestarteten Run.
 
 Docker ist ein optionaler Tool-Executor: LLM, Tokens und Workflows bleiben auf dem Host. `none` sperrt das Toolnetz, nicht Modellanfragen. Windows Low kann Netzwerk nicht sperren und verwendet PowerShell statt Git Bash. Normale Benutzer-Credentialverzeichnisse brauchen ausdrückliche Härtung; nur Scrantons eigener Store wird durch Integration geschützt. Exakte OS-Grenzen: [ISOLATION.md](ISOLATION.md).
 
