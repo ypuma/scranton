@@ -13,11 +13,29 @@ import { fileURLToPath } from 'node:url';
 import { startRelay } from '../../src/server/relay.js';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
 
+const cleanups = new WeakMap();
+
+function cleanup(t, close) {
+  if (!cleanups.has(t)) {
+    const stack = [];
+    cleanups.set(t, stack);
+    // Node skips later after hooks if an earlier one throws.
+    t.after(async () => {
+      const errors = [];
+      for (const dispose of stack.reverse()) {
+        try { await dispose(); } catch (err) { errors.push(err); }
+      }
+      if (errors.length) throw new AggregateError(errors, 'Relay fixture cleanup failed');
+    }, { timeout: 20000 });
+  }
+  cleanups.get(t).push(close);
+}
+
 function tempDir(t) {
   const root = fileURLToPath(new URL('../../.scratch/relay-wave-tests/', import.meta.url));
   mkdirSync(root, { recursive: true });
   const dir = mkdtempSync(path.join(root, 'dashboard-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  cleanup(t, () => rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   return dir;
 }
 
@@ -36,7 +54,7 @@ async function setup(t, { control = true, registry = false } = {}) {
     projectsRoot: path.join(dir, 'projects'),
     port: 0, publicDir, control: control ? { workspace: path.join(dir, 'workspace') } : undefined
   });
-  t.after(upstream.close);
+  cleanup(t, upstream.close);
   const start = () => startRelay({ origin, targetPort: upstream.port, port: 0 });
   return { start, dir };
 }
@@ -78,7 +96,7 @@ async function connect(relay) {
 test('phone relay pairs and protects dashboard, control and session boundaries', { timeout: 20000 }, async (t) => {
   const { start } = await setup(t);
   const relay = await start();
-  t.after(relay.close);
+  cleanup(t, relay.close);
   assert.equal(new URL(relay.url).hostname, '127.0.0.1');
   const login = await request(relay, '/');
   assert.equal(login.status, 200);
@@ -115,7 +133,7 @@ test('phone relay pairs and protects dashboard, control and session boundaries',
 
   await relay.close();
   const restarted = await start();
-  t.after(restarted.close);
+  cleanup(t, restarted.close);
   assert.notEqual(restarted.code, relay.code);
   assert.equal((await request(restarted, '/api/control', { cookie })).status, 401);
 });
@@ -138,7 +156,7 @@ test('direct HTTPS requires a private bind and a matching port', async () => {
 test('paired phone starts a registry run, streams events, answers a question and stops it', { timeout: 45000 }, async (t) => {
   const { start } = await setup(t, { registry: true });
   const relay = await start();
-  t.after(relay.close);
+  cleanup(t, relay.close);
   const cookie = await connect(relay);
   async function get(resource) {
     const response = await request(relay, resource, { cookie });
@@ -155,7 +173,7 @@ test('paired phone starts a registry run, streams events, answers a question and
   const { chat } = await write(`/api/projects/${project.id}/chats`, { title: 'Phone control' }, 201);
   const scope = `/api/projects/${project.id}/chats/${chat.id}`;
   const controller = new AbortController();
-  t.after(() => controller.abort());
+  cleanup(t, () => controller.abort());
   const events = await request(relay, scope + '/events', { cookie, signal: controller.signal });
   assert.equal(events.status, 200);
   assert.match(events.headers.get('content-type'), /^text\/event-stream/);
@@ -217,12 +235,12 @@ async function disposableDashboard(t) {
     res.write(': connected\n\n');
   });
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => {
+  cleanup(t, () => new Promise((resolve) => {
     upstream.close(resolve);
     upstream.closeAllConnections();
   }));
   const relay = await startRelay({ origin, targetPort: upstream.address().port, port: 0 });
-  t.after(relay.close);
+  cleanup(t, relay.close);
   return { relay, writes, streams };
 }
 
@@ -385,4 +403,21 @@ test('oversized chunked writes never reach upstream, and limits count bytes rath
   assert.equal(writes[0].headers['content-length'], '262144');
   assert.equal(writes[0].headers.cookie, undefined);
   assert.equal(writes[0].headers['transfer-encoding'], undefined);
+});
+
+test('relay fixture cleanup unwinds resources before files and continues after an error', async () => {
+  let after;
+  const fixture = { after(fn) { assert.equal(after, undefined); after = fn; } };
+  const calls = [];
+  const failure = new Error('close failed');
+  cleanup(fixture, () => calls.push('remove directory'));
+  cleanup(fixture, async () => { calls.push('close upstream'); });
+  cleanup(fixture, () => { calls.push('close relay'); throw failure; });
+  cleanup(fixture, () => calls.push('abort stream'));
+  await assert.rejects(after, (err) => {
+    assert.ok(err instanceof AggregateError);
+    assert.deepEqual(err.errors, [failure]);
+    return true;
+  });
+  assert.deepEqual(calls, ['abort stream', 'close relay', 'close upstream', 'remove directory']);
 });

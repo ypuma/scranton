@@ -312,6 +312,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
       const finish = (code, closed = false) => {
         if (finished) return;
         finished = true;
+        clearTimeout(run.drainTimer);
         stopSending();
         if (closed && startupRefused && !workStarted) releaseRunLease(hive, lease.token);
         lastExit = { runId: run.info.runId, startedAt: run.info.startedAt, mode, request: run.info.request, exitCode: code ?? 1, finishedAt: new Date().toISOString(), outputTail: stripVTControlCharacters(run.tail).slice(-4096) };
@@ -324,7 +325,17 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
         run.tail += err.message;
         if (!child.pid) { releaseRunLease(hive, lease.token); finish(null); }
       });
-      child.once('exit', stopSending);
+      child.once('exit', (code) => {
+        stopSending();
+        // Descendants can keep inherited output pipes open after the run process exits.
+        run.drainTimer = setTimeout(() => {
+          run.tail = (run.tail + '\nRun process exited but its output pipes did not close; descendant cleanup is unverified.').slice(-8192);
+          finish(code);
+          child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy();
+          if (child.connected) child.disconnect();
+          child.unref?.();
+        }, 1000);
+      });
       child.once('close', (code) => finish(code, true));
     });
     return child.pid;

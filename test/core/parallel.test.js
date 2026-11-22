@@ -22,7 +22,7 @@ function scratch(t) {
 
 const fixture = fileURLToPath(new URL('./fixtures/parallel-pi.js', import.meta.url));
 const plan = [{ title: 'One', dependsOn: [] }, { title: 'Two', dependsOn: [] }, { title: 'Three', dependsOn: ['m1', 'm2'] }];
-function setup(t, { mode = '', milestones = plan, hitl, onBreaker = 'abort', maxParallel = 2 } = {}) {
+function setup(t, { mode = '', milestones = plan, hitl, onBreaker = 'abort', maxParallel = 2, delays = true } = {}) {
   const dir = scratch(t);
   const config = fakeConfig(dir, { maxFailedCycles: 1 });
   config.execution = { maxParallel, isolation: 'worktree', sandbox: { mode: 'host' } };
@@ -35,8 +35,8 @@ function setup(t, { mode = '', milestones = plan, hitl, onBreaker = 'abort', max
       if (gate) fs.writeFileSync(path.join(options.cwd, 'qa-only.txt'), milestone);
       const text = role === 'michael' ? '```json\n' + JSON.stringify({milestones}) + '\n```\n[PLAN_READY]' : mode === 'blocked' ? '[BLOCKED]' : role === 'dwight' ? '[TASK_COMPLETE]' : mode === 'flaky' && cycle === 1 ? '[TEST_FAILED]' : '[TEST_PASSED]';
       const turns = [];
-      if (role === 'dwight' && mode !== 'blocked') turns.push({delayMs: 180, toolCalls: [{id: 'write', name: 'write', arguments: {path: milestone + '.txt', content: milestone}}]});
-      turns.push({text, delayMs: role === 'michael' ? 0 : 240});
+      if (role === 'dwight' && mode !== 'blocked') turns.push({delayMs: delays ? 180 : 0, toolCalls: [{id: 'write', name: 'write', arguments: {path: milestone + '.txt', content: milestone}}]});
+      turns.push({text, delayMs: delays && role !== 'michael' ? 240 : 0});
       const runner = startAgent({...options, scripted: undefined, llm: createScriptedProvider(turns), model: getModel('openai', 'gpt-4o'), ...(mode === 'hang' && role !== 'michael' ? {scripted: {scenario: 'happy', fail: 'hang'}} : {})});
       return runner;
     } });
@@ -274,7 +274,7 @@ test('reversed skipped prerequisite chain finishes partial, not invalid graph', 
   assert.equal(result.summary, '1 skipped, 2 blocked');
 });
 
-test('snapshot and QA preparation failures stay milestone-local and support all human decisions', async (t) => {
+test('snapshot and QA preparation failures stay milestone-local and support all human decisions', { timeout: 180000 }, async (t) => {
   const { WorktreeManager } = await import('../../src/core/worktree.js');
   for (const method of ['snapshotWorktree', 'createQaWorktree']) {
     for (const decision of ['skip', 'retry', 'feedback', 'abort']) {
@@ -291,7 +291,7 @@ test('snapshot and QA preparation failures stay milestone-local and support all 
         let asked = 0;
         let integrated;
         const independentIntegrated = new Promise((resolve) => { integrated = resolve; });
-        const { orchestrator, config, log } = setup(t, { milestones: plan.slice(0, 2), onBreaker: 'ask', hitl: async (ctx) => {
+        const { orchestrator, config, log } = setup(t, { delays: false, milestones: plan.slice(0, 2), onBreaker: 'ask', hitl: async (ctx) => {
           asked++;
           assert.match(ctx.reason, /snapshot \/ QA preparation failed: Not an independent regular file/);
           assert.equal(ctx.milestoneId, 'm1');

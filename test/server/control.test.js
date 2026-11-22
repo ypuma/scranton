@@ -8,14 +8,18 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { tempDir } from '../core/helpers.js';
+import { cleanup } from '../core/fixture-cleanup.js';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
 
 async function setup(t, control = {}) {
-  const dir = tempDir(t);
+  const root = path.resolve('.scratch/suite-hang3/control');
+  fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, 'server-'));
+  cleanup(t, () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   const hive = path.join(dir, 'hive');
   const workspace = path.join(dir, 'ws');
   const srv = await startVisualizerServer({ hiveDir: hive, publicDir: dir, port: 0, control: control === false ? undefined : { workspace, ...control } });
-  t.after(() => srv.close());
+  cleanup(t, () => srv.close());
   return { srv, hive, workspace };
 }
 function request(srv, route, body, headers = {}) {
@@ -141,7 +145,7 @@ test('chunked oversized body receives 413 rather than a disconnected socket', as
 test('alternate literal loopback bind supports control without accepting rebinding hosts', async (t) => {
   const dir = tempDir(t);
   const srv = await startVisualizerServer({ hiveDir: path.join(dir, 'hive'), publicDir: dir, host: '127.0.0.2', port: 0, control: { workspace: dir } });
-  t.after(() => srv.close());
+  cleanup(t, () => srv.close());
   assert.equal((await request(srv, '/api/control')).status, 200);
   assert.equal((await request(srv, '/api/runs/stop', {}, { Origin: srv.url })).status, 409);
   for (const Host of ['evil.test', '127.0.0.2.evil.test', '128.0.0.1']) {

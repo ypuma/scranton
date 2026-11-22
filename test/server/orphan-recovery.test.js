@@ -1,5 +1,6 @@
 import './runtime-env.js';
 import test from 'node:test';
+import { cleanup } from '../core/fixture-cleanup.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
+import { killTree } from '../../src/core/process-tree.js';
 import { createControl } from '../../src/server/control.js';
 import { createProjectRegistry } from '../../src/core/projects.js';
 import * as leases from '../../src/core/run-lease.js';
@@ -15,7 +17,7 @@ import { EventRecorder } from '../../src/core/events.js';
 function fixture(t) {
   const root = path.resolve('.scratch/usability/fix3/orphan-recovery'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'r-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  cleanup(t, () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   const hive = path.join(dir, 'h'), workspace = path.join(dir, 'w'); fs.mkdirSync(workspace);
   const env = { ...process.env, SCRANTON_DATA: '', SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), SCRANTON_FAKE_MODE: '1', SCRANTON_ISOLATION_ROOT: path.join(dir, 'i'), PI_CODING_AGENT_DIR: path.join(dir, 'pi') };
   return { dir, hive, workspace, env };
@@ -24,7 +26,7 @@ const auth = { close() {} };
 async function server(t, f, extra = {}) {
   const srv = await startVisualizerServer({ hiveDir: f.hive, publicDir: f.dir, port: 0, control: { workspace: f.workspace, auth,
     runner: (exe, args, options) => spawn(exe, args, { ...options, env: { ...options.env, ...f.env, SCRANTON_RUN_ID: options.env.SCRANTON_RUN_ID, SCRANTON_PARENT_GUARD: options.env.SCRANTON_PARENT_GUARD, SCRANTON_RUN_LEASE: options.env.SCRANTON_RUN_LEASE } }) }, ...extra });
-  t.after(() => srv.close()); return srv;
+  cleanup(t, () => srv.close()); return srv;
 }
 async function req(srv, route, body, headers = {}) {
   const res = await fetch(srv.url + route, { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body) });
@@ -114,7 +116,12 @@ test('registry legacy release aliases clear live/delete guards and allow follow-
 test('external CLI owner is alive, release refuses, Request stop still aborts it', { timeout: 60000 }, async (t) => {
   const f = fixture(t);
   const child = spawn(process.execPath, ['bin/scranton.js', 'demo', '--scenario', 'blocked', '--delay', '0', '--hive', f.hive, '--workspace', f.workspace, '--on-breaker', 'hive'], { env: f.env, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' });
-  t.after(() => { try { child.kill(); } catch {} });
+  cleanup(t, async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const closed = once(child, 'close');
+    await killTree(child);
+    await closed;
+  });
   const closed = once(child, 'close');
   await until(() => { try { return journal(f.hive); } catch { return []; } }, (events) => events.some((e) => e.type === 'hitl_request'));
   const srv = await server(t, f);
@@ -139,7 +146,7 @@ test('PID reuse stays unknown and stop request timestamp is correlated', async (
 
 test('release rejects remote peers even with a forged local Host', async (t) => {
   const f = fixture(t); legacy(f);
-  const controller = createControl({ hive: f.hive, workspace: f.workspace, auth }); t.after(() => controller.close());
+  const controller = createControl({ hive: f.hive, workspace: f.workspace, auth }); cleanup(t, () => controller.close());
   let status;
   await controller.handle({ method: 'POST', headers: { host: '127.0.0.1', 'x-scranton-client': '1' }, socket: { remoteAddress: '192.0.2.1' } }, { writeHead(code) { status = code; }, end() {} }, '/api/runs/release');
   assert.equal(status, 403); assert.ok(leases.readRunLease(f.hive));
@@ -189,7 +196,7 @@ for (const automatic of [false, true]) test(`pre-journal crash recovers and perm
 function fixFixture(t) {
   const root = path.resolve('.scratch/usability/fix3/orphan-fix'); fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'server-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  cleanup(t, () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   const workspace = path.join(dir, 'w'); fs.mkdirSync(workspace);
   return { dir, hive: path.join(dir, 'h'), workspace, env: { ...process.env, SCRANTON_DATA: '', SCRANTON_CREDENTIALS_DIR: path.join(dir, 'credentials'), SCRANTON_FAKE_MODE: '1', SCRANTON_ISOLATION_ROOT: path.join(dir, 'i'), PI_CODING_AGENT_DIR: path.join(dir, 'pi') } };
 }
@@ -259,7 +266,7 @@ test('recovery errors clear on orphan replacement and 409 does not poison snapsh
   deadHeartbeat(f, runId); dockerJournal(f, runId);
   const recoveryDocker = await fakeDocker(f, { down: true });
   const controller = createControl({ hive: f.hive, workspace: f.workspace, auth, recoveryDocker });
-  t.after(() => controller.close());
+  cleanup(t, () => controller.close());
   await controller.recoverGone();
   assert.ok(controller.snapshot().orphan.recoveryError);
   leases.releaseRunLease(f.hive, leases.readRunLease(f.hive).token);

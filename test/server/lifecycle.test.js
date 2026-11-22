@@ -9,6 +9,8 @@ import { EventEmitter, once } from 'node:events';
 import { PassThrough, Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { test } from 'node:test';
+import { cleanup } from '../core/fixture-cleanup.js';
+import { killTree } from '../../src/core/process-tree.js';
 import { createControl } from '../../src/server/control.js';
 import { acquireRunLease, guardParent, readRunLease, registerParentStartup } from '../../src/core/run-lease.js';
 
@@ -16,7 +18,7 @@ function fixture(t) {
   const root = path.resolve('.scratch/fix-lifecycle');
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.mkdtempSync(path.join(root, 'test-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  cleanup(t, () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
   return dir;
 }
 async function post(control, route, body) {
@@ -46,7 +48,7 @@ test('invalid CLI config refuses before work, exits 2, and permits a valid next 
     args.splice(2, 0, '--config', config);
     return spawn(exe, args, { ...options, env: isolationTestEnv(options.env) });
   } });
-  t.after(() => control.close());
+  cleanup(t, () => control.close());
   assert.equal((await post(control, '/api/runs', { request: 'invalid config' })).status, 202);
   const failed = await ended(control);
   assert.equal(failed.lastExit.exitCode, 2, failed.lastExit.outputTail);
@@ -65,7 +67,7 @@ for (const scenario of ['no-proof', 'wrong-token', 'begun', 'guarded', 'refused'
     const child = Object.assign(new EventEmitter(), { pid: 123 });
     const hive = path.join(dir, 'hive');
     const control = createControl({ hive, workspace: dir, runner(_exe, _args, options) { env = options.env; assert.equal(options.stdio[3], 'ipc'); return child; } });
-    t.after(() => control.close());
+    cleanup(t, () => control.close());
     assert.equal((await post(control, '/api/runs', { request: 'test' })).status, 202);
     const token = env.SCRANTON_RUN_LEASE;
     if (scenario === 'begun') child.emit('message', { type: 'scranton-startup-begun', token });
@@ -100,8 +102,8 @@ test('recipient contract accepts reusable invocation states and rejects complete
   const hive = path.join(dir, 'hive');
   const child = Object.assign(new EventEmitter(), { pid: 123 });
   const control = createControl({ hive, workspace: dir, runner: () => child });
-  t.after(() => child.emit('close', 0));
-  t.after(() => control.close());
+  cleanup(t, () => control.close());
+  cleanup(t, () => child.emit('close', 0));
   await post(control, '/api/runs', { request: 'chat' });
   const runId = control.snapshot().run.runId;
   for (const status of ['idle', 'thinking', 'working', 'waiting', 'blocked', 'error', 'done', 'completed', 'finished', 'failed', 'aborted', 'stopped', 'cancelled', 'unknown', null]) {
@@ -124,7 +126,12 @@ for (const heartbeats of [true, false]) {
       console.log('ready');
       setTimeout(()=>{Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,6000);console.log('resumed');},100);`;
     const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token } });
-    t.after(() => child.kill());
+    cleanup(t, async () => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const closed = once(child, 'close');
+      await killTree(child);
+      await closed;
+    });
     const closed = once(child, 'close');
     let output = '';
     let errors = '';
@@ -132,7 +139,7 @@ for (const heartbeats of [true, false]) {
     child.stderr.on('data', (data) => { errors += data; });
     child.stdin.on('error', () => {});
     const timer = heartbeats ? setInterval(() => child.stdin.write('heartbeat\n'), 200) : null;
-    t.after(() => clearInterval(timer));
+    cleanup(t, () => clearInterval(timer));
     while (!output.includes('resumed')) { assert.equal(child.exitCode, null, errors); await sleep(50); }
     await sleep(800);
     assert.ok(!output.includes('aborted'), output);
@@ -151,7 +158,7 @@ test('delayed watchdog callback lets buffered heartbeat run before judging paren
   const stdin = new PassThrough();
   let aborted = 0;
   const dispose = guardParent({ hiveDir: hive, stdin, env: { SCRANTON_PARENT_GUARD: '1', SCRANTON_RUN_LEASE: lease.token }, abort: () => aborted++ });
-  t.after(() => dispose({ clean: true }));
+  cleanup(t, () => dispose({ clean: true }));
   t.mock.timers.tick(6000);
   assert.equal(aborted, 0, 'a delayed timer is not evidence that the parent stopped heartbeating');
   stdin.write('heartbeat\n');
@@ -169,11 +176,11 @@ test('real surviving worker remains locked across controller replacement and unc
     child = spawn(process.execPath, ['-e', 'process.send({type:"scranton-startup-begun",token:process.env.SCRANTON_RUN_LEASE});setInterval(()=>{},1000)'], options);
     return child;
   } });
-  t.after(async () => { child?.kill(); await first.close(); });
+  cleanup(t, async () => { child?.kill(); await first.close(); });
   assert.equal((await post(first, '/api/runs', { request: 'orphan fixture' })).status, 202);
   await once(child, 'message');
   const replacement = createControl({ hive, workspace: dir, runner: () => { throw Error('Must not spawn beside surviving worker'); } });
-  t.after(() => replacement.close());
+  cleanup(t, () => replacement.close());
   assert.equal(replacement.snapshot().recoveryRequired, true);
   assert.equal((await post(replacement, '/api/runs', { request: 'overlap' })).status, 409);
   const closed = once(child, 'close');
