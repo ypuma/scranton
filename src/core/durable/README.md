@@ -40,7 +40,9 @@ process singleton, so only one DBOS runtime may exist per process; clients are
 independent. Register all workflows before launch. Launch recovers only pending
 workflows for the configured executor and application version. Defaults are
 `executorId: 'local'`, `appVersion: '1'` (both must be non-empty strings), DBOS application `name: 'scranton'`.
-Use explicit stable versions, and unique executor IDs per writer.
+Use explicit stable versions, and unique executor IDs per writer. SDK 5.6.0
+requires application-version names to be unique across application names sharing
+one database; namespace versions when using a custom application name.
 
 `createDurableClient(config)` opens a connection without starting recovery or
 registering code. Both runtime and client expose:
@@ -178,8 +180,7 @@ is installed by the tests. From the project root in cmd.exe:
 
 ```cmd
 set "SCRANTON_TEST_DBOS_URL=postgresql://USER:PASSWORD@HOST:PORT/DISPOSABLE_DB"
-node --test "test/core/durable/*.test.js"
-node --test test/core/agent/dbos-backend.test.js
+node --test --test-concurrency=1 "test/core/durable/*.test.js" test/core/agent/dbos-backend.test.js
 set "SCRANTON_TEST_DBOS_URL="
 node --test "test/core/durable/*.test.js"
 ```
@@ -190,6 +191,66 @@ write tool, checks the final keyword, terminal status, agent state, history and
 output through a separate durable client, then reattaches without another model
 call. Its fixtures and credential paths are project-local. Without the URL it
 skips explicitly; with a URL, connection/execution errors fail rather than skip.
+
+### Remote PostgreSQL through SSH
+
+Provision a separate disposable test database, not the application's production
+database. Bind remote PostgreSQL to loopback only. In a separate terminal, keep
+this tunnel open (replace the SSH alias and ports as appropriate):
+
+```cmd
+ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 55432:127.0.0.1:55432 SSH_ALIAS
+```
+
+Use the commands above with `HOST=127.0.0.1`, `PORT=55432` and the disposable
+database name. Obtain credentials securely at runtime; do not commit them, print
+the URL, or put passwords in shell history. A programmatic runner should capture
+and mask subprocess output, pass the URL only in the child environment, and close
+the tunnel in `finally`. Reset only the disposable database, with all test clients
+stopped. Keep test files serial to isolate their workflow/recovery fixtures.
+Concurrent first launches by Scranton processes against one fresh or missing
+PostgreSQL database are coordinated: the adapter holds a session advisory lock on
+`/postgres`, the SDK's provisioning database, keyed by the target database name.
+It uses the SDK's direct `pg` dependency resolved from the SDK entry point (no
+additional dependency). All application names, versions and executors targeting
+the same database use the same key. Acquisition polls `pg_try_advisory_lock` with
+100–249 ms jitter and a 120-second wait bound, including a per-query `query_timeout`
+set to the remaining time. A blocking advisory-lock query can pin a snapshot and
+stall SDK `CREATE INDEX CONCURRENTLY` migrations. Connection setup honours the
+URL's `connect_timeout` in seconds, with the SDK's 10-second default. The dedicated
+session closes in `finally`, releasing the lock on success or failure; PostgreSQL
+also releases it on process disconnect.
+
+If the admin connection is unavailable or the lock is not permitted, the adapter
+tries the target database instead. If neither connection/permission allows locking
+(including a missing target), it delegates startup without a lock, preserving SDK
+provisioning and error behaviour. Other lock-query errors, lock timeouts and launch
+errors fail and pass through durable redaction; a failed SDK launch is never retried.
+Fallback locking cannot coordinate database creation or processes using the admin
+lock, so concurrent startup requires access to `/postgres` for full protection.
+This coordinates Scranton launches, not raw SDK launches or external migration
+runners that do not take the same lock. The lock covers launch, not normal workflow
+execution, and is taken on warm launches too.
+
+`dbos-cold.test.js` checks a single launch against a missing database, and
+synchronizes four independent child processes at a launch barrier against both
+fresh and missing databases, then verifies every child executes a workflow.
+It runs only with `SCRANTON_TEST_DBOS_URL`; a URL user without CREATE DATABASE
+privilege gets an explicit skip. Other connection/SQL failures fail the test.
+Its uniquely named `scranton_dbos_race_*` database is force-dropped after children
+exit. On real PostgreSQL 16 / SDK 5.6.0 the regression failed before the fix with
+SQLSTATE `23505` (`duplicate key value violates unique constraint
+"dbos_migrations_pkey"`; also catalog namespace/type uniqueness errors) and
+`42P07` (`relation "dbos_migrations" already exists`). With the advisory-lock
+adapter, all four cold launches and workflows succeeded.
+
+The optional process contract tests crash and relaunch a writer with the same
+executor/version, verify checkpoint replay and at-most-once interruption, read a
+live stream and send approval from a second process, and exercise retention age,
+keep count, pending protection and workflow-ID reuse. The agent test also runs two
+hives with identical run/instance/invocation keys on one database and checks their
+independent results and histories. DBOS-specific deadlines allow SSH latency;
+SQLite deadlines and assertions are unchanged.
 
 ### PGlite compatibility probe (2026-11-22)
 
@@ -220,7 +281,6 @@ failed PGlite run is **not** a passing DBOS contract. Restart the scratch server
 with a fresh data directory after a killed client, since its transaction/queue may
 otherwise prevent even a subsequent connection from completing.
 
-A disposable real PostgreSQL server is still required to verify the contract and
-agent test end to end, native LISTEN/NOTIFY, normal pool concurrency, recovery
-across processes, and DBOS retention against actual persisted records. SQLite
-coverage and mocked SDK tests do not establish those properties.
+PGlite remains unsuitable for these tests. Use real PostgreSQL for the optional
+contracts above; SQLite coverage and mocked SDK tests alone do not establish
+PostgreSQL execution, cross-process recovery or retention.

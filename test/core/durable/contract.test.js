@@ -11,7 +11,7 @@ mkdirSync(root, { recursive: true });
 
 
 for (const backend of ['sqlite', 'dbos']) {
-  test(`${backend} durable contract`, { skip: backend === 'dbos' && !process.env.SCRANTON_TEST_DBOS_URL ? 'SCRANTON_TEST_DBOS_URL not set; PostgreSQL not provisioned' : false, timeout: 60000 }, async t => {
+  test(`${backend} durable contract`, { skip: backend === 'dbos' && !process.env.SCRANTON_TEST_DBOS_URL ? 'SCRANTON_TEST_DBOS_URL not set; PostgreSQL not provisioned' : false, timeout: backend === 'dbos' ? 180000 : 60000 }, async t => {
     const directory = mkdtempSync(join(root, `${backend}-`));
     const config = {
       hiveDir: directory, markerDir: join(directory, 'markers'), executorId: 'run:contract', appVersion: 'v1',
@@ -46,7 +46,7 @@ for (const backend of ['sqlite', 'dbos']) {
       return 'done';
     });
     runtime.registerWorkflow('terminal', async wf => { await wf.writeStream('output', 'last'); });
-    runtime.registerWorkflow('cancel', async wf => { await wf.setEvent('ready', true); await wf.recv('blocked', { timeoutSeconds: 5 }); return 'not reached'; });
+    runtime.registerWorkflow('cancel', async wf => { await wf.setEvent('ready', true); await wf.recv('blocked', { timeoutSeconds: backend === 'dbos' ? 120 : 5 }); return 'not reached'; });
     runtime.registerWorkflow('failure', async wf => wf.runStep(async () => { throw new Error('expected'); }, { name: 'fail', retries: { maxAttempts: 5, intervalSeconds: 0, shouldRetry: () => false } }));
     runtime.registerWorkflow('at-most-once', async wf => wf.runStep(async () => 'once', { name: 'once', atMostOnce: true }));
     await runtime.launch();

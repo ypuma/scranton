@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+import { setTimeout as delay } from 'node:timers/promises';
 import { guardedStep, retryOptions, offsetValue, timeoutMS, redact, errorData, revive, removeStepMarker, removeWorkflowMarkers, retentionOptions } from './shared.js';
 
 let activeRuntime;
@@ -13,6 +15,54 @@ function logger(config) {
   return Object.fromEntries(['debug', 'info', 'warn', 'error'].map(level => [level, message => {
     config.logger?.[level]?.(redact(message));
   }]));
+}
+
+async function launchDBOS(DBOS, config) {
+  const requireSDK = createRequire(import.meta.resolve('@dbos-inc/dbos-sdk'));
+  const { Client } = requireSDK('pg');
+  const target = new URL(config.systemDatabaseUrl);
+  const admin = new URL(target);
+  admin.pathname = '/postgres';
+  const timeout = Number.parseInt(target.searchParams.get('connect_timeout'), 10);
+  const connectionTimeoutMillis = timeout ? timeout * 1000 : 10000;
+  let database = target.pathname.slice(1);
+  try { database = decodeURI(database); } catch {}
+  for (const connectionString of [admin.href, target.href]) {
+    const client = new Client({ connectionString, connectionTimeoutMillis });
+    let connectionError;
+    client.on('error', error => { connectionError = error; });
+    try {
+      // Like SDK database provisioning, connection failures must not prevent launch.
+      try { await client.connect(); } catch { continue; }
+      const deadline = Date.now() + 120000;
+      // Poll so waiting sessions do not pin snapshots needed by CREATE INDEX CONCURRENTLY.
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error('Timed out waiting for DBOS launch lock');
+        let result;
+        try {
+          result = await client.query({
+            text: 'SELECT pg_try_advisory_lock(1396920910, hashtext($1)) AS acquired',
+            values: [database], query_timeout: remaining,
+          });
+        } catch (error) {
+          if (error.code === '42501') break;
+          throw error;
+        }
+        if (connectionError) throw connectionError;
+        if (result.rows[0].acquired) {
+          await DBOS.launch();
+          if (connectionError) throw connectionError;
+          return;
+        }
+        await delay(Math.max(0, Math.min(deadline - Date.now(), 100 + Math.floor(Math.random() * 150))));
+      }
+    } finally {
+      // Closing the dedicated session releases the lock even after failed launch.
+      await client.end().catch(() => {});
+    }
+  }
+  await DBOS.launch();
 }
 
 export class DBOSClientAdapter {
@@ -133,7 +183,7 @@ export async function createDBOS(config, clientOnly) {
   };
   runtime.launch = async () => {
     try {
-      await safe(() => DBOS.launch()); launched = true;
+      await safe(() => launchDBOS(DBOS, config)); launched = true;
       const rows = await runtime.listWorkflows();
       for (const row of rows) if (['SUCCESS', 'ERROR', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED'].includes(row.status)) removeWorkflowMarkers(config.markerDir, row.workflowId);
     }
