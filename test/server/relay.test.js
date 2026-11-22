@@ -153,7 +153,7 @@ test('direct HTTPS requires a private bind and a matching port', async () => {
   await assert.rejects(startRelay({ origin: 'https://192.168.1.20:8443', ...tls, listenIp: '192.168.1.21' }), /must match/);
 });
 
-test('paired phone starts a registry run, streams events, answers a question and stops it', { timeout: 45000 }, async (t) => {
+test('paired phone starts a registry run, streams events, answers a question and stops it', { timeout: 90000 }, async (t) => {
   const { start } = await setup(t, { registry: true });
   const relay = await start();
   cleanup(t, relay.close);
@@ -195,7 +195,8 @@ test('paired phone starts a registry run, streams events, answers a question and
   await reader.cancel();
 
   async function waitFor(predicate, { expectRunning = false } = {}) {
-    const deadline = Date.now() + 12000;
+    // Under full-suite load one run-state step has taken over 12 s (alone it is ~4 s).
+    const deadline = Date.now() + 30000;
     do {
       const snapshot = await get(scope + '/control');
       if (predicate(snapshot)) return snapshot;

@@ -67,12 +67,12 @@ test('CLI corrupt optional dreaming state preserves history and ceiling and stil
   const file = path.join(f.dreamDir, 'state.json');
   fs.writeFileSync(file, '{corrupt');
   const result = await f.run();
-  assert.equal(result.config.maxFailedCycles, 3);
+  assert.equal(result.config.maxFailedCycles, 12);
   assert.equal(result.threadContext, f.history);
   let started = false;
   t.mock.method(Orchestrator.prototype, 'run', async function () {
     started = true;
-    assert.equal(this.config.maxFailedCycles, 3);
+    assert.equal(this.config.maxFailedCycles, 12);
     const chat = f.registry.listChats(f.project.id).find((c) => c.hiveDir === this.config.hiveDir);
     assert.equal(this.threadContext, createContext({ dataDir: path.join(f.dir, 'data'), registry: f.registry }).forTeam(f.project.id, chat.id).text);
     assert.match(this.threadContext, /Other chats.*\n/s);
@@ -91,11 +91,11 @@ test('CLI dreaming factory path failure is optional', async (t) => {
   fs.mkdirSync(target);
   fs.symlinkSync(target, f.dreamDir, process.platform === 'win32' ? 'junction' : 'dir');
   const result = await f.run();
-  assert.equal(result.config.maxFailedCycles, 3);
+  assert.equal(result.config.maxFailedCycles, 12);
   assert.equal(result.threadContext, f.history);
 });
 
-test('CLI dreaming policy read failure discards partial memory injection and closes opened files', async (t) => {
+test('CLI dreaming no longer reads learned Team caps and closes opened files', async (t) => {
   const f = fixture(t); f.sweep(true);
   const open = fs.openSync, close = fs.closeSync, opened = new Set();
   let reads = 0;
@@ -108,16 +108,16 @@ test('CLI dreaming policy read failure discards partial memory injection and clo
   });
   t.mock.method(fs, 'closeSync', function (fd) { opened.delete(fd); return close.call(this, fd); });
   const result = await f.run();
-  assert.equal(reads, 3, 'cancellation and context succeed before policy fails; close needs no authority read');
-  assert.equal(result.config.maxFailedCycles, 3);
-  assert.equal(result.threadContext, f.history);
+  assert.equal(reads, 2, 'cancellation and context are read; the learned policy is never consulted');
+  assert.equal(result.config.maxFailedCycles, 12);
+  assert.match(result.threadContext, /Project memory/);
   assert.equal(opened.size, 0);
 });
 
 for (const applyPolicy of [false, true]) test(`CLI dreaming adoption opt-in=${applyPolicy} preserves history`, async (t) => {
   const f = fixture(t); f.sweep(applyPolicy);
   const result = await f.run();
-  assert.equal(result.config.maxFailedCycles, applyPolicy ? 1 : 3);
+  assert.equal(result.config.maxFailedCycles, 12);
   const dream = f.registry.dreaming(f.project.id);
   try {
     const pack = createContext({ dataDir: path.join(f.dir, 'data'), registry: f.registry }).forTeam(f.project.id, f.chat.id, { memory: dream.context() });

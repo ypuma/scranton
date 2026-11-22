@@ -72,7 +72,9 @@ test('changes_once sends one combined report and passes cycle 2; security_issues
       assert.equal((report.match(/^# (?:Task|Bug report):/gm) ?? []).length, 1, 'one top-level task heading');
     } else {
       assert.equal(result.status, 'aborted');
-      assert.deepEqual(es.filter((e) => e.type === 'cycle_result').map((e) => e.failedCycles), [1, 2, 3]);
+      assert.deepEqual(es.filter((e) => e.type === 'cycle_result').map((e) => e.failedCycles), [1, 2]);
+      assert.equal(es.find((e) => e.type === 'circuit_breaker' && e.state === 'tripped').cause, 'stalled');
+      assert.equal(es.findLast((e) => e.type === 'progress_check').rule, 'repeat');
       assert.equal(es.filter((e) => e.type === 'hitl_request').length, 1);
       assert.equal(es.some((e) => e.type === 'gate_result' && e.agent === 'angela'), false);
     }
@@ -377,4 +379,42 @@ test('human feedback after a gate failure carries neutral gate reports to Dwight
   assert.match(body, /Oscar's Review report/);
   assert.equal(body.includes("Angela's last QA report"), false, 'Oscar report is not attributed to Angela');
   assert.match(body, /Address the review/);
+});
+
+test('Michael prompt API saves are idempotent and audit the single staged progress section', async t => {
+  const { startVisualizerServer } = await import('../../src/server/visualizer-server.js');
+  const { createHash } = await import('node:crypto');
+  const { dir, config } = setup(t);
+  const srv = await startVisualizerServer({ hiveDir: path.join(dir, 'server-hive'), dataDir: path.join(dir, 'data'), publicDir: dir, port: 0, control: { auth: { close() {} } } });
+  t.after(() => srv.close());
+  config.promptsDir = path.join(dir, 'data', 'prompts');
+  const put = async text => {
+    const response = await fetch(srv.url + '/api/agents/michael/prompt', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Scranton-Client': '1' }, body: JSON.stringify({ text }) });
+    assert.equal(response.status, 200);
+  };
+  const generated = '## Progress checks\n\nWhen the current request is a progress check, its Required answer overrides planning or conversation instructions. Judge the supplied failure history only; return exactly one [PROGRESS] or [STALLED] keyword and one reason line. Do not plan or call tools.';
+  await put('Custom Michael [PLAN_READY]\n\n' + generated + '\n\n' + generated);
+  const file = path.join(config.promptsDir, 'michael.md');
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.equal(saved, 'Custom Michael [PLAN_READY]\n', 'migrates only the exact previously generated text');
+  const resolved = resolvePrompt(config, 'michael');
+  assert.doesNotMatch(resolved.text, /## Progress checks/);
+  await put(resolved.text);
+  assert.equal(fs.readFileSync(file, 'utf8'), saved);
+  assert.equal(resolvePrompt(config, 'michael').text, resolved.text);
+  const empty = await fetch(srv.url + '/api/agents/michael/prompt', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Scranton-Client': '1' }, body: JSON.stringify({ text: generated }) });
+  assert.equal(empty.status, 400, 'generated instructions alone are not an editable prompt');
+  assert.equal(fs.readFileSync(file, 'utf8'), saved);
+  assert.equal((fs.readFileSync(stagePrompt(config, { dir: config.hiveDir }, 'michael'), 'utf8').match(/## Progress checks/g) ?? []).length, 1);
+  let staged;
+  const o = new Orchestrator({ config, noPlan: true, startRunner(options) {
+    staged = fs.readFileSync(options.systemPromptFile, 'utf8').trimEnd();
+    return { done: Promise.resolve({ ok: true, keyword: 'PLAN_READY', text: '[PLAN_READY]', exitCode: 0, durationMs: 0 }), kill: async () => {} };
+  } });
+  o.standaloneAgent = 'michael';
+  assert.equal((await o.run('Inspect prompt')).status, 'success');
+  assert.equal((staged.match(/## Progress checks/g) ?? []).length, 1);
+  assert.equal(events(config)[0].prompts.michael.sha256, createHash('sha256').update(staged).digest('hex'));
+  assert.ok(events(config)[0].roles[0].keywords.includes('PROGRESS'));
+  assert.equal(fs.readFileSync(file, 'utf8'), saved, 'staging never changes the editable source');
 });

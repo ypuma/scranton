@@ -85,12 +85,13 @@ test('flaky: Angela fails m2 once, Dwight gets a bug report, then it passes', as
 
 test('breaker: 3 failed cycles trip it, the injected human feedback resets it and the milestone passes', async (t) => {
   const calls = [];
-  const run = await runFake(t, { scenario: 'breaker', hitl: feedbackHitl(calls) });
+  const run = await runFake(t, { scenario: 'breaker', config: { maxFailedCycles: 3, maxStalledCycles: 10 }, hitl: feedbackHitl(calls) });
   assert.equal(run.result.status, 'success');
   assertContract(run.events, run.state);
 
   assert.equal(calls.length, 1);
-  assert.match(calls[0].reason, /3 consecutive failed cycles on m2/);
+  assert.match(calls[0].reason, /^m2 reached the cycle limit \(3\): QA report for m2/);
+  assert.ok(calls[0].reason.length <= 300);
   assert.match(calls[0].excerpt, /Suspected file: cli\.js/);
   assert.equal(calls[0].feedbackTarget, 'Dwight');
 
@@ -162,7 +163,7 @@ test('breaker: abort ends the run as aborted and leaves later milestones pending
 test('breaker: a human "retry" resets the counter without feedback and the loop continues', async (t) => {
   let asked = 0;
   const hitl = async () => (++asked === 1 ? { decision: 'retry' } : { decision: 'skip' });
-  const run = await runFake(t, { scenario: 'breaker', hitl });
+  const run = await runFake(t, { scenario: 'breaker', config: { maxFailedCycles: 3, maxStalledCycles: 10 }, hitl });
   assert.equal(asked, 2);
   assertContract(run.events, run.state);
   const states = ofType(run.events, 'circuit_breaker').map((e) => e.state);

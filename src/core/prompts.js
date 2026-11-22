@@ -6,6 +6,11 @@ import { AGENT_IDS } from './state.js';
 import { BUILTIN_ROLES, GATE_INSTRUCTIONS, validateAgentId } from './agents-config.js';
 import { ROLE_NAMES, GATE_ROLES } from './workflow.js';
 import { writeFileAtomicSync } from './util.js';
+const progressInstructions = '## Progress checks\n\nWhen the current request is a progress check, its Required answer overrides planning or conversation instructions. Judge the supplied failure history only; return exactly one [PROGRESS] or [STALLED] keyword and one reason line. Do not plan or call tools.';
+export const editablePromptText = (id, text) => id === 'michael' ? text.replaceAll(progressInstructions, '').trim() : text;
+export function promptForRun(id, prompt) {
+  return id === 'michael' ? { ...prompt, text: editablePromptText(id, prompt.text) + '\n\n' + progressInstructions } : prompt;
+}
 const clean = (text) => text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
 export function resolvePrompt(config, id) {
   validateAgentId(id);
@@ -20,14 +25,16 @@ export function resolvePrompt(config, id) {
   let text;
   try { text = !role.builtin && source === 'builtin' ? builtinText : clean(fs.readFileSync(file, 'utf8')); }
   catch (error) { throw new ConfigError(`Cannot read ${id} prompt at ${file}: ${error.message}`); }
-  return { source, text, editable: !pinned, builtinText, missingKeywords: role.keywords.filter((k) => !text.includes(`[${k}]`)) };
+  text = editablePromptText(id, text);
+  const runText = promptForRun(id, { text }).text;
+  return { source, text, editable: !pinned, builtinText, missingKeywords: role.keywords.filter((k) => !runText.includes(`[${k}]`)) };
 }
 export function promptAudit(config, snapshot = null) {
   return Object.fromEntries((snapshot ? Object.keys(snapshot) : Object.keys(config.agents)).map((id) => { const { source, text } = snapshot?.[id] ?? resolvePrompt(config, id); return [id, { source, sha256: createHash('sha256').update(text).digest('hex') }]; }));
 }
 export function stagePrompt(config, hive, id, instanceId = id, prompt = null) {
   const file = path.join(hive.dir, instanceId, 'system.md');
-  writeFileAtomicSync(file, (prompt ?? resolvePrompt(config, id)).text + '\n');
+  writeFileAtomicSync(file, (prompt ?? promptForRun(id, resolvePrompt(config, id))).text + '\n');
   return file;
 }
 export function starterPrompt(role) {

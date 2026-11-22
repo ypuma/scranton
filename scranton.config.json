@@ -1,7 +1,9 @@
 {
   "workspace": "./workspace",
   "hiveDir": "./hive",
-  "maxFailedCycles": 3,
+  "maxFailedCycles": 12,
+  "maxStalledCycles": 2,
+  "milestoneTokenBudget": 500000,
   "agentTimeoutMinutes": 20,
   "agents": {
     "michael": {

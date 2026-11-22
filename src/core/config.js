@@ -7,7 +7,9 @@ import { loadAgentsConfig, roleDefinitions } from './agents-config.js';
 import { isFile } from './util.js';
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const DEFAULT_MAX_FAILED_CYCLES = 3;
+export const DEFAULT_MAX_FAILED_CYCLES = 12;
+export const DEFAULT_MAX_STALLED_CYCLES = 2;
+export const DEFAULT_MILESTONE_TOKEN_BUDGET = 500000;
 export const DEFAULT_TIMEOUT_MINUTES = 20;
 export const CONFIG_FILE_NAME = 'scranton.config.json';
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -86,7 +88,7 @@ const blank = (v) => v === undefined || v === null || v === '';
 const pick = (...values) => values.find((v) => !blank(v));
 
 function toPositiveInt(value, label) {
-  const n = Number(value);
+  const n = typeof value === 'string' || typeof value === 'number' ? Number(value) : NaN;
   if (!Number.isInteger(n) || n < 1) throw new ConfigError(`${label} must be a positive integer (got "${value}")`);
   return n;
 }
@@ -145,6 +147,12 @@ export function loadConfig({
     pick(flags.maxCycles, env.SCRANTON_MAX_FAILED_CYCLES, file.maxFailedCycles, DEFAULT_MAX_FAILED_CYCLES),
     'maxFailedCycles'
   );
+  const maxStalledCycles = toPositiveInt(pick(flags.maxStalled, env.SCRANTON_MAX_STALLED_CYCLES, file.maxStalledCycles, DEFAULT_MAX_STALLED_CYCLES), 'maxStalledCycles');
+  const tokenBudget = pick(flags.milestoneTokens, env.SCRANTON_MILESTONE_TOKEN_BUDGET, file.milestoneTokenBudget, DEFAULT_MILESTONE_TOKEN_BUDGET);
+  const milestoneTokenBudget = typeof tokenBudget === 'string' || typeof tokenBudget === 'number' ? Number(tokenBudget) : NaN;
+  if (maxFailedCycles > 50) throw new ConfigError('maxFailedCycles must be an integer from 1 to 50');
+  if (maxStalledCycles > 10) throw new ConfigError('maxStalledCycles must be an integer from 1 to 10');
+  if (!Number.isInteger(milestoneTokenBudget) || milestoneTokenBudget < 0 || milestoneTokenBudget > 20000000) throw new ConfigError('milestoneTokenBudget must be an integer from 0 to 20000000');
   const agentTimeoutMinutes = toPositiveNumber(
     pick(flags.timeoutMin, env.SCRANTON_AGENT_TIMEOUT_MIN, file.agentTimeoutMinutes, DEFAULT_TIMEOUT_MINUTES),
     'agentTimeoutMinutes'
@@ -245,7 +253,7 @@ export function loadConfig({
     agents[id] = agent;
   }
 
-  return { agentsMd, configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
+  return { agentsMd, configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, maxStalledCycles, milestoneTokenBudget, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
 }
 
 export function validateGateTools(agent) {

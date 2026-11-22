@@ -1,7 +1,7 @@
 import { saveAgent, deleteAgent, validateAgentId } from '../core/agents-config.js';
 import { AGENT_IDS } from '../core/state.js';
 import { normalizeWorkflow } from '../core/workflow.js';
-import { agentCatalog, resolvePrompt } from '../core/prompts.js';
+import { agentCatalog, resolvePrompt, editablePromptText } from '../core/prompts.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,9 +18,9 @@ import { createModelWindows } from '../core/model-windows.js';
 import { listRuns, formatThreadContext } from '../core/thread.js';
 import { getAuthService } from '../core/auth.js';
 import { isLoopbackAddress } from '../core/network.js';
-import { dreamingCap, teamDreamingCohort, teamDreamingContext } from '../core/dreaming-sources.js';
+import { teamDreamingContext } from '../core/dreaming-sources.js';
 
-const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
+const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question', 'progress'];
 // Error/blocked invocations can retry; only completed instances stop accepting queued chat.
 const CHAT_RECIPIENT_STATES = new Set(['idle', 'thinking', 'working', 'waiting', 'blocked', 'error']);
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -157,7 +157,9 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
       (demo.delayMs !== undefined && (!Number.isInteger(demo.delayMs) || demo.delayMs < 0 || demo.delayMs > 5000)))) throw error(400, 'Invalid demo');
     if ((!demo || body.request !== undefined) && (typeof body.request !== 'string' || !body.request.trim() || body.request.length > 32768)) throw error(400, 'Invalid request');
     if (body.workspace !== undefined && (typeof body.workspace !== 'string' || !path.isAbsolute(body.workspace))) throw error(400, 'Workspace must be absolute');
-    if (body.maxCycles !== undefined && (!Number.isInteger(body.maxCycles) || body.maxCycles < 1 || body.maxCycles > 10)) throw error(400, 'Invalid maxCycles');
+    if (body.maxCycles !== undefined && (!Number.isInteger(body.maxCycles) || body.maxCycles < 1 || body.maxCycles > 50)) throw error(400, 'Invalid maxCycles');
+    if (body.maxStalledCycles !== undefined && (!Number.isInteger(body.maxStalledCycles) || body.maxStalledCycles < 1 || body.maxStalledCycles > 10)) throw error(400, 'Invalid maxStalledCycles');
+    if (body.milestoneTokenBudget !== undefined && (!Number.isInteger(body.milestoneTokenBudget) || body.milestoneTokenBudget < 0 || body.milestoneTokenBudget > 20000000)) throw error(400, 'Invalid milestoneTokenBudget');
     if (body.noPlan !== undefined && typeof body.noPlan !== 'boolean') throw error(400, 'Invalid noPlan');
     if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw error(400, 'Invalid conversation');
     const baseConfig = configuration();
@@ -195,6 +197,8 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     // parseArgs accepts options after positionals, but not after the -- terminator.
     const options = ['--gates', workflow.gates.map((stage) => stage.join('+')).join(','), '--single-hive', '--hive', hive, '--workspace', ws, '--on-breaker', 'hive'];
     if (body.maxCycles !== undefined) options.push('--max-cycles', String(body.maxCycles));
+    if (body.maxStalledCycles !== undefined) options.push('--max-stalled', String(body.maxStalledCycles));
+    if (body.milestoneTokenBudget !== undefined) options.push('--milestone-tokens', String(body.milestoneTokenBudget));
     if (body.noPlan) options.push('--no-plan');
     if (body.conversation !== undefined) options.push(body.conversation ? '--conversation' : '--no-conversation');
     if (body.maxParallel !== undefined) {
@@ -229,20 +233,16 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
         recipients = { planner, developer };
       }
     }
-    let memory = '', effective = body.maxCycles ?? baseConfig.maxFailedCycles;
+    let memory = '';
     dreamingWarning = null;
     if (!demo && dreaming) {
-      const cohort = teamDreamingCohort({ ...baseConfig, workflow });
       try {
         const dream = dreaming();
         try { Promise.resolve(dream?.cancelReflection?.()).catch(() => {}); } catch {}
         const context = dream?.context() ?? '';
-        const cap = dreamingCap(dream, 'team', effective, cohort);
-        memory = context; effective = cap;
+        // Progress checks, not learned fixed cycle caps, bound Team retries.
+        memory = context;
       } catch { dreamingWarning = 'Optional Dreaming unavailable; using configured retry ceiling without project memory'; }
-      const index = options.indexOf('--max-cycles');
-      if (index >= 0) options[index + 1] = String(effective);
-      else if (effective !== baseConfig.maxFailedCycles) options.push('--max-cycles', String(effective));
     }
     args.splice(2, 0, ...options);
     const info = { mode, request: body.request ?? (demo?.scenario === 'question' ? 'How does the Team orchestrator handle a request?' : 'Build a tiny todo CLI'), workspace: ws, startedAt: new Date().toISOString(), runId: randomUUID(), exitCode: null };
@@ -394,7 +394,9 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
             const body = await readBody(req);
             if (Object.keys(body).some((k) => k !== 'text') || typeof body.text !== 'string' || !body.text.trim()) throw error(400, 'Expected non-empty prompt text');
             if (Buffer.byteLength(body.text) > 32768) throw error(413, 'Prompt exceeds 32 KiB');
-            writeFileAtomicSync(file, body.text.trim() + '\n');
+            const text = editablePromptText(id, body.text.trim());
+            if (!text) throw error(400, 'Expected non-empty prompt text');
+            writeFileAtomicSync(file, text + '\n');
           }
           return json(res, 200, { ok: true });
         }

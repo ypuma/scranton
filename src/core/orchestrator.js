@@ -1,9 +1,12 @@
 import { auditRole, BUILTIN_ROLES } from './agents-config.js';
 import { activeRoles, normalizeWorkflow, PASS_KEYWORDS, ROLE_NAMES, GATE_ROLES } from './workflow.js';
-import { stagePrompt, promptAudit, resolvePrompt } from './prompts.js';
+import { stagePrompt, promptAudit, resolvePrompt, promptForRun } from './prompts.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DEFAULT_MAX_STALLED_CYCLES, DEFAULT_MILESTONE_TOKEN_BUDGET } from './config.js';
+import { normalizeFailure, snapshotFingerprint, sharedFingerprint } from './progress.js';
+import { amount } from './usage.js';
 import { runDag } from './scheduler.js';
 import { ChatRouter } from './chat-router.js';
 import { createDurableRuntime } from './durable/index.js';
@@ -13,7 +16,7 @@ import { pollStop, rejectResponse, waitForResponse } from './file-control.js';
 import { EventRecorder } from './events.js';
 import { HITL_OPTIONS, createTerminalHitl, isInteractive } from './hitl.js';
 import { Hive } from './hive.js';
-import { dwightMessage, gateBugReport, handoffBody, humanNote, planRequestBody, summaryLine } from './messages.js';
+import { dwightMessage, gateBugReport, handoffBody, humanNote, planRequestBody, progressRequestBody, summaryLine } from './messages.js';
 import { startAgent, agentAppVersion } from './agent/index.js';
 import { fallbackPlan, parsePlan, planToMarkdown } from './plan.js';
 import { clip, excerpt, oneLine } from './util.js';
@@ -40,7 +43,7 @@ export class Orchestrator {
     this.config = config;
     this.conversation = config.execution?.conversation === true;
     this.roles = structuredClone(config.roles ?? BUILTIN_ROLES);
-    if (this.conversation) this.roles.find((r) => r.id === 'michael').keywords = ['PLAN_READY', 'ANSWER_READY', 'REPORT_READY'];
+    if (this.conversation) this.roles.find((r) => r.id === 'michael').keywords = ['PLAN_READY', 'ANSWER_READY', 'REPORT_READY', 'PROGRESS', 'STALLED'];
     this.reports = new Map();
     this.milestoneReasons = new Map();
     this.roleMap = Object.fromEntries(this.roles.map((r) => [r.id, r]));
@@ -57,6 +60,9 @@ export class Orchestrator {
     this.runtimeFactory = runtimeFactory;
     this.protectCredentials = protectCredentials;
     this.invocations = new Map();
+    this.milestoneTokens = new Map();
+    this.humanPending = 0;
+    this.scheduleListeners = new Set();
     this.noPlan = noPlan;
     this.onBreaker = onBreaker;
     this.hitl = hitl;
@@ -132,12 +138,13 @@ export class Orchestrator {
       return { runId: this.runId, status: 'failed', summary: `cannot prepare workspace/hive: ${err.message}`, signaled: false };
     }
     let started = false, stopTimer;
-    const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan);
+    // Skipping planning still needs Michael's audited prompt for progress checks.
+    const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config);
     const auditedRoles = roles.map((id) => auditRole({ ...this.roleMap[id], tools: config.agents[id].tools }));
     try {
     try {
       stopTimer = pollStop(this.hive.dir, this.runId, (reason) => this.abort(reason), (level, message) => this.log(level, message));
-      this.promptSnapshot = Object.fromEntries(roles.map((id) => [id, resolvePrompt(config, id)]));
+      this.promptSnapshot = Object.fromEntries(roles.map((id) => [id, promptForRun(id, resolvePrompt(config, id))]));
       if (this.conversation && this.promptSnapshot.michael) this.promptSnapshot.michael.text += '\n\n## Conversation mode\n\nThe "Required answer" section of each request decides between a plan ([PLAN_READY]), a direct answer ([ANSWER_READY]) and a report ([REPORT_READY]). This overrides any earlier rule to always reply with a plan.';
       if (config.execution?.isolation === 'worktree') {
         const { WorktreeManager } = await import('./worktree.js');
@@ -146,7 +153,7 @@ export class Orchestrator {
         this.#checkAbort();
       }
       this.instructions = discoverInstructions(config.workspace, { enabled: config.agentsMd !== false, snapshot: this.worktrees?.initial, snapshotWarnings: this.worktrees?.instructionWarnings, scratchDir: path.join(this.hive.dir, 'instruction-discovery'), exclude: [this.hive.dir] });
-      this.emit('run_started', { instructions: this.instructions.summary, request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow }, roles: auditedRoles, prompts: promptAudit(config, this.promptSnapshot) });
+      this.emit('run_started', { instructions: this.instructions.summary, request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, maxStalledCycles: config.maxStalledCycles ?? DEFAULT_MAX_STALLED_CYCLES, milestoneTokenBudget: config.milestoneTokenBudget ?? DEFAULT_MILESTONE_TOKEN_BUDGET, execution: { ...config.execution, workflow: this.workflow }, roles: auditedRoles, prompts: promptAudit(config, this.promptSnapshot) });
       started = true;
       for (const warning of this.instructions.warnings) this.log('warn', warning.message);
       this.#checkAbort();
@@ -173,15 +180,17 @@ export class Orchestrator {
       for (const m of plan.milestones) for (const role of ['dwight', ...this.workflow.gates.flat()]) this.chat.register(`${role}-${m.id}`);
       const outcomes = await runDag(plan.milestones, {
         maxParallel: config.execution?.maxParallel ?? 1,
+        paused: () => this.humanPending > 0,
+        subscribe: (wake) => { this.scheduleListeners.add(wake); return () => this.scheduleListeners.delete(wake); },
         signal: this.abortController.signal,
         run: async (m, index, completed) => {
           try { return await this.#runMilestone(m, index, plan.milestones.length, completed); }
           catch (err) { this.#cancel(err.message); throw err; }
-          finally { for (const role of ['dwight', ...this.workflow.gates.flat()]) this.chat.finish(`${role}-${m.id}`); }
+          finally { for (const role of ['michael', 'dwight', ...this.workflow.gates.flat()]) this.chat.finish(`${role}-${m.id}`); }
         },
         blocked: async (m, dependencies) => {
           this.emit('milestone_finished', { milestoneId: m.id, status: 'blocked', reason: `Prerequisites did not pass: ${dependencies.join(', ')}` });
-          for (const role of ['dwight', ...this.workflow.gates.flat()]) this.chat.finish(`${role}-${m.id}`);
+          for (const role of ['michael', 'dwight', ...this.workflow.gates.flat()]) this.chat.finish(`${role}-${m.id}`);
         }
       });
       this.#checkAbort();
@@ -197,7 +206,7 @@ export class Orchestrator {
       }
       }
     } catch (err) {
-      if (!started) this.emit('run_started', { instructions: null, roles: [], request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow } });
+      if (!started) this.emit('run_started', { instructions: null, roles: [], request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, maxStalledCycles: config.maxStalledCycles ?? DEFAULT_MAX_STALLED_CYCLES, milestoneTokenBudget: config.milestoneTokenBudget ?? DEFAULT_MILESTONE_TOKEN_BUDGET, execution: { ...config.execution, workflow: this.workflow } });
       if (err instanceof RunAborted || this.stopRequested) {
         result = { status: 'aborted', summary: this.aborting ?? err.message, signaled: err instanceof RunAborted ? err.signaled : true };
       } else {
@@ -320,7 +329,25 @@ export class Orchestrator {
   // ---- milestones -----------------------------------------------------------------------
 
   async #runMilestone(m, index, total, completed) {
-    const { maxFailedCycles } = this.config;
+    const { maxFailedCycles, maxStalledCycles = DEFAULT_MAX_STALLED_CYCLES, milestoneTokenBudget = DEFAULT_MILESTONE_TOKEN_BUDGET } = this.config;
+    let stalledCycles = 0, history = [];
+    let previousSnapshot = this.worktrees ? null : await sharedFingerprint(this.config.workspace, this.hive.dir);
+    let changed = false, snapshotCycle = 0, cycleBaseline = null;
+    this.milestoneTokens.set(m.id, 0);
+    const resetWindow = (notify = failed > 0 || stalledCycles > 0) => {
+      failed = 0; stalledCycles = 0; history = []; this.milestoneTokens.set(m.id, 0);
+      if (notify) this.emit('circuit_breaker', { milestoneId: m.id, state: 'reset', failedCycles: 0, maxFailedCycles, stalledCycles: 0, maxStalledCycles, tokens: 0, tokenBudget: milestoneTokenBudget });
+    };
+    const deliveredSnapshot = async () => {
+      const snapshot = this.worktrees?.snapshots.get(m.id);
+      const fingerprint = snapshot ? snapshotFingerprint(snapshot.entries) : await sharedFingerprint(this.config.workspace, this.hive.dir);
+      if (snapshotCycle !== cycle) {
+        cycleBaseline = previousSnapshot ?? (snapshot ? snapshotFingerprint(snapshot.baseline) : null);
+        snapshotCycle = cycle;
+      }
+      changed = fingerprint === null || cycleBaseline === null ? null : fingerprint !== cycleBaseline;
+      previousSnapshot = fingerprint;
+    };
     this.emit('milestone_started', { milestoneId: m.id, index, total, title: m.title });
     this.setStatus('michael', 'waiting', `Overseeing ${m.id}: ${m.title}`);
     const ctx = { milestone: m, request: this.request, completed, chatContext: this.developerContext };
@@ -347,24 +374,47 @@ export class Orchestrator {
         : { kind: 'task', from: 'michael', body: dwightMessage({ kind: 'task', ...ctx }), summary: `${m.id}: ${m.title}` });
 
     // Counts a failed cycle; returns 'skipped' when the human skips the milestone after a trip.
-    const failCycle = async (reason, next) => {
+    const failCycle = async (reason, next, failureText = reason) => {
       failed += 1;
       this.emit('cycle_result', { milestoneId: m.id, cycle, result: 'failed', failedCycles: failed, reason });
       phase = 'dwight';
       needDeliver = true;
       inbox = next;
-      if (failed < maxFailedCycles) return null;
-      this.emit('circuit_breaker', { milestoneId: m.id, state: 'tripped', failedCycles: failed, maxFailedCycles });
+      const rule = changed === false ? 'no_change' : history.length && normalizeFailure(failureText) === normalizeFailure(history.at(-1).text) ? 'repeat' : null;
+      history.push({ cycle, text: failureText, changed });
+      let verdict = 'stalled', source = rule ? 'rule' : 'michael', progressReason = rule === 'no_change' ? 'Dwight delivered no file changes' : 'The full failure repeats';
+      if (!rule) {
+        try {
+          const instanceId = `michael-${m.id}`;
+          this.chat.register(instanceId);
+          this.#deliver({ to: 'michael', from: 'michael', kind: 'progress', milestone: m.id, cycle, body: progressRequestBody(m, history), summary: `Progress check for ${m.id} cycle ${cycle}` });
+          const result = await this.#runAgent('michael', { milestone: m.id, cycle, progress: true });
+          const keywords = [...String(result.text).matchAll(/\[(PROGRESS|STALLED)\]/g)];
+          if (!result.ok || keywords.length !== 1) throw new Error(result.failure?.message ?? 'missing or ambiguous progress keyword');
+          verdict = keywords[0][1] === 'PROGRESS' ? 'progress' : 'stalled';
+          progressReason = String(result.text).replace(/\[(PROGRESS|STALLED)\]/g, '').trim() || verdict;
+        } catch (error) {
+          this.#checkAbort();
+          progressReason = `progress check failed: ${error.message}`;
+        }
+      }
+      stalledCycles = verdict === 'progress' ? 0 : stalledCycles + 1;
+      const tokens = this.milestoneTokens.get(m.id) ?? 0;
+      const progress = { milestoneId: m.id, cycle, verdict, source, rule, reason: clip(oneLine(progressReason), 300), changed, stalledCycles, maxStalledCycles, tokens, tokenBudget: milestoneTokenBudget };
+      this.emit('progress_check', progress);
+      const cause = stalledCycles >= maxStalledCycles ? 'stalled' : milestoneTokenBudget > 0 && tokens >= milestoneTokenBudget ? 'budget' : failed >= maxFailedCycles ? 'limit' : null;
+      if (!cause) return null;
+      this.emit('circuit_breaker', { milestoneId: m.id, state: 'tripped', failedCycles: failed, maxFailedCycles, cause, stalledCycles, maxStalledCycles, tokens, tokenBudget: milestoneTokenBudget });
+      const title = cause === 'stalled' ? `No progress on ${m.id}: ${progress.reason}` : cause === 'budget' ? `${m.id} used ${tokens} tokens without passing` : `${m.id} reached the cycle limit (${maxFailedCycles})`;
       const choice = await this.#askHuman({
         milestoneId: m.id,
-        title: `Circuit breaker: ${m.id} failed ${failed} cycles in a row`,
-        reason: `${failed} consecutive failed cycles on ${m.id} "${m.title}". Last: ${reason}`,
-        excerpt: gateReports ? excerpt(gateFailureInbox.body) : angelaReport ? excerpt(angelaReport) : null,
+        title,
+        reason: clip(`${clip(title, 180)}: ${summaryLine(failureText, 300)}`, 300),
+        excerpt: gateReports ? excerpt(gateFailureInbox.body) : excerpt(failureText),
         ...(gateReports ? { excerptLabel: 'Gate reports' } : {})
       });
       if (choice.decision === 'abort') throw new RunAborted(`Aborted by the human at ${m.id}`);
-      failed = 0;
-      this.emit('circuit_breaker', { milestoneId: m.id, state: 'reset', failedCycles: 0, maxFailedCycles });
+      resetWindow();
       if (choice.decision === 'skip') return 'skipped';
       if (choice.decision === 'feedback') inbox = feedbackInbox(choice.feedback);
       else inbox = retryInbox();
@@ -382,6 +432,7 @@ export class Orchestrator {
       });
       if (choice.decision === 'abort') throw new RunAborted(`Aborted by the human at ${m.id}`);
       if (choice.decision === 'skip') return 'skipped';
+      resetWindow();
       if (choice.decision === 'feedback') {
         inbox = feedbackInbox(choice.feedback, agent === 'dwight' && text ? `Your previous attempt ended with:\n\n${excerpt(text, 40, 3000)}` : null);
         phase = 'dwight';
@@ -408,6 +459,7 @@ export class Orchestrator {
             if (this.worktrees) {
               try {
                 await this.worktrees.snapshotWorktree({ agent: 'dwight', milestoneId: m.id });
+                await deliveredSnapshot();
                 const qa = this.legacyGates ? await this.worktrees.createQaWorktree({ milestoneId: m.id }) : null;
                 if (qa) {
                 this.instances.get(`angela-${m.id}`) && (this.instances.get(`angela-${m.id}`).worktree = qa.dir);
@@ -418,12 +470,20 @@ export class Orchestrator {
                 continue;
               }
             }
+            if (!this.worktrees) await deliveredSnapshot();
             dwightReport = r.text;
             stage = 0;
             phase = 'angela';
             needDeliver = true;
             inbox = { kind: 'handoff', from: 'dwight', body: handoffBody({ milestone: m, request: this.request, cycle, dwightReport, role: 'angela', definition: this.roleMap.angela }), summary: `Dwight finished ${m.id}: ${summaryLine(r.text)}` };
           } else {
+            try {
+              if (this.worktrees) await this.worktrees.snapshotWorktree({ agent: 'dwight', milestoneId: m.id });
+              await deliveredSnapshot();
+            } catch (error) {
+              if ((await pause('dwight', `Developer snapshot failed: ${error.message}`, r.text)) === 'skipped') break;
+              continue;
+            }
             const next = { kind: 'task', from: 'michael', body: dwightMessage({ kind: 'task', ...ctx, angelaReport, gateReports, note: `Your previous attempt ended without the [TASK_COMPLETE] keyword. Finish the work and end your final message with [TASK_COMPLETE] (or [BLOCKED] if you cannot continue).\n\nIts last output:\n\n${excerpt(r.text, 30, 2000)}` }), summary: `${m.id}: previous attempt had no [TASK_COMPLETE]` };
             if ((await failCycle('Dwight finished without [TASK_COMPLETE]', next)) === 'skipped') break;
           }
@@ -473,7 +533,7 @@ export class Orchestrator {
               const reason = failures.length === 1 ? `${this.names[failures[0].agent]} reported [${failures[0].keyword ?? 'MISSING_KEYWORD'}]: ${summaryLine(failures[0].text)}` : `Stage ${stage + 1} failed: ${failures.map((r) => `${this.names[r.agent]} [${r.keyword ?? 'MISSING_KEYWORD'}]`).join(', ')}`;
               const body = gateBugReport({ failures, ...ctx });
               gateFailureInbox = { kind: 'bug_report', from: failures[0].agent, body, summary: reason };
-              if ((await failCycle(reason, gateFailureInbox)) === 'skipped') break;
+              if ((await failCycle(reason, gateFailureInbox, failures.map((r) => `${this.names[r.agent]}:\n${r.text}`).join('\n\n'))) === 'skipped') break;
               continue;
             }
             stage += 1;
@@ -514,6 +574,7 @@ export class Orchestrator {
                 const choice = await this.#askHuman({ milestoneId: m.id, title: 'Integration failed', reason: err.message });
                 if (choice.decision === 'abort') throw new RunAborted('Aborted after integration conflict');
                 if (choice.decision === 'skip') break;
+                resetWindow();
                 if (choice.decision === 'feedback') { inbox = feedbackInbox(choice.feedback); phase = 'dwight'; needDeliver = true; }
                 continue;
               }
@@ -525,7 +586,7 @@ export class Orchestrator {
             angelaReport = r.text;
             const reason = r.keyword ? `Angela reported [TEST_FAILED]: ${summaryLine(r.text)}` : 'Angela finished without a status keyword';
             const next = { kind: 'bug_report', from: 'angela', body: dwightMessage({ kind: 'bug_report', ...ctx, angelaReport }), summary: `QA failed: ${summaryLine(r.text)}` };
-            if ((await failCycle(reason, next)) === 'skipped') break;
+            if ((await failCycle(reason, next, r.text)) === 'skipped') break;
           }
         }
       }
@@ -541,14 +602,14 @@ export class Orchestrator {
 
   #deliver({ to, from, kind, body, summary, milestone = null, cycle = null }) {
     this.#checkAbort();
-    const instanceId = milestone && ['dwight', ...this.workflow.gates.flat()].includes(to) ? `${to}-${milestone}` : to;
+    const instanceId = milestone && (kind === 'progress' || ['dwight', ...this.workflow.gates.flat()].includes(to)) ? `${to}-${milestone}` : to;
     if (to !== 'human' && kind !== 'report_request') body += `\n\n## Instance coordination\n\nYou are ${instanceId}. Exact recipient IDs: ${[...(this.chat?.instances.keys() ?? [])].join(', ')}. Use agent_chat for short coordination; queued is not delivered.\n`;
     const file = this.hive.deliver({ to: instanceId, from, kind, runId: this.runId, milestone, cycle, body });
     this.emit('hive_write', { from, to, file, kind, summary, instanceId, milestoneId: milestone, cycle });
   }
 
   /** Runs one agent invocation; always emits agent_finished and a final agent_status. */
-  async #runAgent(agentId, { milestone, cycle, report = false }) {
+  async #runAgent(agentId, { milestone, cycle, report = false, progress = false }) {
     this.#checkAbort();
 
     const instanceId = milestone ? `${agentId}-${milestone}` : agentId;
@@ -561,7 +622,7 @@ export class Orchestrator {
       this.instances.set(instanceId, instance);
     }
     this.prompts[instanceId] = stagePrompt(this.config, this.hive, agentId, instanceId, { ...this.promptSnapshot[agentId], text: this.promptSnapshot[agentId].text + (this.instructions?.block ? '\n\n' + this.instructions.block : '') });
-    const purpose = report ? 'report' : this.standaloneAgent ? 'conversation' : agentId === 'michael' ? 'plan' : this.gates.includes(agentId) ? 'gate' : 'work';
+    const purpose = progress ? 'progress' : report ? 'report' : this.standaloneAgent ? 'conversation' : agentId === 'michael' ? 'plan' : this.gates.includes(agentId) ? 'gate' : 'work';
     const baseKey = `${milestone ?? 'run'}/cycle-${cycle ?? 0}/${agentId}/${purpose}`;
     const attempt = (this.invocations.get(baseKey) ?? 0) + 1;
     this.invocations.set(baseKey, attempt);
@@ -603,7 +664,7 @@ export class Orchestrator {
       message: fs.readFileSync(this.hive.inboxPath(instanceId), 'utf8'),
       onMessage: (message) => this.chat.send(instanceId, message),
       agentId,
-      agentConfig: { ...this.config.agents[agentId], id: agentId, kind: this.roleMap[agentId].kind, keywords: this.roleMap[agentId].keywords },
+      agentConfig: { ...this.config.agents[agentId], id: agentId, kind: this.roleMap[agentId].kind, keywords: progress ? ['PROGRESS', 'STALLED'] : this.roleMap[agentId].keywords },
       cwd: instance.worktree,
       hive: this.hive,
       runId: this.runId,
@@ -611,9 +672,12 @@ export class Orchestrator {
       cycle,
       systemPromptFile: this.prompts[instanceId],
       extraEnv: { ...this.extraEnv, SCRANTON_CONVERSATION: this.conversation ? '1' : '0', SCRANTON_AGENT: agentId, SCRANTON_ROLE_KIND: this.roleMap[agentId].kind, SCRANTON_PASS_KEYWORD: this.roleMap[agentId].passKeyword ?? '', SCRANTON_FAIL_KEYWORD: this.roleMap[agentId].failKeyword ?? '', SCRANTON_INSTANCE_ID: instanceId, SCRANTON_RUN_ID: this.runId, SCRANTON_MILESTONE: milestone ?? '', SCRANTON_CYCLE: cycle == null ? '' : String(cycle) },
-      timeoutMs: report ? 120000 : Math.round(this.config.agentTimeoutMinutes * 60000),
+      timeoutMs: report || progress ? 120000 : Math.round(this.config.agentTimeoutMinutes * 60000),
       onLive: (record) => this.rec.live?.update(instanceId, agentId, record),
-      onUsage: (fields) => this.emit('agent_usage', { agent: agentId, instanceId, ...fields }),
+      onUsage: (fields) => {
+        if (milestone) this.milestoneTokens.set(milestone, (this.milestoneTokens.get(milestone) ?? 0) + amount(fields.usage?.input) + amount(fields.usage?.output));
+        this.emit('agent_usage', { agent: agentId, instanceId, milestoneId: milestone, ...fields });
+      },
       onTool: ({ tool, activity, detail, targetFile = null, command = null }) => {
         if (pending) { message(pending, false); pending = ''; }
         this.emit('agent_tool', { agent: agentId, instanceId, tool, detail, targetFile, command });
@@ -671,9 +735,14 @@ export class Orchestrator {
 
   /** Pause for a decision. Applies --on-breaker, then the injected hitl, then a TTY prompt, else aborts. */
   #askHuman(context) {
+    this.humanPending += 1;
+    for (const wake of this.scheduleListeners) wake();
     const question = this.humanTail.then(() => { this.#checkAbort(); return this.#askHumanNow(context); });
     this.humanTail = question.catch(() => {});
-    return question;
+    return question.finally(() => {
+      this.humanPending -= 1;
+      for (const wake of this.scheduleListeners) wake();
+    });
   }
 
   async #askHumanNow({ milestoneId, title, reason, excerpt: shown = null, excerptLabel, feedbackTarget = 'Dwight', skipLabel }) {

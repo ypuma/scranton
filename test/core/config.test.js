@@ -9,7 +9,9 @@ const base = { cwd: path.resolve('some', 'project'), platform: 'linux', hasBash:
 
 test('defaults', () => {
   const c = loadConfig({ ...base, env: {}, fileConfig: {} });
-  assert.equal(c.maxFailedCycles, 3);
+  assert.equal(c.maxFailedCycles, 12);
+  assert.equal(c.maxStalledCycles, 2);
+  assert.equal(c.milestoneTokenBudget, 500000);
   assert.equal(c.agentTimeoutMinutes, 20);
   assert.equal(c.workspace, path.join(base.cwd, 'workspace'));
   assert.equal(c.hiveDir, path.join(base.cwd, 'hive'));
@@ -245,4 +247,20 @@ test('loadConfig rejects invalid approval flags with the CLI diagnostics', () =>
     assert.throws(() => load({ approvalTimeout }), { name: 'ConfigError', message: '--approval-timeout must be an integer from 1 to 86400 seconds' });
   }
   for (const approvalTimeout of ['1', 1, '86400', 86400]) assert.equal(load({ approvalTimeout }).approvals.timeoutSeconds, Number(approvalTimeout));
+});
+
+test('adaptive cycle keys validate and follow flags > env > file > defaults', () => {
+  const load = (extra = {}) => loadConfig({ ...base, env: {}, fileConfig: {}, ...extra });
+  const fileConfig = { maxStalledCycles: 5, milestoneTokenBudget: 1000 };
+  const env = { SCRANTON_MAX_STALLED_CYCLES: '4', SCRANTON_MILESTONE_TOKEN_BUDGET: '2000' };
+  assert.equal(load({ fileConfig }).maxStalledCycles, 5);
+  assert.equal(load({ fileConfig }).milestoneTokenBudget, 1000);
+  assert.equal(load({ fileConfig, env }).maxStalledCycles, 4);
+  assert.equal(load({ fileConfig, env }).milestoneTokenBudget, 2000);
+  const flagged = load({ fileConfig, env, flags: { maxStalled: '3', milestoneTokens: '0' } });
+  assert.equal(flagged.maxStalledCycles, 3); assert.equal(flagged.milestoneTokenBudget, 0);
+  for (const [key, values] of [['maxStalledCycles', [0, 11, 1.5, 'bad', true, [], {}]], ['milestoneTokenBudget', [-1, 20000001, 1.5, 'bad', true, [], {}]], ['maxFailedCycles', [51]]]) {
+    for (const value of values) assert.throws(() => load({ fileConfig: { [key]: value } }), new RegExp(key));
+  }
+  assert.equal(load({ flags: { maxCycles: '50', maxStalled: '10', milestoneTokens: '20000000' } }).milestoneTokenBudget, 20000000);
 });

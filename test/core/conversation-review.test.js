@@ -59,7 +59,9 @@ test('staged Michael system prompt overrides plan-only rules for builtin and cus
       assert.match(staged, /## Conversation mode/, 'Michael receives conversation system override');
       assert.match(staged, /Required answer/); assert.match(staged, /overrides any earlier rule/);
       for (const keyword of ['PLAN_READY', 'ANSWER_READY', 'REPORT_READY']) assert.ok(staged.includes(`[${keyword}]`));
-    } else assert.equal(staged, original + '\n', 'off-mode staged prompt bytes unchanged');
+    } else assert.doesNotMatch(staged, /## Conversation mode/);
+    assert.ok(staged.startsWith(original + '\n\n## Progress checks\n'), 'run-only progress instructions follow the unchanged source');
+    assert.equal((staged.match(/## Progress checks/g) ?? []).length, 1);
     assert.equal(eventsAt(f.hive)[0].prompts.michael.sha256, createHash('sha256').update(staged.trimEnd()).digest('hex'), 'audit commits actual staged prompt');
     assert.equal(resolvePrompt(f.config, 'michael').text, original, 'source prompt is never edited');
   }

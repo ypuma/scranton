@@ -130,12 +130,13 @@ export async function createAgentScript(value, options) {
   const tool = (name, args) => turns.push({ text: `Using ${name}.`, toolCalls: [{ id: `scenario-${++call}`, name, arguments: args }] });
   let answer;
   if (role === 'michael') {
-    if (conversation && kind === 'report_request') answer = settings.reportFail === 'missing' ? 'Report without a keyword.' : 'Completed the requested work. The milestone checks passed.\n[REPORT_READY]';
+    if (kind === 'progress') answer = settings.progressAnswer ?? (scenario === 'breaker' || scenario === 'security_issues' ? '[STALLED]\nThe underlying problem keeps returning.' : '[PROGRESS]\nThe failure has narrowed.');
+    else if (conversation && kind === 'report_request') answer = settings.reportFail === 'missing' ? 'Report without a keyword.' : 'Completed the requested work. The milestone checks passed.\n[REPORT_READY]';
     else if (conversation && scenario === 'question') answer = 'The Team orchestrator asks Michael to plan the request, Dwight to implement each milestone, and Angela to verify it. Failed checks return to Dwight; repeated failures pause for a human.\n[ANSWER_READY]';
     else answer = settings.plan === 'invalid' ? 'I could not decide how to split this up.\n[PLAN_READY]' : `Here is the plan: three small milestones.\n\n\`\`\`json\n${JSON.stringify(PLAN(section('Request') || 'the request'), null, 2)}\n\`\`\`\n\n[PLAN_READY]`;
-    if (!conversation || kind !== 'report_request') tool('ls', { path: '.' });
+    if (kind !== 'progress' && (!conversation || kind !== 'report_request')) tool('ls', { path: '.' });
   } else if (role === 'angela' || role === 'oscar' || role === 'hank' || options.agentConfig?.kind === 'gate' || options.env.SCRANTON_ROLE_KIND === 'gate') {
-    const failed = scenario === 'flaky' && milestone === 'm2' && cycle === 1 || scenario === 'breaker' && role === 'angela' && milestone === 'm2' && !/human feedback/i.test(inbox.body) || role !== 'hank' && role !== 'angela' && scenario === 'changes_once' && cycle === 1 || role === 'hank' && scenario === 'security_issues';
+    const failed = scenario === 'progress' && cycle < 5 || scenario === 'flaky' && milestone === 'm2' && cycle === 1 || scenario === 'breaker' && role === 'angela' && milestone === 'm2' && !/human feedback/i.test(inbox.body) || role !== 'hank' && role !== 'angela' && scenario === 'changes_once' && cycle === 1 || role === 'hank' && scenario === 'security_issues';
     const pass = options.env.SCRANTON_PASS_KEYWORD || ({ angela: 'TEST_PASSED', oscar: 'REVIEW_APPROVED', hank: 'SECURITY_PASSED' }[role]) || options.agentConfig?.keywords?.[0];
     const fail = options.env.SCRANTON_FAIL_KEYWORD || ({ angela: 'TEST_FAILED', oscar: 'CHANGES_REQUESTED', hank: 'SECURITY_ISSUES' }[role]) || options.agentConfig?.keywords?.[1];
     if (role === 'angela') { tool('ls', { path: '.' }); tool('read', { path: 'todo.js' }); tool('bash', { command: 'node --test' }); }

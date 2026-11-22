@@ -28,7 +28,7 @@ test('unused pinned Hank prompt cannot break legacy runs or change their event s
   const result = await run.run('legacy');
   assert.equal(result.status, 'success', 'unused pinned Hank prompt must not fail a legacy run');
   const events = readEvents(config.hiveDir);
-  assert.deepEqual(Object.keys(events[0].prompts), ['dwight', 'angela']);
+  assert.deepEqual(Object.keys(events[0].prompts), ['michael', 'dwight', 'angela']);
   assert.deepEqual(events.map((e) => [e.type, e.agent, e.status, e.kind]), sequence);
   assert.equal(fs.existsSync(path.join(config.hiveDir, 'hank', 'system.md')), false);
 });

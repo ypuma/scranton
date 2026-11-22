@@ -93,13 +93,13 @@ test('registry pack renders notes, memory, siblings, earlier and recent in order
   assert.ok(offsets.every((n, i) => n >= 0 && (!i || n > offsets[i - 1])), JSON.stringify(offsets));
 });
 
-// Regression anchors: contextVersion === 2 skips memory read/merge but still applies dreamingCap; v1 retains teamDreamingContext.
-for (const version of [1, 2]) test(`registry v${version} file keeps its transport semantics and Dreaming cycle cap`, async (t) => {
+// v2 keeps its existing pack; v1 retains advisory memory, but neither applies learned Team cycle caps.
+for (const version of [1, 2]) test(`registry v${version} file keeps transport semantics without a learned Team cycle cap`, async (t) => {
   const f = fixture(t); f.mockRun(); const memory = await f.memory(); assert.ok(memory);
   const input = { v: version, text: 'Already built pack\nMEMORY-ONCE', ...(version === 2 ? { developer: 'Existing brief' } : {}) };
   const file = f.write(path.join(f.dir, 'transport.json'), input);
   ok(await f.run(['--chat', f.chat.id, '--thread-context', file]));
-  assert.equal(f.calls[0].ceiling, 1);
+  assert.equal(f.calls[0].ceiling, 12);
   assert.equal(f.calls[0].text, version === 2 ? input.text : teamDreamingContext(input.text, memory));
   assert.equal(f.calls[0].developer, version === 2 ? input.developer : '');
 });

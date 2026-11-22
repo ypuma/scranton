@@ -22,7 +22,7 @@ import { AGENT_IDS } from './state.js';
 import { isLoopbackAddress } from './network.js';
 import { createAuthService } from './auth.js';
 import os from 'node:os';
-import { dreamingCap, teamDreamingCohort, teamDreamingContext } from './dreaming-sources.js';
+import { teamDreamingContext } from './dreaming-sources.js';
 import { createProjectRegistry, derivedChatTitle } from './projects.js';
 import { resolveReflectionModel } from './dreaming-reflection-sources.js';
 import { createContext } from './context/index.js';
@@ -34,7 +34,7 @@ import { canonicalDirectory, checkScopedPath } from './context/paths.js';
 import { sameFileIdentity } from './context/file-identity.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question'];
+export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question', 'progress'];
 const POLICIES = ['ask', 'abort', 'skip', 'hive'];
 
 export const HELP = `Project Scranton - durable multi-agent harness
@@ -103,7 +103,9 @@ Options:
                        Otherwise literal text, minus one final LF/CRLF/CR; nonblank, max 32768 chars / 262144 bytes
   --config FILE        Config file (default ./scranton.config.json)
   --no-plan            run: skip Michael's planning, use one milestone for the whole request
-  --max-cycles N       Failed test cycles before the circuit breaker trips (default 3)
+  --max-cycles N       Cycle limit (safety), 1..50 (default 12)
+  --max-stalled N      Stop after N cycles without progress, 1..10 (default 2)
+  --milestone-tokens N Token budget per milestone, 0 = off (default 500000)
   --on-breaker P       ask | abort | skip | hive: what to do when a human is needed (default ask;
                        without a terminal "ask" aborts)
   --control            visualize: enable run, answer and stop routes
@@ -162,6 +164,8 @@ const OPTIONS = {
   'no-conversation': { type: 'boolean' },
   'no-plan': { type: 'boolean' },
   'max-cycles': { type: 'string' },
+  'max-stalled': { type: 'string' },
+  'milestone-tokens': { type: 'string' },
   'on-breaker': { type: 'string' },
   'timeout-min': { type: 'string' },
   scenario: { type: 'string' },
@@ -198,6 +202,8 @@ function toFlags(values) {
     hive: values.hive,
     config: values.config,
     maxCycles: values['max-cycles'],
+    maxStalled: values['max-stalled'],
+    milestoneTokens: values['milestone-tokens'],
     onBreaker: values['on-breaker'],
     timeoutMin: values['timeout-min']
   };
@@ -814,13 +820,12 @@ async function cmdRun(request, values, config, { stdout, stderr, stdin, env, cwd
     try {
       const dream = registry.dreaming(project.id);
       try { Promise.resolve(dream.cancelReflection?.()).catch(() => {}); } catch {}
-      let nextMemory, maxFailedCycles;
+      let nextMemory;
       try {
         nextMemory = contextVersion >= 2 ? '' : dream.context();
-        maxFailedCycles = dreamingCap(dream, 'team', config.maxFailedCycles, teamDreamingCohort(config));
+        // Progress checks, not learned fixed cycle caps, bound Team retries.
       } finally { await dream.close(); }
       memory = nextMemory;
-      config = { ...config, maxFailedCycles };
     } catch { /* Optional dreaming must not replace context or the configured ceiling on failure. */ }
     if (!values['thread-context']) {
       const recipients = await teamRecipients(config);

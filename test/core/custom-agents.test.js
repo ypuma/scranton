@@ -74,7 +74,7 @@ test('CLI custom gates pass, retry with named combined report, and saved models 
   await exec(process.execPath, [path.resolve('bin/scranton.js'), 'run', 'Test gates', '--trusted-host', '--no-plan', '--gates', 'oscar+seclint,angela', '--workspace', config.workspace, '--hive', config.hiveDir], { cwd: dir, env: isolationTestEnv({ SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'changes_once', SCRANTON_FAKE_LOG: log }), timeout: 30000 });
   const es = events(config), started = es[0];
   assert.equal(es.at(-1).status, 'success');
-  assert.deepEqual(started.roles.map((r) => r.id), ['dwight', 'oscar', 'seclint', 'angela']);
+  assert.deepEqual(started.roles.map((r) => r.id), ['michael', 'dwight', 'oscar', 'seclint', 'angela']);
   assert.match(started.roles.find((r) => r.id === 'seclint').definitionHash, /^[a-f0-9]{64}$/); assert.ok(started.prompts.seclint);
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(config.hiveDir, 'state.json'))).agents), ['michael', 'dwight', 'oscar', 'hank', 'angela', 'seclint']);
   assert.match(fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'inbox.md'), 'utf8'), /Security Lint's Static Auditor report/);

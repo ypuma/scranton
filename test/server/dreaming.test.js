@@ -77,7 +77,7 @@ test('single-hive Dreaming is explicitly unsupported', async (t) => {
   const res = await fetch(srv.url + '/api/projects/default/dreaming', { headers: { 'X-Scranton-Client': '1' } }); assert.equal(res.status, 409); assert.equal((await res.json()).error, 'single_mode');
 });
 
-test('Team next-run cap and bounded advisory context reach argv without changing gates or overrides', async (t) => {
+test('Team keeps the configured safety cap and bounded advisory context without consulting learned caps', async (t) => {
   const f = fixture(t); let args, calls = [];
   const child = Object.assign(new EventEmitter(), { pid: 123 });
   const control = createControl({ hive: path.join(f.dir, 'hive'), workspace: f.workspace, prepareThread: true, auth: { close() {} },
@@ -88,7 +88,7 @@ test('Team next-run cap and bounded advisory context reach argv without changing
   try {
     const handled = control.handle(req, res, '/api/runs');
     req.end(JSON.stringify({ request: 'Current task', maxCycles: 2, trustedHost: true })); await handled;
-    assert.ok(args, JSON.stringify(response)); assert.equal(args[args.indexOf('--max-cycles') + 1], '1'); assert.equal(calls[0][1], 2); assert.match(calls[0][2], /^[a-f0-9]{64}$/);
+    assert.ok(args, JSON.stringify(response)); assert.equal(args[args.indexOf('--max-cycles') + 1], '2'); assert.deepEqual(calls, []);
     assert.equal(args.at(-1), 'Current task');
     const history = JSON.parse(fs.readFileSync(args[args.indexOf('--thread-context') + 1])); assert.match(history.text, /advisory historical data/); assert.match(history.text, /Historical structural memory/); assert.ok(history.text.length <= 8000);
   } finally { child.emit('close', 0); await control.close(); }
@@ -149,7 +149,7 @@ test('Dreaming rejects rebinding Host using the actual HTTP transport header', a
 test('optional Team Dreaming failures never block starts or leak diagnostics or partially apply caps', async (t) => {
   const f = fixture(t);
   f.write(path.join(f.dataDir, 'projects', f.project.id, 'dreaming/state.json'), '{PRIVATE-SECRET');
-  for (const fault of ['factory', 'context', 'policy', 'authority']) {
+  for (const fault of ['factory', 'context', 'authority']) {
     let args;
     const child = Object.assign(new EventEmitter(), { pid: 123 });
     const boom = () => { throw Error('PRIVATE-SECRET-DO-NOT-EXPOSE'); };

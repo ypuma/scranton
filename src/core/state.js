@@ -30,7 +30,7 @@ export function initialState() {
     execution: null,
     cycle: 0,
     failedCycles: 0,
-    maxFailedCycles: 3,
+    maxFailedCycles: 12,
     breaker: 'closed',
     agents: emptyAgents(now)
   };
@@ -54,11 +54,14 @@ export function reduce(state, event) {
         execution: event.execution ?? null,
         workspace: event.workspace,
         maxFailedCycles: event.maxFailedCycles,
+        maxStalledCycles: event.maxStalledCycles,
+        milestoneTokenBudget: event.milestoneTokenBudget,
         lastSeq: event.seq,
         updatedAt: event.ts,
         agents: emptyAgents(event.ts)
       });
       delete s.reply;
+      delete s.progress;
       s.roles = structuredClone(event.roles ?? []);
       for (const role of s.roles) if (!s.agents[role.id]) s.agents[role.id] = structuredClone(s.agents.angela);
       break;
@@ -94,6 +97,11 @@ export function reduce(state, event) {
       break;
     }
     case 'agent_usage': {
+      const milestone = s.milestones.find((m) => m.id === event.milestoneId);
+      if (milestone) {
+        milestone.tokens = (milestone.tokens ?? 0) + amount(event.usage?.input) + amount(event.usage?.output);
+        if (milestone.progress) milestone.progress.tokens = milestone.tokens;
+      }
       const id = event.instanceId ?? event.agent;
       s.usage ??= emptyUsage(); s.usagePending ??= {};
       const pending = s.usagePending[id] ??= { input: 0, output: 0, cost: 0 };
@@ -145,7 +153,23 @@ export function reduce(state, event) {
       { const m = s.milestones.find((m) => m.id === event.milestoneId); if (m) Object.assign(m, { cycle: event.cycle, failedCycles: event.failedCycles }); }
       s.failedCycles = event.failedCycles;
       break;
+    case 'progress_check': {
+      const m = s.milestones.find((m) => m.id === event.milestoneId);
+      const progress = Object.fromEntries(['cycle', 'verdict', 'source', 'rule', 'reason', 'changed', 'stalledCycles', 'maxStalledCycles', 'tokens', 'tokenBudget'].map((key) => [key, event[key]]));
+      if (m) Object.assign(m, { progress, stalledCycles: event.stalledCycles, tokens: event.tokens });
+      s.progress = progress;
+      break;
+    }
     case 'circuit_breaker':
+      { const m = s.milestones.find((m) => m.id === event.milestoneId);
+        if (m) {
+          m.breaker = event.state === 'tripped' ? 'tripped' : 'closed';
+          m.failedCycles = event.failedCycles;
+          if (event.stalledCycles !== undefined) Object.assign(m, { stalledCycles: event.stalledCycles, tokens: event.tokens });
+          if (event.state === 'reset') { delete m.progress; if (s.currentMilestoneId === m.id) delete s.progress; }
+          else m.breakerCause = event.cause;
+        }
+      }
       s.failedCycles = event.failedCycles;
       s.breaker = event.state === 'tripped' ? 'tripped' : 'closed';
       if (event.state === 'tripped') s.status = 'paused';
@@ -154,6 +178,11 @@ export function reduce(state, event) {
       s.status = 'paused';
       break;
     case 'hitl_response':
+      if (['feedback', 'retry'].includes(event.decision)) {
+        const m = s.milestones.find((m) => m.id === event.milestoneId);
+        if (m) { Object.assign(m, { failedCycles: 0, stalledCycles: 0, tokens: 0 }); delete m.progress; }
+        if (s.currentMilestoneId === event.milestoneId) delete s.progress;
+      }
       if (event.decision !== 'abort') s.status = 'running';
       break;
     case 'milestone_finished':

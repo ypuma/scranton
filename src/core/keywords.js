@@ -1,6 +1,6 @@
 /** Status keywords each agent may end its final message with (written in brackets in the text). */
 export const KEYWORDS = {
-  michael: ['PLAN_READY'],
+  michael: ['PLAN_READY', 'PROGRESS', 'STALLED'],
   dwight: ['TASK_COMPLETE', 'BLOCKED'],
   oscar: ['REVIEW_APPROVED', 'CHANGES_REQUESTED', 'BLOCKED'],
   hank: ['SECURITY_PASSED', 'SECURITY_ISSUES', 'BLOCKED'],

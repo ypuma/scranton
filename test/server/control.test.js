@@ -62,7 +62,7 @@ test('control request hardening', async (t) => {
 
 test('run and HITL validation, no pending stop/answer conflicts', async (t) => {
   const { srv } = await setup(t);
-  for (const body of [{}, { request: '' }, { request: 'x'.repeat(32769) }, { request: 'x', workspace: 'relative' }, { demo: { scenario: 'no' } }, { demo: { scenario: 'happy', delayMs: 5001 } }, { request: 'x', maxCycles: 11 }, { request: 'x', noPlan: 'yes' }]) {
+  for (const body of [{}, { request: '' }, { request: 'x'.repeat(32769) }, { request: 'x', workspace: 'relative' }, { demo: { scenario: 'no' } }, { demo: { scenario: 'happy', delayMs: 5001 } }, { request: 'x', maxCycles: 51 }, { request: 'x', noPlan: 'yes' }]) {
     assert.equal((await request(srv, '/api/runs', body)).status, 400);
   }
   assert.equal((await request(srv, '/api/hitl', { decision: 'skip' })).status, 409);
@@ -328,4 +328,18 @@ test('Team control defaults to Scranton without silently overriding an explicit 
   assert.equal((await request(srv, '/api/runs', { request: 'explicit docker', sandbox: 'docker' })).status, 202);
   assert.equal(args[args.indexOf('--sandbox') + 1], 'docker');
   assert.ok(!args.includes('--trusted-host'));
+});
+
+test('adaptive API fields reject invalid values and forward boundary values', async t => {
+  let args;
+  const child = Object.assign(new EventEmitter(), { pid: 123 });
+  t.after(() => child.emit('close', 0));
+  const { srv } = await setup(t, { runner: (_exe, argv) => { args = argv; return child; } });
+  for (const [key, values] of [['maxCycles', [0, 51, 1.5, '12']], ['maxStalledCycles', [0, 11, 1.5, '2', null]], ['milestoneTokenBudget', [-1, 20000001, 1.5, '500000', null]]]) {
+    for (const value of values) assert.equal((await request(srv, '/api/runs', { request: 'test', [key]: value })).status, 400, `${key}: ${value}`);
+  }
+  assert.equal((await request(srv, '/api/runs', { request: 'test', maxCycles: 50, maxStalledCycles: 10, milestoneTokenBudget: 0 })).status, 202);
+  assert.equal(args[args.indexOf('--max-cycles') + 1], '50');
+  assert.equal(args[args.indexOf('--max-stalled') + 1], '10');
+  assert.equal(args[args.indexOf('--milestone-tokens') + 1], '0');
 });

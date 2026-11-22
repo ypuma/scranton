@@ -14,7 +14,7 @@ const heights = [3, 8, 12, 24, 40, 50];
 const cases = [
   ['default', [], ['michael', 'dwight', 'angela']],
   ['multi-stage', ['--gates', 'oscar+hank,angela'], ['michael', 'dwight', 'oscar', 'hank', 'angela']],
-  ['no-plan', ['--no-plan'], ['dwight', 'angela']],
+  ['no-plan', ['--no-plan'], ['michael', 'dwight', 'angela']],
   ['custom', ['--gates', 'seclint,angela'], ['michael', 'dwight', 'seclint', 'angela']],
 ];
 

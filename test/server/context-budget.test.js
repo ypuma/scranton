@@ -47,7 +47,7 @@ async function until(fn, predicate) {
 test('budget HTTP: declared and chunked bodies accept 262144 bytes, reject 262145 in control and registry', async (t) => {
   const f = await fixture(t);
   for (const route of ['/api/runs', f.contextRoute + '/notes']) for (const chunked of [false, true]) for (const size of [262144, 262145]) {
-    const body = JSON.stringify(route.endsWith('/notes') ? { text: '' } : { request: 'valid', maxCycles: 11 });
+    const body = JSON.stringify(route.endsWith('/notes') ? { text: '' } : { request: 'valid', maxCycles: 51 });
     const payload = body + ' '.repeat(size - Buffer.byteLength(body));
     const result = await new Promise((resolve, reject) => {
       const req = http.request(f.server.url + route, { method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json', ...(chunked ? { 'Transfer-Encoding': 'chunked' } : { 'Content-Length': size }) } }, (res) => { let text = ''; res.on('data', (d) => { text += d; }); res.on('end', () => resolve({ status: res.statusCode, value: JSON.parse(text) })); });

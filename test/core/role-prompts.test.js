@@ -88,6 +88,21 @@ for (const role of ['oscar', 'hank']) {
   });
 }
 
+test('Michael warns only about keywords absent from the run-effective prompt', (t) => {
+  const scratch = path.join(root, '.scratch', 'prompt-fix', 'role-prompts');
+  fs.mkdirSync(scratch, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(scratch, 'michael-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const config = loadConfig({ cwd: dir, env: {}, hasBash: true, fileConfig: {} });
+  assert.deepEqual(resolvePrompt(config, 'michael').missingKeywords, []);
+  const customDir = config.promptsDir ?? path.join(config.hiveDir, 'prompts');
+  fs.mkdirSync(customDir, { recursive: true });
+  fs.writeFileSync(path.join(customDir, 'michael.md'), 'Plan the requested work.');
+  const custom = resolvePrompt(config, 'michael');
+  assert.equal(custom.source, 'custom');
+  assert.deepEqual(custom.missingKeywords, ['PLAN_READY']);
+});
+
 test('Hank audits every security category with severity-based verdicts', () => {
   const text = prompts.hank;
   for (const category of [/command, SQL and template injection/i, /path traversal/i, /authentication and authorization \(authn\/authz\)/i, /secrets in code or logs/i, /unsafe deserialization/i, /eval or command execution/i, /SSRF/, /new or unsafe dependencies/i, /insecure defaults/i, /fail-open handling/i]) {

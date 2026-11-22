@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { DEFAULT_MAX_FAILED_CYCLES, DEFAULT_MAX_STALLED_CYCLES, DEFAULT_MILESTONE_TOKEN_BUDGET } from './config.js';
 import path from 'node:path';
 import { readRunLease, readRunHeartbeat, runOwnerStatus, releaseRunLease, cliRecoveryStatus } from './run-lease.js';
 import { EventRecorder } from './events.js';
@@ -73,7 +74,7 @@ async function recover(hive, runId, summary, dockerDependencies, automatic, loca
     const currentOwner = runOwnerStatus(hive, lease);
     if (readRunLease(hive)?.token !== lease.token || currentOwner === 'alive' || automatic && (currentOwner !== 'gone' || local && !cliRecoveryStatus(hive, readRunLease(hive)).automatic)) throw conflict('Run ownership changed during recovery');
     rejectResponse(hive, () => {});
-    if (!recorder.seq) recorder.emit('run_started', { request: lease.request ?? '', workspace: lease.workspace ?? null, maxFailedCycles: 3, roles: [] });
+    if (!recorder.seq) recorder.emit('run_started', { request: lease.request ?? '', workspace: lease.workspace ?? null, maxFailedCycles: DEFAULT_MAX_FAILED_CYCLES, maxStalledCycles: DEFAULT_MAX_STALLED_CYCLES, milestoneTokenBudget: DEFAULT_MILESTONE_TOKEN_BUDGET, roles: [] });
     if (!['finished', 'aborted', 'failed'].includes(recorder.state.status)) {
       const outcome = [summary, ...warnings].join('\n');
       if (state.execution?.conversation === true && !state.reply) {

@@ -299,3 +299,25 @@ test('unknown types, missing fields and hostile text do not crash or overflow', 
   assert.doesNotThrow(() => renderDashboard(state, 'not an array', { width: 80, height: 24 }));
   assert.doesNotThrow(() => renderDashboard(undefined, undefined));
 });
+
+test('adaptive progress replaces the legacy meter and renders cause-specific titles', async () => {
+  const f = await fixture('tripped');
+  const progress = { milestoneId: 'm2', cycle: 5, verdict: 'stalled', source: 'rule', rule: 'repeat', reason: 'The full failure repeats', changed: true, stalledCycles: 2, maxStalledCycles: 2, tokens: 4500, tokenBudget: 500000 };
+  const state = { ...f.state, maxFailedCycles: 12, maxStalledCycles: 2, milestoneTokenBudget: 500000,
+    milestones: f.state.milestones.map(m => m.id === 'm2' ? { ...m, progress } : m) };
+  for (const [cause, title] of [['stalled', 'No progress on m2: The full failure repeats'], ['budget', 'm2 used 4500 tokens without passing'], ['limit', 'm2 reached the cycle limit (12)']]) {
+    const events = [...f.events, { ...progress, type: 'progress_check', runId: state.runId, seq: 500 }, { type: 'circuit_breaker', state: 'tripped', milestoneId: 'm2', cause, maxFailedCycles: 12, tokens: 4500, seq: 501 }];
+    const out = render({ ...f, state, events });
+    assert.match(out, /stalled 2\/2/); assert.match(out, /4\.5k\/500\.0k tok/);
+    assert.match(out, /Cycle 5: stalled - The full failure repeats/);
+    assert.ok(out.includes(title));
+    assert.doesNotMatch(out, /Breaker .*3\/3/);
+  }
+});
+
+test('adaptive current-milestone lookup tolerates malformed milestone collections', async () => {
+  const f = await fixture('running');
+  for (const milestones of [null, 'not an array', {}, [null]]) {
+    assert.doesNotThrow(() => render({ ...f, state: { ...f.state, milestones, maxStalledCycles: 2 } }));
+  }
+});

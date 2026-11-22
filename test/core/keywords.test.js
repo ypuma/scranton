@@ -31,7 +31,7 @@ test('no keyword, empty and missing text give null', () => {
 });
 
 test('each agent only knows its own keywords', () => {
-  assert.deepEqual(KEYWORDS.michael, ['PLAN_READY']);
+  assert.deepEqual(KEYWORDS.michael, ['PLAN_READY', 'PROGRESS', 'STALLED']);
   assert.deepEqual(KEYWORDS.dwight, ['TASK_COMPLETE', 'BLOCKED']);
   assert.deepEqual(KEYWORDS.angela, ['TEST_PASSED', 'TEST_FAILED', 'BLOCKED']);
 });

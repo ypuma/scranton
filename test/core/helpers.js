@@ -33,9 +33,9 @@ export function readLog(file) {
 export function fakeConfig(dir, options = {}) { return scriptedConfig(dir, options); }
 
 /** Own-runtime config for migration tests; set SCRANTON_FAKE_SCENARIO on the runner/child. */
-export function scriptedConfig(dir, { maxFailedCycles = 3, timeoutMin } = {}) {
+export function scriptedConfig(dir, { maxFailedCycles = 3, maxStalledCycles = 2, milestoneTokenBudget = 500000, timeoutMin } = {}) {
   const config = loadConfig({ cwd: dir, env: {}, hasBash: true, fileConfig: {
-    workspace: path.join(dir, 'workspace'), hiveDir: path.join(dir, 'hive'), maxFailedCycles,
+    workspace: path.join(dir, 'workspace'), hiveDir: path.join(dir, 'hive'), maxFailedCycles, maxStalledCycles, milestoneTokenBudget,
     ...(timeoutMin ? { agentTimeoutMinutes: timeoutMin } : {}),
     execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } },
   } });
@@ -97,7 +97,7 @@ const EVENT_FIELDS = {
     from: (v) => PARTICIPANT(v) || /^(dwight|angela)-m[1-7]$/.test(v),
     to: (v) => PARTICIPANT(v) || /^(dwight|angela)-m[1-7]$/.test(v),
     file: (v) => str(v) && !v.includes('\\') && !path.isAbsolute(v),
-    kind: oneOf('plan_request', 'task', 'handoff', 'bug_report', 'feedback', 'hitl'),
+    kind: oneOf('plan_request', 'progress', 'task', 'handoff', 'bug_report', 'feedback', 'hitl'),
     summary: (v) => str(v) && v.length <= 140
   },
   agent_status: {
@@ -116,6 +116,7 @@ const EVENT_FIELDS = {
     durationMs: num
   },
   cycle_result: { milestoneId: str, cycle: num, result: oneOf('passed', 'failed'), failedCycles: num, reason: str },
+  progress_check: { milestoneId: str, cycle: num, verdict: oneOf('progress', 'stalled'), source: oneOf('rule', 'michael'), rule: nullable(oneOf('no_change', 'repeat')), reason: (v) => str(v) && v.length <= 300, changed: (v) => typeof v === 'boolean', stalledCycles: num, maxStalledCycles: num, tokens: num, tokenBudget: num },
   circuit_breaker: { milestoneId: str, state: oneOf('tripped', 'reset'), failedCycles: num, maxFailedCycles: num },
   hitl_request: { milestoneId: nullable(str), reason: str, options: (v) => Array.isArray(v) && v.every(str) },
   hitl_response: { milestoneId: nullable(str), decision: oneOf('feedback', 'retry', 'skip', 'abort') },

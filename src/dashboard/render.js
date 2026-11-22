@@ -248,6 +248,7 @@ function normalizeState(state, events) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
   if (!state.runId || state.status === 'idle' || !has(RUN_BADGE, state.status)) return null;
   const agents = state.agents && typeof state.agents === 'object' ? state.agents : {};
+  const current = (Array.isArray(state.milestones) ? state.milestones : []).find((m) => m?.id === state.currentMilestoneId);
   const milestones = (Array.isArray(state.milestones) ? state.milestones : [])
     .filter((m) => m && typeof m === 'object')
     .map((m) => ({
@@ -294,7 +295,12 @@ function normalizeState(state, events) {
     reply: normalizeReply(state.reply) || normalizeReply(lastEvent(events, (e) => e.type === 'run_reply' && e.runId === state.runId)),
     cycle: num(state.cycle),
     failedCycles: num(state.failedCycles),
-    maxFailedCycles: num(state.maxFailedCycles, 3),
+    maxFailedCycles: num(state.maxFailedCycles, 12),
+    progress: current?.progress,
+    tokens: current?.tokens ?? 0,
+    maxStalledCycles: num(state.maxStalledCycles, 2),
+    milestoneTokenBudget: num(state.milestoneTokenBudget, 500000),
+    adaptive: Number.isFinite(state.maxStalledCycles),
     breaker: state.breaker === 'tripped' ? 'tripped' : 'closed',
     agents: Object.fromEntries(roles.map((a) => [a.id, withLanes(normalizeAgent(agents[a.id]), a.id, instances)])),
   };
@@ -351,6 +357,10 @@ function brandLine(st, info, ctx) {
 }
 
 function breakerMeter(st, ctx) {
+  if (st.adaptive) {
+    const p = st.progress;
+    return [[`stalled ${num(p?.stalledCycles)}/${num(p?.maxStalledCycles, st.maxStalledCycles)}  ${formatTokens(p?.tokens ?? st.tokens)}/${(p?.tokenBudget ?? st.milestoneTokenBudget) === 0 ? 'off' : formatTokens(p?.tokenBudget ?? st.milestoneTokenBudget)} tok`, st.breaker === 'tripped' ? LOUD : MUTED]];
+  }
   const g = ctx.g;
   const max = Math.max(0, st.maxFailedCycles);
   const failed = Math.max(0, Math.min(st.failedCycles, max || st.failedCycles));
@@ -398,7 +408,7 @@ function milestoneLine(st, ctx) {
     left = [['Milestones ', MUTED], [`${active.length} in parallel`, 'bold'], [': ', MUTED],
       ...active.flatMap((m, i) => [...(i ? [[` ${ctx.g.dot} `, FAINT]] : []), [m.id, 'bold'], [' ' + m.title, null]])];
     const meter = breakerMeter(st, ctx);
-    const full = [['Breaker ', MUTED], ...meter];
+    const full = [[st.adaptive ? 'Progress ' : 'Breaker ', MUTED], ...meter];
     return spread(left, ctx.cw - segWidth(full) >= 40 ? full : meter, ctx.cw, ctx.ell);
   }
   if (index >= 0) {
@@ -411,7 +421,7 @@ function milestoneLine(st, ctx) {
   }
   const meter = breakerMeter(st, ctx);
   const cycle = index >= 0 && st.cycle > 0 ? [['Cycle ', MUTED], [String(st.cycle), 'bold'], ['   ', null]] : [];
-  const full = [...cycle, ['Breaker ', MUTED], ...meter];
+  const full = [...cycle, [st.adaptive ? 'Progress ' : 'Breaker ', MUTED], ...meter];
   const right = ctx.cw - segWidth(full) >= 24 ? full : meter;
   return spread(left, right, ctx.cw, ctx.ell);
 }
@@ -419,6 +429,7 @@ function milestoneLine(st, ctx) {
 function alertLines(st, events, ctx) {
   const g = ctx.g;
   const lines = [];
+  if (st.progress && !ENDED.has(st.status)) lines.push(fitSegments([[`Cycle ${st.progress.cycle}: ${sanitize(st.progress.verdict)} - ${sanitize(st.progress.reason)}`, MUTED]], ctx.cw, ctx.ell));
   const loud = (text, glyph = g.alert) => (ctx.color
     ? padSegments([[` ${glyph}  ${text}`, LOUD]], ctx.cw, LOUD)
     : [[`${ASCII.alert} ${text} ${ASCII.alert}`, null]]);
@@ -446,7 +457,14 @@ function alertLines(st, events, ctx) {
     return lines;
   }
   if (st.breaker === 'tripped') {
-    say('CIRCUIT BREAKER TRIPPED - answer in the orchestrator terminal', ['CIRCUIT BREAKER TRIPPED', 'answer in the orchestrator terminal']);
+    const trip = lastEvent(events, (e) => e.type === 'circuit_breaker' && e.state === 'tripped');
+    const progress = lastEvent(events, (e) => e.type === 'progress_check' && e.milestoneId === trip?.milestoneId);
+    const id = sanitize(trip?.milestoneId);
+    const title = trip?.cause === 'stalled' ? `No progress on ${id}: ${sanitize(progress?.reason)}`
+      : trip?.cause === 'budget' ? `${id} used ${num(trip.tokens)} tokens without passing`
+        : trip?.cause === 'limit' ? `${id} reached the cycle limit (${num(trip.maxFailedCycles)})` : null;
+    if (title) lines.push(fitSegments(loud(title), ctx.cw, ctx.ell));
+    else say('CIRCUIT BREAKER TRIPPED - answer in the orchestrator terminal', ['CIRCUIT BREAKER TRIPPED', 'answer in the orchestrator terminal']);
   } else if (st.status === 'paused') {
     say('PAUSED - a human is needed - answer in the orchestrator terminal', ['PAUSED - a human is needed', 'answer in the orchestrator terminal']);
   }
@@ -811,9 +829,11 @@ function eventSegments(e, st, ctx) {
         ...(failed ? [[`  ${num(e.failedCycles)} failed in a row`, 'bold']] : []),
         ['  ' + sanitize(e.reason), MUTED]];
     }
+    case 'progress_check':
+      return [[`${sanitize(e.milestoneId)} cycle ${num(e.cycle)} ${sanitize(e.verdict)}`, 'bold'], [`  ${sanitize(e.reason)}  stalled ${num(e.stalledCycles)}/${num(e.maxStalledCycles)}  ${formatTokens(e.tokens)}/${e.tokenBudget === 0 ? 'off' : formatTokens(e.tokenBudget)} tok`, MUTED]];
     case 'circuit_breaker':
       return e.state === 'tripped'
-        ? [label('CIRCUIT BREAKER TRIPPED', LOUD, ctx), [`  ${sanitize(e.milestoneId)}  ${num(e.failedCycles)}/${num(e.maxFailedCycles)} failed cycles`, null]]
+        ? [label('CIRCUIT BREAKER TRIPPED', LOUD, ctx), [`  ${sanitize(e.milestoneId)}  ${e.cause ? sanitize(e.cause) + '  ' : ''}${num(e.failedCycles)}/${num(e.maxFailedCycles)} failed cycles`, null]]
         : [['circuit breaker reset', 'bold'], [`  ${sanitize(e.milestoneId)}`, null]];
     case 'hitl_request': {
       const options = Array.isArray(e.options) ? e.options.map(sanitize).filter(Boolean) : [];

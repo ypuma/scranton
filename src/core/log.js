@@ -62,9 +62,12 @@ export function createTerminalLog({ stream = process.stdout, env = process.env, 
       case 'cycle_result':
         print(e, `${e.result === 'passed' ? c.green('PASS') : c.red('FAIL')}    ${e.milestoneId} cycle ${e.cycle}: ${e.reason}${e.result === 'failed' ? c.dim(` (${e.failedCycles} failed in a row)`) : ''}`);
         break;
+      case 'progress_check':
+        print(e, `${e.milestoneId} cycle ${e.cycle}: ${e.verdict} (${e.source}${e.rule ? ':' + e.rule : ''}) - ${e.reason}; stalled ${e.stalledCycles}/${e.maxStalledCycles}; ${e.tokens}/${e.tokenBudget || 'off'} tokens`);
+        break;
       case 'circuit_breaker':
         print(e, e.state === 'tripped'
-          ? c.red(c.bold(`CIRCUIT BREAKER tripped on ${e.milestoneId}: ${e.failedCycles}/${e.maxFailedCycles} failed cycles`))
+          ? c.red(c.bold(`CIRCUIT BREAKER tripped on ${e.milestoneId}: ${e.cause ?? 'limit'}; ${e.failedCycles}/${e.maxFailedCycles} failed cycles`))
           : c.yellow(`circuit breaker reset on ${e.milestoneId}`));
         break;
       case 'hitl_request':
