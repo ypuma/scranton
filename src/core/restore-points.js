@@ -52,17 +52,6 @@ const bytes = (root, name, max) => regular(root, name, max, (fd, size) => {
   if (offset !== size) throw Error('Restore artifact changed');
   return data;
 });
-function current(workspace, hive, name) {
-  target(workspace, hive, name, true, true);
-  try {
-    return regular(workspace, name, Number.MAX_SAFE_INTEGER, (fd, size, stat) => {
-      const digest = createHash('sha256'), chunk = Buffer.alloc(64 * 1024); let total = 0, n;
-      while ((n = fs.readSync(fd, chunk, 0, chunk.length, null))) { total += n; digest.update(chunk.subarray(0, n)); }
-      if (total !== size) throw Error('Restore target changed');
-      return { sha256: digest.digest('hex'), size, mode: Number(stat.mode) & 0o111 ? '100755' : '100644' };
-    });
-  } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; }
-}
 function atomicTarget(root, name) {
   const file = safePath(root, name);
   try { const s = fs.lstatSync(file); if (!s.isFile()) throw Error('Restore path is not a regular file'); if (s.nlink !== 1) throw Error('Restore file has hardlinks'); }
@@ -81,38 +70,107 @@ function atomic(root, name, data, mode = 0o600) {
   } finally { if (fd !== undefined) fs.closeSync(fd); fs.rmSync(safePath(root, path.relative(root, temp).split(path.sep).join('/')), { force: true }); }
 }
 const yieldTurn = () => new Promise(setImmediate);
-async function atomicUndo(root, name, data, mode = 0o600, beforeRename = () => {}) {
-  const file = atomicTarget(root, name), directory = path.dirname(file);
+// Undo uses the same lexical rules as safePath, but never waits for metadata on the event loop.
+const io = (method, ...args) => new Promise((resolve, reject) => (method === 'realpath' ? fs.realpath.native : fs[method])(...args, (error, value) => error ? reject(error) : resolve(value)));
+async function pathUndo(root, name = '', reading = false) {
+  const file = safePath(root, name, { fs: { lstatSync() { throw Object.assign(Error(), { code: 'ENOENT' }); } } });
+  let current = path.parse(root).root;
+  for (const component of path.relative(current, file).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    let stat;
+    try { stat = await io('lstat', current); }
+    catch (error) { if (error.code === 'ENOENT' || reading && error.code === 'ENOTDIR') continue; throw error; }
+    if (process.platform === 'darwin' && (current === '/var' || current === '/tmp') && stat.isSymbolicLink()) {
+      const canonical = '/private' + current;
+      if (path.resolve(path.dirname(current), await io('readlink', current)) !== canonical || await io('realpath', current) !== canonical) throw Error('Link/reparse path rejected: ' + current);
+      current = await pathUndo(canonical); continue;
+    }
+    if (stat.isSymbolicLink() || (await io('realpath', current)).toLowerCase() !== path.resolve(current).toLowerCase()) throw Error('Link/reparse path rejected: ' + current);
+  }
   await yieldTurn();
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 }); atomicTarget(root, name);
+  return file;
+}
+const pointDirUndo = async (hive, runId) => pathUndo(hive, 'restore-points/' + validId(runId));
+async function targetUndo(workspace, hive, name, reading = false) {
+  target(workspace, hive, name, false);
+  const file = await pathUndo(workspace, name, reading);
+  for (let parent = path.dirname(file); parent !== workspace; parent = path.dirname(parent)) {
+    try { const stat = await io('lstat', parent); if (!stat.isDirectory() && !(reading && stat.isFile())) throw Error('Unsafe restore parent: not a directory'); }
+    catch (error) { if (error.code !== 'ENOENT' && !(reading && error.code === 'ENOTDIR')) throw error; }
+  }
+  return file;
+}
+async function regularUndo(root, name, max, consume) {
+  const file = await pathUndo(root, name), before = await io('lstat', file, { bigint: true });
+  if (!before.isFile()) throw Error('Restore path is not a regular file');
+  if (before.nlink !== 1n) throw Error('Restore file has hardlinks');
+  if (before.size > BigInt(max)) throw Error('Restore artifact exceeds size limit');
+  const fd = await io('open', file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = await io('fstat', fd, { bigint: true });
+    if (!sameFileIdentity(stat, before)) throw Error('Restore artifact changed');
+    const result = await consume(fd, Number(stat.size), stat);
+    await pathUndo(root, name);
+    if (!sameFileIdentity(stat, await io('fstat', fd, { bigint: true })) || !sameFileIdentity(stat, await io('lstat', file, { bigint: true }))) throw Error('Restore artifact changed');
+    return result;
+  // Do not yield between the final identity check and the caller's rename/unlink.
+  } finally { fs.closeSync(fd); }
+}
+const bytesUndo = (root, name, max) => regularUndo(root, name, max, async (fd, size) => {
+  const data = Buffer.alloc(size); let offset = 0, n;
+  while (offset < size && (n = await io('read', fd, data, offset, Math.min(size - offset, 64 * 1024), null))) { offset += n; await yieldTurn(); }
+  if (offset !== size) throw Error('Restore artifact changed');
+  return data;
+});
+async function currentUndo(workspace, hive, name) {
+  await targetUndo(workspace, hive, name, true);
+  try {
+    return await regularUndo(workspace, name, Number.MAX_SAFE_INTEGER, async (fd, size, stat) => {
+      const digest = createHash('sha256'), chunk = Buffer.alloc(64 * 1024); let total = 0, n;
+      while ((n = await io('read', fd, chunk, 0, chunk.length, null))) { total += n; digest.update(chunk.subarray(0, n)); await yieldTurn(); }
+      if (total !== size) throw Error('Restore target changed');
+      return { sha256: digest.digest('hex'), size, mode: Number(stat.mode) & 0o111 ? '100755' : '100644' };
+    });
+  } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; }
+}
+async function atomicTargetUndo(root, name) {
+  const file = await pathUndo(root, name);
+  try { const stat = await io('lstat', file); if (!stat.isFile()) throw Error('Restore path is not a regular file'); if (stat.nlink !== 1) throw Error('Restore file has hardlinks'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return file;
+}
+async function atomicUndo(root, name, data, mode = 0o600, beforeRename = () => {}) {
+  const file = await atomicTargetUndo(root, name), directory = path.dirname(file);
+  await yieldTurn();
+  await io('mkdir', directory, { recursive: true, mode: 0o700 }); await atomicTargetUndo(root, name);
   const temp = path.join(directory, '.scranton-' + randomUUID() + '.tmp'); let fd;
   try {
-    fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), mode);
+    fd = await io('open', temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), mode);
     await new Promise((resolve, reject) => fs.writeFile(fd, data, (error) => error ? reject(error) : resolve()));
     // Keep both journal barriers durable without blocking heartbeats on a disk flush.
     await new Promise((resolve, reject) => fs.fsync(fd, (error) => error ? reject(error) : resolve()));
-    fs.closeSync(fd); fd = undefined;
-    atomicTarget(root, name); beforeRename(); fs.renameSync(temp, file);
+    await io('close', fd); fd = undefined;
+    await atomicTargetUndo(root, name); await beforeRename(); fs.renameSync(temp, file);
   } finally {
-    if (fd !== undefined) fs.closeSync(fd);
+    if (fd !== undefined) await io('close', fd);
     await yieldTurn();
-    fs.rmSync(safePath(root, path.relative(root, temp).split(path.sep).join('/')), { force: true });
+    await io('rm', await pathUndo(root, path.relative(root, temp).split(path.sep).join('/')), { force: true });
   }
   await yieldTurn();
 }
 async function saveUndo(hive, point) {
   const data = JSON.stringify(point) + '\n';
   if (Buffer.byteLength(data) > MAX_MANIFEST_BYTES) throw Error('Restore manifest limit exceeded');
-  await atomicUndo(pointDir(hive, point.runId), 'manifest.json', data);
+  await atomicUndo(await pointDirUndo(hive, point.runId), 'manifest.json', data);
 }
 function save(hive, point) {
   const data = JSON.stringify(point) + '\n';
   if (Buffer.byteLength(data) > MAX_MANIFEST_BYTES) throw Error('Restore manifest limit exceeded');
   atomic(pointDir(hive, point.runId), 'manifest.json', data);
 }
-function* loadSteps(hive, runId) {
+function* loadSteps(hive, runId, loaded) {
   let point;
-  try { point = JSON.parse(bytes(pointDir(hive, runId), 'manifest.json', MAX_MANIFEST_BYTES).toString('utf8')); }
+  try { point = JSON.parse((loaded ?? bytes(pointDir(hive, runId), 'manifest.json', MAX_MANIFEST_BYTES)).toString('utf8')); }
   catch (error) { if (error.code === 'ENOENT') return null; throw Error('Cannot read restore manifest'); }
   if (point?.v !== 1 || point.runId !== runId || typeof point.workspace !== 'string' || !path.isAbsolute(point.workspace) ||
       !stamp(point.createdAt) || point.createdAt === null || !stamp(point.undoneAt) || !Array.isArray(point.files) || !Array.isArray(point.createdDirs)) throw Error('Invalid restore manifest');
@@ -138,14 +196,17 @@ function load(hive, runId) {
   return step.value;
 }
 async function loadUndo(hive, runId) {
-  const steps = loadSteps(hive, runId); let step;
+  let data;
+  try { data = await bytesUndo(await pointDirUndo(hive, runId), 'manifest.json', MAX_MANIFEST_BYTES); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw Error('Cannot read restore manifest'); }
+  const steps = loadSteps(hive, runId, data); let step;
   do { step = steps.next(); if (!step.done) await yieldTurn(); } while (!step.done);
   return step.value;
 }
 async function allPointsUndo(hive) {
-  const root = safePath(hive, 'restore-points');
+  const root = await pathUndo(hive, 'restore-points');
   let names;
-  try { names = fs.readdirSync(root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  try { names = await io('readdir', root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const points = [];
   for (const runId of names.filter((name) => /^[a-zA-Z0-9_-]{1,128}$/.test(name))) {
     try { const point = await loadUndo(hive, runId); if (point) { points.push(point); continue; } } catch {}
@@ -264,7 +325,10 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
     }
     const newer = points.slice(0, points.indexOf(selected)).filter((p) => !settled(p)).map((p) => p.runId);
     if (newer.length) throw refusal(`Newer runs must be undone first: ${newer.join(', ')}. A run stays open while files changed after it are kept; undo it with --force or leave both.`);
-    const unreadable = force && entries.find((p) => p.unreadable && fs.lstatSync(pointDir(hive, p.runId)).mtimeMs > Date.parse(selected.createdAt));
+    let unreadable;
+    if (force) for (const p of entries.filter((p) => p.unreadable)) {
+      if ((await io('lstat', await pointDirUndo(hive, p.runId))).mtimeMs > Date.parse(selected.createdAt)) { unreadable = p; break; }
+    }
     if (unreadable) throw refusal(`Cannot force undo while newer restore point ${unreadable.runId} is unreadable.`);
     return await withWorkspaceLock(selected.workspace, async () => {
       checkSiblings();
@@ -289,23 +353,23 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
             try {
               let data;
               if (e.original) {
-                try { data = bytes(pointDir(hive, point.runId), e.preimage, MAX_PREIMAGE_BYTES); }
+                try { data = await bytesUndo(await pointDirUndo(hive, point.runId), e.preimage, MAX_PREIMAGE_BYTES); }
                 catch (error) {
                   if (['ENOENT', 'ENOTDIR'].includes(error.code) || error.message?.startsWith('Link/reparse path rejected:') || ['Restore path is not a regular file', 'Restore file has hardlinks', 'Restore artifact exceeds size limit'].includes(error.message)) throw Error('Invalid pre-image');
                   throw error;
                 }
                 if (data.length !== e.original.size || hash(data) !== e.original.sha256) throw Error('Invalid pre-image');
               }
-              const actual = current(point.workspace, hive, e.path);
+              const actual = await currentUndo(point.workspace, hive, e.path);
               if (!force && !equal(actual, e.lastWritten) && !(e.pending !== undefined && equal(actual, e.pending)) && !(e.undoPending && equal(actual, e.original))) {
                 result.conflicts.push({ path: e.path, reason: 'File no longer matches what the run wrote', code: 'changed' }); continue;
               }
               e.undoPending = true; await saveUndo(hive, point);
-              const file = target(point.workspace, hive, e.path);
-              if (!equal(current(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
+              const file = await targetUndo(point.workspace, hive, e.path);
+              if (!equal(await currentUndo(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
               if (!equal(actual, e.original)) {
-                if (e.original) { await atomicUndo(point.workspace, e.path, data, e.permissions, () => {
-                  if (!equal(current(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
+                if (e.original) { await atomicUndo(point.workspace, e.path, data, e.permissions, async () => {
+                  if (!equal(await currentUndo(point.workspace, hive, e.path), actual)) throw Error('Restore target changed');
                 }); result.restored.push(e.path); }
                 else if (actual) { fs.unlinkSync(file); result.removed.push(e.path); }
               }
@@ -323,7 +387,7 @@ export async function undoRun({ hiveDir, runId, force = false, siblings = [] }) 
         for (const name of [...point.createdDirs].sort((a, b) => b.split('/').length - a.split('/').length)) {
           try {
             if (point.files.some((e) => openFile(e) && e.path.startsWith(name + '/'))) continue;
-            try { fs.rmdirSync(target(point.workspace, hive, name)); }
+            try { fs.rmdirSync(await targetUndo(point.workspace, hive, name)); }
             catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) result.warnings.push(`Cannot safely remove directory: ${name} (${error.code ?? 'unsafe path'}).`); }
           } finally { await new Promise(setImmediate); }
         }

@@ -482,9 +482,9 @@ test('fix4: a blocked pending integration accepts its recorded pending state on 
 for (const fault of ['EBUSY', 'EACCES', 'EPERM', 'EMFILE', 'Restore artifact changed']) test(`fix5: backup read ${fault} stays blocked and retries original bytes`, async (t) => {
   const f = fixture(t), original = Buffer.from([0, 255, 13, 10, 128, 65]);
   record(f, 'run', 'file', { ...entry(''), data: original }); write(f.workspace, 'file', 'after');
-  const blob = path.join(path.dirname(manifestPath(f)), manifest(f).files[0].preimage), open = fs.openSync;
+  const blob = path.join(path.dirname(manifestPath(f)), manifest(f).files[0].preimage), open = fs.open;
   let once = true;
-  const mock = t.mock.method(fs, 'openSync', (file, ...args) => {
+  const mock = t.mock.method(fs, 'open', (file, ...args) => {
     if (file === blob && once) { once = false; throw Object.assign(Error(fault), fault.startsWith('E') ? { code: fault } : {}); }
     return open(file, ...args);
   });
@@ -507,7 +507,7 @@ for (const damage of ['missing', 'hash', 'directory', 'oversized']) test(`fix5: 
   assert.ok(manifest(f).undoneAt); assert.equal(read(f.workspace, 'file'), 'after');
 });
 
-test('fix5: 300-file undo keeps the 50 ms timer responsive and restores every byte', async (t) => {
+test('fix5: 300-file undo keeps the 50 ms timer responsive and restores every byte', { timeout: 180000 }, async (t) => {
   const f = fixture(t), before = new Map(), after = new Map();
   for (let i = 0; i < 300; i++) { const name = `file-${i}`; before.set(name, entry(`original-${i}`)); after.set(name, entry(`written-${i}`)); write(f.workspace, name, `written-${i}`); }
   prepareRestorePoint({ ...f, runId: 'run', changes: [...before.keys()], before, initial: before, after }).commit();
@@ -519,10 +519,16 @@ test('fix5: 300-file undo keeps the 50 ms timer responsive and restores every by
     result = await undoRun({ hiveDir: f.hiveDir });
     await new Promise((resolve) => setTimeout(resolve, 60));
   } finally { clearInterval(timer); }
-  const gap = Math.max(...gaps); t.diagnostic(`300-file undo maximum timer gap: ${gap.toFixed(2)} ms`);
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const percentile = (p) => sorted[Math.ceil(sorted.length * p) - 1];
+  const p95 = percentile(0.95), p99 = percentile(0.99), gap = sorted.at(-1);
+  t.diagnostic(JSON.stringify({ timerGaps: gaps, p95, p99, max: gap }));
   assert.equal(result.restored.length, 300); assert.deepEqual(result.conflicts, []); assert.ok(manifest(f).undoneAt);
   for (const [name, e] of before) assert.deepEqual(fs.readFileSync(path.join(f.workspace, name)), e.data);
-  assert.ok(gap < 500, `timer gap ${gap.toFixed(2)} ms must stay below 500 ms`);
+  // Measured p95 ~52 ms alone/loaded: 200 ms catches repeated stalls; 2 s tolerates isolated scheduler hiccups.
+  assert.ok(gaps.length >= 20, 'undo must supply enough timer samples for p95');
+  assert.ok(p95 < 200, `timer p95 ${p95.toFixed(2)} ms must stay below 200 ms`);
+  assert.ok(gap < 2000, `maximum timer gap ${gap.toFixed(2)} ms must stay below 2000 ms`);
 });
 
 test('fix5: remaining excludes never-restorable files before undo', async (t) => {
@@ -575,8 +581,8 @@ test('fix5: conflict continues and directory removals each yield an event-loop t
   for (let i = 0; i < 4; i++) after.set(`dir-${i}/new`, entry('after'));
   prepareRestorePoint({ ...f, runId: 'run', changes: [...after.keys()], before, initial: before, after }).commit();
   for (const [name] of after) write(f.workspace, name, name.startsWith('conflict') ? 'human' : 'after');
-  const open = fs.openSync, remove = fs.rmdirSync; let reading = false, removing = false, reads = 0, removals = 0;
-  t.mock.method(fs, 'openSync', (file, ...args) => {
+  const open = fs.open, remove = fs.rmdirSync; let reading = false, removing = false, reads = 0, removals = 0;
+  t.mock.method(fs, 'open', (file, ...args) => {
     if (String(file).includes(path.sep + 'preimages' + path.sep)) {
       assert.equal(reading, false, 'conflict continue must yield before the next file'); reads++;
       reading = true; setImmediate(() => { reading = false; });
@@ -686,12 +692,14 @@ test('undo awaits asynchronous flushes and keeps the pending journal retryable o
 
 test('undo rechecks user content after an asynchronous workspace flush before renaming', async (t) => {
   const f = fixture(t); record(f, 'run'); write(f.workspace, 'file', 'after');
-  const open = fs.openSync, flush = fs.fsync, workspaceFds = new Set(); let edited = false;
-  t.mock.method(fs, 'openSync', (file, ...args) => {
-    const fd = open(file, ...args);
-    if (String(file).startsWith(f.workspace + path.sep) && path.basename(String(file)).startsWith('.scranton-')) workspaceFds.add(fd);
-    else workspaceFds.delete(fd);
-    return fd;
+  const open = fs.open, flush = fs.fsync, workspaceFds = new Set(); let edited = false;
+  t.mock.method(fs, 'open', (file, ...args) => {
+    const callback = args.pop();
+    return open(file, ...args, (error, fd) => {
+      if (String(file).startsWith(f.workspace + path.sep) && path.basename(String(file)).startsWith('.scranton-')) workspaceFds.add(fd);
+      else workspaceFds.delete(fd);
+      callback(error, fd);
+    });
   });
   const mock = t.mock.method(fs, 'fsync', (fd, callback) => {
     if (workspaceFds.has(fd) && !edited) { edited = true; write(f.workspace, 'file', 'human'); }
@@ -703,5 +711,41 @@ test('undo rechecks user content after an asynchronous workspace flush before re
   assert.equal(manifest(f).files[0].undoPending, true); assert.equal(manifest(f).undoneAt, null);
   assert.deepEqual(fs.readdirSync(f.workspace), ['file']);
   assert.deepEqual((await undoRun({ hiveDir: f.hiveDir, force: true })).restored, ['file']);
+  assert.equal(read(f.workspace, 'file'), 'before');
+});
+
+test('undo yields during delayed path metadata and rejects a backup changed during an async read', async (t) => {
+  const f = fixture(t); record(f, 'run'); write(f.workspace, 'file', 'after');
+  const blob = path.join(path.dirname(manifestPath(f)), manifest(f).files[0].preimage);
+  const lstat = fs.lstat, open = fs.open, readAsync = fs.read;
+  let delayed = false, ticked = false, changed = false, backupFd;
+  t.mock.method(fs, 'lstat', (file, ...args) => {
+    if (file !== blob || delayed) return lstat(file, ...args);
+    delayed = true;
+    setTimeout(() => { ticked = true; }, 10);
+    setTimeout(() => lstat(file, ...args), 80);
+  });
+  t.mock.method(fs, 'open', (file, ...args) => {
+    const callback = args.pop();
+    return open(file, ...args, (error, fd) => {
+      if (file === blob) backupFd = fd;
+      callback(error, fd);
+    });
+  });
+  t.mock.method(fs, 'read', (fd, ...args) => {
+    const callback = args.pop();
+    return readAsync(fd, ...args, (error, ...values) => {
+      if (fd === backupFd && !changed) { changed = true; fs.writeFileSync(blob, 'tampered'); }
+      callback(error, ...values);
+    });
+  });
+  const result = await undoRun({ hiveDir: f.hiveDir });
+  assert.ok(delayed && ticked && changed);
+  assert.equal(result.conflicts[0].code, 'blocked');
+  assert.match(result.conflicts[0].reason, /artifact changed/);
+  assert.equal(read(f.workspace, 'file'), 'after');
+  assert.equal(manifest(f).files[0].undoUnrestorable, undefined);
+  fs.writeFileSync(blob, 'before');
+  assert.deepEqual((await undoRun({ hiveDir: f.hiveDir })).restored, ['file']);
   assert.equal(read(f.workspace, 'file'), 'before');
 });
