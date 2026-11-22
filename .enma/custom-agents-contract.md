@@ -29,7 +29,7 @@ Extends `.enma/roles-contract.md`, `.enma/auth-contract.md`, and `docs/EVENTS.md
   2. Environment variables: `SCRANTON_<ID>_PROVIDER`, `SCRANTON_<ID>_MODEL`, `SCRANTON_<ID>_THINKING` (uppercase ID)
   3. Config file: `scranton.config.json` -> `agents.<id>.provider`, `model`, `thinking`
   4. Persistent settings: `<settingsDir>/agents.json` -> `agents.<id>.model`, `thinking`
-  5. Pi host profile / CLI default (`null`). In Docker mode, missing explicit provider/model is refused (HTTP 400).
+  5. Automatic (`null`): first signed-in supported account with pinned runner defaults, identical in all Team sandbox modes.
 - **Pinning Rules**: If tier 2 (`env`) or 3 (`config`) sets model, thinking, or prompt (`skill`), the field reports `{ value, source: 'env'|'config', pinned: true }` and UI disables editing. Tier 4 yields `{ value, source: 'settings', pinned: false }`. Unset yields `{ value: null, source: 'none', pinned: false }`.
 
 ## 2. Custom Gate Agent Specifications & Validation
@@ -38,7 +38,7 @@ Extends `.enma/roles-contract.md`, `.enma/auth-contract.md`, and `docs/EVENTS.md
   - Reserved IDs (refused with HTTP 400): `human`, `runs`, `sessions`, `prompts`, `isolation`, `control`, `events`, `state`, `plan`, `run`, `orchestrator`, `system`, `default`, `agents`, `models`, `auth`, `providers`, `hitl`, `chat`, `michael`, `dwight`, `oscar`, `hank`, `angela`.
 - **Name & Title**: `name` 1..40 chars; `title` 1..60 chars. Control characters stripped.
 - **Keywords**: `passKeyword` & `failKeyword` match `/^[A-Z][A-Z0-9_]{2,39}$/`. Distinct, neither equals `BLOCKED`, nor collides with built-in keywords (`PLAN_READY`, `TASK_COMPLETE`, `REVIEW_APPROVED`, `CHANGES_REQUESTED`, `SECURITY_PASSED`, `SECURITY_ISSUES`, `TEST_PASSED`, `TEST_FAILED`) or other custom agents. Defaults: `<ID>_PASSED` / `<ID>_FAILED`. All gates accept `BLOCKED`.
-- **Tools**: Non-empty subset of `['read', 'grep', 'find', 'ls', 'bash']`. No `write` or `edit`. On win32 without bash, `bash` falls back to `powershell`.
+- **Tools**: Non-empty subset of `['read', 'grep', 'find', 'ls', 'bash']`. No `write` or `edit`. On win32 without Bash, and in native Windows Low mode even with Git Bash installed, `bash` falls back to `powershell`.
 - **Handoff Instruction**: 1..1000 chars. Controls how Dwight's work is evaluated.
 - **System Prompt**: `<settingsDir>/prompts/<id>.md`. On creation, populated with starter prompt modelled on `agents/oscar/SKILL.md` (read-only constraints, exact pass/fail/blocked keywords, fail-closed Markdown report structure, keyword on own last line).
 - **Deletion**: Removes definition from `agents.json` and deletes `<settingsDir>/prompts/<id>.md`. Deletion of built-ins is rejected (HTTP 400). In-flight runs continue safely using their start snapshot.
@@ -63,15 +63,15 @@ Extends `.enma/roles-contract.md`, `.enma/auth-contract.md`, and `docs/EVENTS.md
 - **Gate Evaluation**:
   - Evaluated in strict listed array order within each stage. `[BLOCKED]` or infra crash triggers HITL pause. Missing/fail keyword fails stage, increments `failedCycles`, and emits combined bug report. All pass -> advance stage.
 
-## 5. Fake Pi Test Harness Extensions
+## 5. Scripted own-runtime tests
 - **Environment Injections**: Orchestrator sets `SCRANTON_AGENT=<id>`, `SCRANTON_ROLE_KIND=planner|developer|gate`, `SCRANTON_PASS_KEYWORD=<passKeyword>`, `SCRANTON_FAIL_KEYWORD=<failKeyword>`.
-- **`tools/fake-pi.js`**: Recognizes any gate role.
+- **`src/core/agent/scripted.js`**: Recognizes gate roles through role metadata. Enable child fixtures only with SCRANTON_FAKE_MODE=1 and SCRANTON_FAKE_SCENARIO; no FAKE_PI aliases.
   - `happy`: emits `[${passKeyword}]`.
   - `flaky`: cycle 1 of `m2` emits `[${failKeyword}]`; cycle >= 2 emits `[${passKeyword}]`.
   - `changes_once`: cycle 1 emits `[${failKeyword}]`; cycle >= 2 emits `[${passKeyword}]`.
   - `blocked`: emits `[BLOCKED]`.
   - `security_issues`: only `hank` emits `[SECURITY_ISSUES]`; every other gate (built-in or custom) emits its pass keyword.
-- **`tools/fake-pi-rpc.js`**: Replaces `[TASK_COMPLETE]` with `[${passKeyword}]` for any gate role.
+- Scripted gates use their configured pass/fail keywords; no fake RPC transport.
 
 ## 6. HTTP Control API & CLI
 All endpoints enforce `X-Scranton-Client: 1`, loopback peer/Host, Origin validation, <=64 KiB JSON body, 404 without control.
@@ -97,7 +97,7 @@ All endpoints enforce `X-Scranton-Client: 1`, loopback peer/Host, Origin validat
 - **Web UI (`visualizer/public/js/`)**:
   - Agents Drawer (`agents.js`, `agents-panel.js`): Lists built-in and custom agents. "+ Add agent" modal. Per-agent card displays prompt editor, model and thinking pickers (disabled with badge if pinned), editable handoff instruction, and delete button for custom agents.
   - Stage Editor (`control.js`, `control-panel.js`): In New Run modal, lists every gate role (`oscar`, `hank`, `angela`, plus custom). Checkbox enables gate; numeric input assigns stage (1..N). Enabled gates grouped by stage into parallel arrays. Default: `[["oscar", "hank"], ["angela"]]`.
-  - Model Pickers (`accounts.js`): Option list includes "Agent default (<provider>/<model>)" when set in `agents.json` or config, falling back to "pi default".
+  - Model Pickers (`accounts.js`): Option list includes "Agent default (<provider>/<model>)" when set in `agents.json` or config, falling back to "Automatic".
   - Pipeline (`pipeline.js`): Columns dynamically created for each stage in `run_started.execution.workflow.gates`. Role cards render dynamically from `run_started.roles`.
 - **Terminal Dashboard (`src/dashboard/render.js`)**:
   - Renders active roles from `st.roles` (derived from `run_started.roles`).
@@ -106,7 +106,7 @@ All endpoints enforce `X-Scranton-Client: 1`, loopback peer/Host, Origin validat
 ## 8. File Ownership Matrix (Strict Single Ownership)
 | Lane | Owned Files |
 |---|---|
-| **Backend** | `src/core/workflow.js`, `src/core/prompts.js`, `src/core/config.js`, `src/core/keywords.js`, `src/core/state.js`, `src/core/messages.js`, `src/core/orchestrator.js`, `src/core/sandbox.js`, `src/core/pi-command.js`, `src/core/cli.js`, `src/core/agents-config.js` (new)<br>`src/server/control.js`, `src/server/registry-router.js`, `src/server/visualizer-server.js`<br>`tools/fake-pi.js`, `tools/fake-pi-rpc.js`, `bin/scranton.js`, `docs/**`, `README.md`<br>`test/core/**`, `test/server/**` |
+| **Backend** | `src/core/workflow.js`, `src/core/prompts.js`, `src/core/config.js`, `src/core/keywords.js`, `src/core/state.js`, `src/core/messages.js`, `src/core/orchestrator.js`, `src/core/sandbox.js`, `src/core/agent/index.js`, `src/core/cli.js`, `src/core/agents-config.js` (new)<br>`src/server/control.js`, `src/server/registry-router.js`, `src/server/visualizer-server.js`<br>`src/core/agent/scripted.js`, `bin/scranton.js`, `docs/**`, `README.md`<br>`test/core/**`, `test/server/**` |
 | **Web UI** | everything under `visualizer/public/**` (all `js/*.js`, `index.html`, `styles.css`, `demo/**`)<br>`test/visualizer/**` |
 | **Terminal Dashboard** | everything under `src/dashboard/**`<br>`test/dashboard/**` |
 
@@ -123,7 +123,7 @@ Backend additionally owns every other file under `src/core/**`, `src/server/**`,
   - Default workflow remains `[["angela"]]`; Angela's default handoff text remains byte-identical.
   - Existing tests in `test/core/*.test.js`, `test/server/*.test.js`, `test/dashboard/*.test.js`, and `test/visualizer/*.test.js` keep their behaviour. A lane may adjust an existing test ONLY where it asserts the exact role SET or the exact `/api/agents` role shape; never weaken a behavioural, ordering, safety or bounds assertion, and list every such edit.
 - **Risks & Mitigations**:
-  1. *Docker Model Absence*: Docker runs require explicit provider and model for all active roles. *Mitigation*: `validateDockerModels` runs against `activeRoles(config)` (including custom gates), throwing HTTP 400 before container spawn.
+  1. *Model availability*: explicit selections require a signed-in catalogue model; otherwise Automatic uses pinned supported-provider defaults in all modes. Catalogue availability is not entitlement.
   2. *Worktree Concurrency*: Spawning multiple parallel custom gates could contend on git locks. *Mitigation*: `WorktreeManager` queues checkout creation sequentially before parallel execution.
   3. *UI Drawer Overflow*: Up to 17 roles (5 built-in + 12 custom) in drawer. *Mitigation*: Agents drawer list and stage editor use scrollable containers with sticky headers.
 
@@ -153,7 +153,7 @@ Backend additionally owns every other file under `src/core/**`, `src/server/**`,
 1. **`run_started.roles` is always present.** Every `run_started` carries `roles`, including on the startup-failure path; use `[]` when the roles are not known yet. Both reducers (engine `state.js` and web `state.js`) REPLACE `roles` on every `run_started`, treating a missing list as `[]`, then rebuild `agents` from the 5 built-ins plus the custom roles in that list.
 2. **Line breaks.** `instruction` keeps line breaks: `\r\n` is normalized to `\n`, and every other control character is stripped. `name` and `title` stay single-line, with all control characters stripped.
 3. **Configured workflows.** A server-configured workflow (from the config file or `--gates`) that names a missing or invalid gate must never break the agents API or `/api/control`. It shows up as a `warnings` entry in `GET /api/agents` and in `doctor`, and a run that would use it is refused at start with HTTP 400 naming the id. `DELETE /api/agents/:id` returns 409 while the server's configured workflow names that gate.
-4. **Gate tools are read-only at launch.** In every gate's pi argv, Scranton's own `--tools <allowlist>` is the LAST tool-setting flag. It comes after all `extraArgs` and before the positional inbox/prompt arguments, which keep their current positions. Tool-changing flags in `extraArgs` are refused for gate roles with a clear ConfigError.
+4. **Gate tools are enforced by the own tools allowlist.** No write/edit; shell is still writable and needs the OS sandbox. All pi.* and extraArgs settings are rejected, not ordered into argv.
 5. **`definitionHash`** hashes the EFFECTIVE definition for every role, built-ins included: id, name, title, kind, keywords, effective tools after config overrides and the Windows fallback, and the instruction.
 6. **Terminal dashboard.** It uses `run_started.roles` only for the name and title of CUSTOM roles (`builtin: false`). Which roles are shown, their order and the layout come from the workflow, exactly as before. A run without custom roles therefore renders byte-identically with or without `roles`.
 7. **Windows tool fallback.** The web settings form shows a `powershell` tool as the `bash` checkbox and never sends `powershell`.

@@ -65,7 +65,7 @@ show `r` with one decimal (`5.0`, `9.9`, `0.2` for 0.15 %), else the raw value r
 A model reference is `{ provider, model }` (the shape in `agents.json` and in Pipeline start bodies; `provider`
 is null in a configuration that names only a model). Its id is `provider + '/' + model`, or `model` alone when
 there is no provider (`modelId(ref)`, exported by the resolver module). A **recipient** is `{ id: string | null, window: integer, known: boolean }`; `id: null`
-means pi default (no model configured). Unknown window: 128000 with `known: false`.
+means Automatic (no model configured). Unknown window: 128000 with `known: false`.
 
 | Pack | Recipient |
 |---|---|
@@ -82,8 +82,7 @@ modelId(ref) /* -> string | null */
 
 - `ref` is `{ provider, model }` or null. Null, no model, or malformed: `{ id: null, window: 128000, known: false }`.
 - Sources in this order: (1) custom providers (`src/core/providers.js` store, the model's declared
-  `contextWindow`), read on every call; (2) pi's registry through the same runtime set-up as `src/core/auth.js`
-  (its paths and its Antigravity registration - a bare `ModelRuntime.create` misses both), created once per
+  `contextWindow`), read on every call; (2) the own LLM catalogue through the offline compatibility adapter in `src/core/auth.js`, created once per
   process without network access and cached: `getModel(provider, model)`. For a reference without a provider:
   the window that all registry models with that id share (none, or several different windows: unknown).
   A2 may add one exported helper to `src/core/auth.js` for the runtime; nothing else changes there.
@@ -266,8 +265,7 @@ planner text 800000, developer brief 8000.
   directory or an 8.3 short name stays valid; only the file itself must be regular and nonlinked.
 - HTTP: the JSON body cap of `readBody` (`src/server/control.js`, also used by the registry routes) rises from
   65536 to 262144 bytes; a 32768-char request can be about 100 KB of UTF-8.
-- Proven carriers (probe experiment 2): pi `json` transport (`@<inbox file>`) and `rpc` transport (stdin) both
-  delivered 400000-char planning inputs intact; Docker mode uses stdin. Nothing else needs to change.
+- Planning text is passed directly as own workflow message input; Docker executes tools only and does not transport prompts. Historical Pi transport probes do not verify this runtime.
 
 ## 8. Pipeline
 
@@ -376,7 +374,7 @@ scranton context share | reset | restore                                       #
   or (`--default`) removes that model's override. It prints the resulting project settings.
 - `context show --chat`: Team chats resolve Michael and Dwight from the configuration; `--model` gives the
   planner pick of a Pipeline chat (ignored for Team chats). The budget line is exactly
-  `Budget: ≈<used>/<tokens> tokens (<pct>% of budget, <pct>% of the <window>-token window of <id or "pi default">)`
+  `Budget: ≈<used>/<tokens> tokens (<pct>% of budget, <pct>% of the <window>-token window of <id or "Automatic">)`
   followed by ` [window assumed]` when the window is not known and ` [capped: <capped>]` when capped; the
   developer brief gets the same line starting `Developer brief:`. Notes line: `notes: <chars>/16000 chars`.
   `--json` prints the documents of §9.
@@ -387,7 +385,7 @@ scranton context share | reset | restore                                       #
   recipient's context window. Compact tokens: below 1000 the integer; below 100000 one decimal `k` without a
   trailing `.0`; above that integer `k`. No token part when nothing is used.
 - Drawer summary: `≈4,210 of 20,000 tokens (21% of budget · 2.1% of the 200,000-token window)`, a monochrome
-  meter of used against budget, the model id (`pi default` for null) and, when the window is not known,
+  meter of used against budget, the model id (`Automatic` for null) and, when the window is not known,
   `Model window unknown - assuming 128,000 tokens`; a hint when `capped` is set (`min`, `window`, `max`:
   the budget was limited to ...; `engine`: set by the Pipeline engine's prompt budget). Each section and the
   developer brief show `≈N tokens`. Section text is shown in full: the 40000-char cut of `context.js` rises to
@@ -416,7 +414,7 @@ scranton context share | reset | restore                                       #
 | Pipeline gate comment | 4000 chars | unchanged | passed as `--comment=<text>` in argv; needs a file transport first |
 
 File caps that carry these texts must hold 16000 chars of UTF-8 (the chat command file cap of 16384 bytes does
-not). `tools/pi-agent-chat.js` already allows 16000.
+not). The own agent_chat schema and steering input allow 16000 characters.
 
 ## 13. Lanes (exclusive ownership; a file outside your lane is read-only)
 

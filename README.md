@@ -1,6 +1,6 @@
 # Project Scranton
 
-Open-Source-Multi-Agenten-Harness rund um **[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)** (1.5.2), mit nativer Desktop-App, Terminal- und Web-Dashboard. Native Buildziele: Windows x64, macOS (Apple Silicon und Intel) sowie Linux glibc (x64 und arm64); macOS-/Linux-Artefakte sind noch nicht durch einen nativen Lauf dieses Windows-Entwicklungsstands bestätigt. Michael plant, Dwight implementiert und Angela prüft. Der Orchestrator verwaltet Markdown-Mailboxen im Hive; direkte Nachrichten laufen über einen kontrollierten Chat-Broker.
+Open-Source-Multi-Agenten-Harness mit **Scrantons eigener Laufzeit**, nativer Desktop-App, Terminal- und Web-Dashboard. Michael plant, Dwight implementiert und Angela prüft; Oscar und Hank ergänzen optionale Gates. Markdown-Mailboxen im Hive und ein kontrollierter Instanz-Chat verbinden die Rollen. Pi ist nicht mehr der Agenten- oder Modellclient. Native Buildziele sind Windows x64, macOS und Linux; ein Buildziel allein ist kein nativer Laufzeitnachweis.
 
 | Rolle | Aufgabe |
 |---|---|
@@ -12,7 +12,7 @@ Open-Source-Multi-Agenten-Harness rund um **[pi](https://www.npmjs.com/package/@
 
 ## Schnellstart
 
-Voraussetzungen für den Quellcode: Node.js >= 22.19, npm und Git. Standard ist **Trusted-Host ohne OS-Isolation**. Nur für ausdrücklich gewählte Docker-Läufe werden eine **Linux-Docker-Engine und ein lokal gebautes Sandbox-Image** benötigt. Scranton installiert oder startet keine Engine und baut/lädt Images nicht automatisch. Die Desktop-App liefert Node und Pi mit, aber **nicht Docker oder Git**.
+Voraussetzungen: **Node.js 24** (lokale Dauerhaftigkeit benötigt `node:sqlite`), npm und Git. Standard ist **Scrantons eigene OS-Sandbox**. Windows benötigt den nativen Sandboxhelper; macOS verwendet `sandbox-exec`, Linux ein separat verfügbares, nutzbares `bwrap`. Fehlende Voraussetzungen führen zum Fehler, nicht zum Host-Fallback. Docker ist ein optionaler Tool-Executor und wird nicht automatisch installiert, gebaut oder geladen. Details: [ISOLATION.md](docs/ISOLATION.md).
 
 Alle folgenden Befehle im geklonten Scranton-Ordner ausführen; `node bin/scranton.js` funktioniert ohne globalen CLI-Eintrag. Optional macht `npm.cmd link` den in `package.json` deklarierten Befehl `scranton` verfügbar, sofern der globale npm-Binordner im PATH liegt.
 
@@ -24,18 +24,18 @@ node bin/scranton.js help
 node bin/scranton.js login chatgpt
 node bin/scranton.js accounts
 
-# 2. Modelle bewusst je Agent wählen (Beispiel für die drei Standardrollen)
+# 2. Optional Modelle je Agent wählen (sonst Automatic) (Beispiel für die drei Standardrollen)
 node bin/scranton.js agents --hive .scranton-hive
-node bin/scranton.js agent set-model michael --provider openai --model gpt-6.1-sol --hive .scranton-hive
-node bin/scranton.js agent set-model dwight --provider openai --model gpt-6.1-sol --hive .scranton-hive
-node bin/scranton.js agent set-model angela --provider openai --model gpt-6.1-sol --hive .scranton-hive
+node bin/scranton.js agent set-model michael --provider openai --model gpt-5.3-codex --hive .scranton-hive
+node bin/scranton.js agent set-model dwight --provider openai --model gpt-5.3-codex --hive .scranton-hive
+node bin/scranton.js agent set-model angela --provider openai --model gpt-5.3-codex --hive .scranton-hive
 
 # 3. C:\Projekte\MeineApp durch einen eigenen Projektordner ersetzen
 node bin/scranton.js doctor --workspace "C:\Projekte\MeineApp" --hive .scranton-hive
-node bin/scranton.js run "Ergänze eine kleine Funktion mit Tests" --workspace "C:\Projekte\MeineApp" --hive .scranton-hive --trusted-host
+node bin/scranton.js run "Ergänze eine kleine Funktion mit Tests" --workspace "C:\Projekte\MeineApp" --hive .scranton-hive --sandbox scranton
 ```
 
-Der echte Lauf nutzt Modellkontingent bzw. kostet Geld. Das Beispiel wählt `openai/gpt-6.1-sol` aus dem Pi-1.5.2-Katalog; andere Anbieter/Modelle lassen sich mit denselben Befehlen oder in **Agents** wählen. Für zusätzliche Gates auch Oscar/Hank konfigurieren. Ohne explizite Wahl teilen alle nicht konfigurierten Agenten **ein Pi-Standardmodell**; `doctor` kann dessen Provider/Modell mit Pis öffentlicher API nicht offline bestimmen und prüft dessen Zugang nicht. Warnungen ergeben Exit 0 mit Hinweis, Fehler Exit 1. Agent-Defaults bleiben im angegebenen Hive gespeichert; deshalb verwenden Modellwahl, Prüfung und Lauf denselben `--hive`.
+Der echte Lauf nutzt Modellkontingent bzw. kostet Geld. Die explizite Modellwahl ist optional; ohne Wahl gilt Automatic (siehe unten). `doctor` prüft Verfügbarkeit offline, ohne Modellaufruf oder Token-Refresh. Warnungen ergeben Exit 0, Fehler Exit 1. Agent-Defaults bleiben im angegebenen Hive; Modellwahl, Prüfung und Lauf sollten denselben `--hive` verwenden.
 
 Im Standard-Worktree-Modus arbeiten Agenten in privaten Kopien. Nach bestandenen Gates schreibt Scranton fertige Meilensteine **in den gewählten Projektordner zurück** – nicht erst am Laufende. Vorhandene uncommittete Änderungen bilden die Ausgangsbasis und können dabei weiterbearbeitet werden; Git-Historie, Index und Branch des Benutzer-Repositories werden nicht verändert. Spätere überlappende Nutzeränderungen führen zum Integrationskonflikt. Vorher sichern; private Kopien und begrenzte Restore Points sind kein vollständiges Backup. Bei Fehlern zuerst Terminaldiagnose, `.scranton-hive/state.json`, `.scranton-hive/events.jsonl` und die Instanz-Outboxen unter `.scranton-hive/<instanz>/outbox.md` ansehen; frühere Läufe liegen unter `.scranton-hive/runs/`. Details: [Integration](#parallelität-prüfung-und-integration).
 
@@ -45,7 +45,7 @@ Ohne Modellaufruf ausprobieren:
 node bin/scranton.js demo
 ```
 
-Die Demo benutzt Fake-RPC statt eines Modells, private Worktrees und ausdrücklich **simulierten Trusted-Host-Modus**. Sie benötigt keine Modell-Keys oder Docker, ist aber kein Beleg für eine Container-Sicherheitsgrenze. Szenarien: `happy`, `flaky` (Standard), `breaker`, `blocked`, `changes_once`, `security_issues`, `question`. Die Frage-Demo (`--scenario question --conversation`) fragt nach dem Team-Ablauf statt nach einer Todo-Implementierung.
+Die Demo benutzt den scripted Provider im normalen dauerhaften Agentenloop, private Worktrees und ausdrücklich simulierten Trusted-Host-Modus. Keine echten Modellaufrufe oder Shellbefehle durch den Standard-Scriptadapter; kein Sandboxnachweis. Szenarien: `happy`, `flaky`, `breaker`, `blocked`, `changes_once`, `security_issues`, `question`.
 
 ```powershell
 node bin/scranton.js demo --scenario breaker --delay 50 --on-breaker skip
@@ -54,19 +54,39 @@ node bin/scranton.js demo --scenario breaker --delay 50 --on-breaker skip
 Für optionale Docker-Läufe Docker separat einrichten und das Image bewusst bauen:
 
 ```powershell
-docker build -t scranton-sandbox:1.5.2-r1 sandbox
+docker build --pull=false -t scranton-tools:24-r1 sandbox
 node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --parallel 3 --sandbox docker
 ```
 
-Dieser Docker-Befehl lädt Basisimage sowie apt/npm-Pakete. Das r2-Rezept enthält `fd-find` (mit `fd`-Symlink) und ripgrep für Pis `find`-/`grep`-Werkzeuge. Buildrezept, Rechte, Netz und Grenzen: [ISOLATION.md](docs/ISOLATION.md).
+Der explizite Build benötigt das Basisimage und apt-Pakete; das Tool-Image enthält Git/Bash/ripgrep/fd, keinen Modellclient. Scranton baut oder lädt es nicht beim Runstart. Rechte, Netz und Grenzen: [ISOLATION.md](docs/ISOLATION.md).
 
-Standardläufe verwenden Trusted-Host; nur vertrauenswürdige Aufgaben ausführen. Explizite Hostauswahl mit Bestätigung:
+Standardläufe verwenden `--sandbox scranton`. Nur für bewusst vertrauenswürdige Aufgaben kann der Hostmodus ausdrücklich bestätigt werden:
 
 ```powershell
 node bin/scranton.js run "Baue eine Todo-CLI mit Tests" --workspace workspace --trusted-host
 ```
 
-**Trusted-Host ist keine OS-Isolation.** Pi und Shellbefehle besitzen dann die Rechte deines Benutzerkontos. Private Git-Worktrees trennen Dateien, nicht Betriebssystemrechte. `--parallel 1` allein schaltet Docker nicht ab. Legacy-`execution.isolation:"shared"` verlangt eine einzelne Pipeline und expliziten Host-Modus; shared+Docker wird abgewiesen. Shared-Instanzen melden `worktree:null` und haben keine private Dateigrenze.
+**Trusted-Host ist keine OS-Isolation.** Shellbefehle besitzen Benutzerrechte. Private Worktrees trennen Dateistände, nicht Prozessrechte. Legacy-`execution.isolation:"shared"` verlangt eine Pipeline und expliziten Hostmodus; Shared-Instanzen haben `worktree:null` und keine private Dateigrenze.
+
+## Eigene Laufzeit, Streams und Freigaben
+
+- `src/core/tools/`: deterministische Tools mit Pfadbegrenzung, zentraler Kürzung und JSON-Schemas. Diese Dateiprüfungen sind keine Shell-/OS-Isolation.
+- `src/core/llm/` und `credentials/`: eigene Providerclients, Claude-/ChatGPT-/Antigravity-OAuth, Gemini per API-Key sowie eigene OpenAI-kompatible Provider.
+- `src/core/durable/`: eigener SQLite-Workflowmotor je Chat in `<hive>/dbos.sqlite`, Marker in `<hive>/agent-step-markers`. Nur `DBOS_SYSTEM_DATABASE_URL` oder `DBOS_DATABASE_URL` wählen echtes DBOS auf Postgres; `DATABASE_URL` wird absichtlich ignoriert. DBOS wird nur dafür geladen. Datenbank und uncheckpointierte Marker gemeinsam aufbewahren.
+- `src/core/agent/`: Agentenloop als Workflow, dauerhafte `output`-/`history`-Streams und `agent_state` mit `thinking`, `tool_call`, `waiting_approval`, `compaction_failed`, `done`. Terminaler Workflowstatus ist maßgeblich; Exactly-once für externe Effekte wird nicht garantiert.
+
+**Automatic** wählt das erste angemeldete unterstützte Konto in fester Reihenfolge: `anthropic/claude-sonnet-4-5`, `openai/gpt-5.3-codex`, `google/gemini-2.5-pro`, `google-antigravity/gemini-3-pro`. Ohne passendes Konto folgt ein Fehler; keine Auswahl nach Katalogsortierung und keine automatische Wahl eigener Provider. Explizite Provider-/Modellpaare haben Vorrang. Dieselbe Regel gilt in allen Team-Sandboxmodi; der Katalog garantiert keine Modellberechtigung.
+
+```powershell
+node bin/scranton.js run "Prüfe die Änderung" --sandbox scranton --sandbox-network allow --approve write,edit --approval-timeout 600
+node bin/scranton.js watch WORKFLOW-ID --hive .scranton-hive
+node bin/scranton.js approve WORKFLOW-ID CALL-ID --yes --hive .scranton-hive
+# Ablehnen: --no statt --yes
+```
+
+Freigaben sind opt-in (`approvals.tools:[]` als Default), Timeout standardmäßig 600 Sekunden; Ablehnung/Timeout wird ein Toolfehler für das Modell. Ohne TTY zeigt die CLI den separaten Freigabebefehl. Registry-Scope: `--data DIR --project ID --chat ID`. `watch` liest einen Workflow, nicht den gesamten Run.
+
+HTTP: `GET /api/runs/:runId/agents/:instanceId/stream` (SSE), `GET|POST /api/approvals`; Registry jeweils unter `/api/projects/:p/chats/:c`. Wiederanschluss mit `Last-Event-ID` oder inklusivem `?fromOffset=N`. POST-Freigabe: `{workflowId,callId,approved:boolean}` mit Control-Headern. Exakte Cursor-, Scope- und Sicherheitsregeln: [CONTROL.md](docs/CONTROL.md), [Agent routes](src/server/AGENT-ROUTES.md).
 
 ## Anmelden
 
@@ -81,19 +101,19 @@ node bin/scranton.js logout claude
 # Alternativ: node bin/scranton.js logout chatgpt
 ```
 
-**Google Antigravity** bietet einen Google-Konto-Login über `node bin/scranton.js login antigravity` (Provider `google-antigravity`). Das ist eine **inoffizielle Drittclient-Anbindung** über Scrantons native Pi-1.5.2-Providererweiterung, kein eingebauter Google-OAuth-Provider von Pi. Bei manueller Anmeldung die **vollständige Redirect-URL einschließlich State** einfügen, keinen isolierten Code. Scranton ermittelt das zugewiesene Projekt über Googles Dienst; ohne zugewiesenes Projekt muss die Kontoeinrichtung in Antigravity abgeschlossen werden. Der begrenzte Gemini-Katalog garantiert weder Modellverfügbarkeit noch bestimmte Berechtigungen oder kostenlose Quotas. Team-Docker-Läufe nutzen dafür einen authentifizierten Inferenz-Broker auf dem Host: Google-Access- und Refreshcredentials bleiben auf dem Host, der Container erhält nur eine temporäre, auf Modellaufrufe beschränkte Broker-Berechtigung. Details und Quota-Risiko: [ISOLATION.md](docs/ISOLATION.md).
+**Google Antigravity** bietet Google-Konto-OAuth (`login antigravity`, Provider `google-antigravity`) über Scrantons eigenen Credentialadapter und LLM-Client. Vollständige Redirect-URL einschließlich State verwenden. Die Projektzuordnung kommt vom Google-Dienst; ohne Projekt scheitert die Einrichtung. Inoffizielle Drittclient-Anbindung, keine Garantie für Modellberechtigung oder kostenlose Quotas. LLM und Tokens bleiben auch bei Docker auf dem Host; es gibt keinen Team-Inferenz-Broker mehr.
 
 **Gemini** bleibt unabhängig davon als API-Key-Pfad aus [Google AI Studio](https://aistudio.google.com/apikey) erhalten. `node bin/scranton.js login gemini` (Provider `google`) und `node bin/scranton.js login <provider> --api-key` lesen den Schlüssel über eine verdeckte Eingabe oder stdin, **niemals als Kommandozeilenargument**. Nur literale Keys ohne eingebetteten Leerraum oder Steuerzeichen sind erlaubt; Präfixe `!` und `$` werden abgewiesen. Bei Claude/ChatGPT ersetzt ein gespeicherter API-Key den bisherigen Abo-Zugang dieses Providers.
 
 `login` öffnet den Systembrowser und zeigt die Anmeldeadresse auch im Terminal. Anmeldung dort abschließen; falls angefordert, den Autorisierungscode oder die vollständige Weiterleitungsadresse im Terminal einfügen. Pro Server/CLI-Prozess läuft höchstens eine Anmeldung; nach zehn Minuten wird sie abgebrochen. `accounts` zeigt den Status ohne Token-Refresh, `logout` entfernt nur den gespeicherten Zugang des gewählten Anbieters.
 
-Im Web-Dashboard mit `--control` und in der Desktop-App öffnet **Accounts** die Konto-Seitenleiste: **Sign in**, bei Bedarf Code einfügen, **Cancel** oder **Sign out**; außerdem **Add API key**, **Replace key** und **Remove key** sowie ein Formular für eigene Provider. **Google Antigravity** hat eine eigene Zeile ausschließlich mit **Sign in / Sign out**; **Gemini** bleibt die separate API-Key-Zeile. Beide Zugänge werden getrennt gespeichert; Anmeldung oder Abmeldung bei Antigravity entfernt keinen Gemini-Key. In **New run** lässt sich für Michael, Dwight und Angela jeweils ein Modell aus dem Pi-Katalog der angemeldeten Konten bzw. konfigurierten API-Keys wählen. Die Auswahl bleibt lokal im Browser gespeichert; **pi default** übernimmt die Agentenkonfiguration. Alternativ `agents.<rolle>.provider/model` in `scranton.config.json` oder `SCRANTON_<ROLE>_PROVIDER=<Provider-ID>` zusammen mit `SCRANTON_<ROLE>_MODEL=<Modell-ID>` setzen (`ROLE`: `MICHAEL`, `DWIGHT`, `ANGELA`). Die UI-Auswahl gilt nur für den gestarteten Lauf und schreibt keine Konfigurationsdatei.
+Im kontrollierten Web-Dashboard und in der Desktop-App verwaltet **Accounts** Anmeldungen, API-Keys und eigene Provider. **New run** und Follow-ups verwenden den angemeldeten Scranton-Katalog. Eine leere Rollenwahl übernimmt den Agent-Default, ohne Default gilt **Automatic**. Modell- und Thinking-Overrides gelten pro Run in allen Team-Sandboxmodi und schreiben keine Konfigurationsdatei. Alternativ `agents.<rolle>.provider/model` oder `SCRANTON_<ROLE>_PROVIDER` und `_MODEL` setzen.
 
-Zugangsdaten liegen in Pis eigener `%USERPROFILE%\.pi\agent\auth.json`, gemeinsam mit der Pi-CLI; `PI_CODING_AGENT_DIR` ersetzt dieses Profilverzeichnis. Scranton hält keine separate Credential-Kopie im Hive. API-Keys funktionieren weiterhin: In Pi 1.5.2 hat ein gespeicherter Provider-Zugang (OAuth oder API-Key) Vorrang vor Umgebungs-Keys. Ohne gespeicherten Eintrag greift die Anbieter-Umgebung; ein fehlgeschlagener OAuth-Refresh fällt nicht still darauf zurück. Abmelden löscht keine Umgebungs-Keys, diese können danach wieder aktiv werden. Docker erhält bei unterstützter Claude-/ChatGPT-Abo-Nutzung nur kurzlebige Access-Tokens, niemals den Refresh-Token; bei `google-antigravity` bleiben dagegen auch Access-Tokens auf dem Host, und Docker erhält nur die temporäre Broker-Berechtigung; Details: [ISOLATION.md](docs/ISOLATION.md).
+Zugangsdaten und eigene Provider liegen in Scrantons eigenem `store.json`: Windows `%APPDATA%\dev.scranton.desktop\credentials`, macOS `~/Library/Application Support/dev.scranton.desktop/credentials`, Linux `$XDG_DATA_HOME/dev.scranton.desktop/credentials` (Standard `~/.local/share/dev.scranton.desktop/credentials`). `SCRANTON_CREDENTIALS_DIR` überschreibt das Verzeichnis. Beim ersten Initialisieren werden Pi-Logins und Provider einmalig aus `PI_CODING_AGENT_DIR` bzw. `~/.pi/agent` importiert; vorhandene Scranton-Einträge gewinnen. Danach liest oder schreibt Scranton dieses Pi-Profil nicht mehr. Wenn Scranton importierte Tokens erneuert, müssen Pi-CLI-Nutzer sich gegebenenfalls in Pi erneut anmelden. Der Store ist private App-Datenablage, kein verschlüsselter OS-Schlüsselbund.
 
-**Antigravity in Team-Docker:** Nur eine lokale Engine ist unterstützt; ein entferntes `DOCKER_HOST` oder ein ausgewählter Remote-Docker-Kontext ist nicht unterstützt. Pro Pi-/Sandbox-Aufruf entsteht eine eigene temporäre Broker-Berechtigung, nicht eine gemeinsame Berechtigung für den gesamten Run. Jede Inferenz hat eine Frist von **zehn Minuten**. Unter Windows/macOS bindet der Broker an Loopback; unter nativem Linux an das per Docker-Inspektion ermittelte IPv4-Gateway der Default-Bridge, **nicht an Loopback**. Das ist lokaler HTTP-Transport ohne Verschlüsselung und keine Egress-Firewall; berechtigte Containerprozesse können Modell-Quota verbrauchen.
+Docker führt nur Subprozesswerkzeuge aus; weder Provider-Keys noch OAuth-Tokens, Prompts oder Sessions werden in den Container projiziert. `--sandbox-network none` sperrt Containerwerkzeuge, nicht die weiterhin hostseitigen LLM-Anfragen.
 
-**Prüfstand und Grenzen:** Unter Windows Docker Desktop ist der Brokerpfad mit echten Containern und synthetischen Modellantworten geprüft. Natives Linux, macOS sowie Docker Desktop unter Linux und Rootless-Docker sind für diesen Pfad nicht dynamisch verifiziert. Für Google Antigravity wurden weder ein echter Login noch Live-Modellaufrufe getestet; der Container-Nachweis belegt keine Google-Endpunktkompatibilität. Ein echter OAuth-Rundlauf wurde hier nicht getestet. Abo-Nutzung in Drittanbieter-Tools unterliegt den Bedingungen und Nutzungslimits des Anbieters; diese können sich ändern oder die Nutzung einschränken. Parallele Pipelines teilen die Rate-Limits desselben Abos.
+**Prüfstand und Grenzen:** Offline-/scripted Tests beweisen weder reale OAuth-Annahme noch Modellberechtigungen oder native macOS-/Linux-Isolation. Anbieterbedingungen und gemeinsame Abo-Rate-Limits gelten weiterhin. Historische Pi-/Brokerprüfungen sind keine Freigabe der eigenen Laufzeit.
 
 ### Eigene Provider (OpenAI-kompatibel)
 
@@ -106,7 +126,7 @@ node bin/scranton.js provider remove abliteration
 
 `--discover` fragt hier `https://api.abliteration.ai/v1/models` ab; alternativ Modell-IDs mit `--models a,b` deklarieren. Unterstützte API-Typen: `openai-completions`, `openai-responses`, `anthropic-messages`. Die Basis-URL verlangt HTTPS (HTTP nur auf Loopback), ohne URL-Zugangsdaten, Query oder Fragment. Discovery folgt nur Weiterleitungen desselben Ursprungs und speichert allein noch keinen Provider. Im **Accounts**-Formular Basis-URL, API-Typ und Key eingeben, Modelle ermitteln/auswählen oder IDs manuell eintragen und den Provider speichern; für abliteration.ai gibt es eine Vorlage. Danach stehen seine Modelle unter **New run** zur Wahl. **Remove provider** bzw. `node bin/scranton.js provider remove <id>` entfernt Definition und gespeicherten Key.
 
-Scranton ergänzt die echte `%USERPROFILE%\.pi\agent\models.json` (bzw. das Profil aus `PI_CODING_AGENT_DIR`) nur um selbst angelegte Provider und entfernt nur unverändert verwaltete Einträge. Vor dem ersten Überschreiben einer vorhandenen Datei entsteht einmalig `models.json.scranton-bak`; `scranton-providers.json` registriert die verwalteten Definitionen. **Keys stehen niemals in diesen Definitionen**, sondern in Pis `auth.json`. Bestehende fremde Provider werden nicht überschrieben; ungültiges JSON/JSON mit Kommentaren und extern geänderte verwaltete Definitionen werden nicht still repariert oder entfernt.
+Eigene Providerdefinitionen und deren Keys werden atomar im eigenen Store gespeichert; Keys erscheinen nicht in Provider-Metadaten oder API-Antworten. Bestehende IDs werden nicht überschrieben. Pi-Dateien werden nur beim einmaligen Import gelesen, niemals verwaltet oder zurückgeschrieben.
 
 ## Projekte und Chats
 
@@ -204,13 +224,13 @@ node bin/scranton.js dreaming reject --data .scranton-data --project PROJEKT-ID 
 node bin/scranton.js dreaming cancel --data .scranton-data --project PROJEKT-ID --json
 ```
 
-Authentifizierung/Modellkatalog allein garantiert **keine Transportkompatibilität**: Pi lässt bei ChatGPT-Abos `max_output_tokens` weg, daher verweigert der neue begrenzte Reflexionstransport diese Aufrufe vor Inferenz. Ungeprüfte APIs (`openai-codex-responses`, `pi-messages`, `mistral-conversations` und unbekannte APIs) werden ebenfalls verweigert. Das ändert nicht den bestehenden Pipeline-Completion-Transport. Tests sind offline/scripted, keine neuen echten Provideraufrufe.
+Der begrenzte Reflexionstransport verwendet `tools/dreaming-complete.js` und eigene LLM-Clients ohne Tools/Sessions. Vor Inferenz wird die unterstützte API-Ausgabetokenbegrenzung geprüft; nicht unterstützte Payloadpfade scheitern geschlossen. Katalogpräsenz garantiert keine Endpunktkompatibilität. Tests bleiben offline/scripted.
 
 **Quellenabgrenzung:** Die recherchierten offiziellen Claude-Code-Dokumente beschreiben Auto Memory und `/memory`, keinen dokumentierten öffentlichen `/dream`-Befehl. Ein von Dritten extrahierter Konsolidierungsprompt belegt keine öffentliche Verfügbarkeit oder Trigger. **Managed Agents Dreams ist ein anderes Produkt.** Quellen, Übertragungs-/Budgetgrenzen und API: [Recherche](docs/CLAUDE_CODE_DREAMING_RESEARCH.md), [DREAMING.md](docs/DREAMING.md).
 
 ## Scranton Pipeline
 
-Neben Team-Chats gibt es **Pipeline-Chats** mit einer eigenständigen Python-/LangGraph-Engine: feste, begrenzte Plan-/Edit-/Prüfschritte in einem privaten Snapshot sowie menschliche Plan- und Lieferfreigaben. Die Übernahme in den Projektordner ist eine separate Entscheidung; Trusted-Host-Checks bieten keine OS-Isolation. Die Desktopform bietet Checks und explizite Setuprezepte; Fehlerausgaben lassen sich aufklappen, nicht gestartete Läufe zeigen ihre Aufrufdiagnose und fehlgeschlagene Läufe einen partiellen Diff. Private Gitmetadaten liegen außerhalb des Check-Workspace; getrackte Checkänderungen werden nach Baseline/Verify restauriert und gemeldet. Von pi als verfügbar gemeldete Modelle, einschließlich Abos, sind **via pi** als tool-/sessionlose Completions nutzbar; angemeldete API-Key-Konten auf verifizierten kompatiblen Endpunkten gehen direkt. Ein echter Lauf wurde am **2026-11-09 um 22:37** über die Desktop-HTTP-API auf dem Drei-Dateien-Projekt `.scratch/pipeline/real-smoke/project` ausgeführt: alle drei Rollen `openai/gpt-6.1-sol` **via pi**, ChatGPT-Subscription des Benutzers, Trusted-Host-Sandbox. Planner: 2 Aufrufe (ein Kontextzug), Implementer: 1, Reviewer: 1; pi meldete **7647 Input-/601 Outputtokens**. Baselinecheck rot, finaler Check grün, Ein-Zeilen-Diff; die Quelldatei änderte sich erst nach Lieferfreigabe; Abschluss **`succeeded`**. Dieser eine Lauf belegt **nicht** andere Provider, größere Repositories, Reparatur-/Revisionsschleifen mit echten Modellen oder Dockerbetrieb mit echten Modellen. Einstieg: [Desktop und HTTP-API](docs/PIPELINE.md), [Engine-Installation und CLI-Demo](engine/README.md), [Architektur und Grenzen](engine/docs/ARCHITECTURE.md).
+Neben Team-Chats gibt es **Pipeline-Chats** mit eigener Python-/LangGraph-Engine: begrenzte Plan-/Edit-/Prüfschritte im privaten Snapshot sowie menschliche Plan- und Lieferfreigaben. Die Host-Bridge `tools/pipeline-complete.js --provider P --model M [--thinking T] <request.json> <response.json>` verwendet Scrantons eigene LLM-Clients und Credentialstore für eine Completion mit `tools:[]`, ohne Agentensession. Der Supervisor meldet `via:"bridge"` und konfiguriert `provider:"command"`. Kompatible API-Key-Konten können weiterhin `via:"direct"` verwenden. Modellaufrufe laufen auf dem Host, unabhängig von der Pipeline-Check-Sandbox. Automatisierte Tests nutzen lokale/scripted Provider; historische Pi-Smokes sind kein Nachweis des neuen Transports. Einstieg: [PIPELINE.md](docs/PIPELINE.md), [Engine](engine/README.md), [Architektur](engine/docs/ARCHITECTURE.md).
 
 Pipeline ergänzt begrenzte **Neuplanung** mit erneuter menschlicher Planfreigabe und **parallele Schritte** in privaten Lanes mit anschließender Integrationsprüfung.
 Die **Docker-Sandbox** hat ein eigenes, lokal über **Build sandbox image** baubares Image; Demo-Szenarien zeigen Grundablauf, Neuplanung, Parallelität und **Evidence checks** (`demo --scenario evidence`, HTTP `demoScenario:"evidence"`) ohne Modellaufrufe. Die Evidence-Demo weist einen blinden Plan (`unseen_target`) und einen falschen Abwesenheitsclaim für `add` (`false_absence`, mit Treffern) ab und repariert beide; am Liefer-Gate steht ein durch die Baseline `demonstrated`-Kriterium neben einem `met_not_demonstrated`, mit `criteria_not_demonstrated`, ohne `grounding_violations`. Nach beiden Freigaben gelingt der Run. Das Szenario verlangt `enforce` (CLI `--grounding observe`: Exit 2, HTTP: 400); Ablauf und aufgezeichnete R9-Scores stehen in der [Engine-Anleitung](engine/README.md#evidence-demo-abgewiesen-repariert-trotzdem-erfolgreich). Bedienung und Grenzen: [PIPELINE.md](docs/PIPELINE.md), Konfiguration/CLI: [Engine-README](engine/README.md).
@@ -221,7 +241,7 @@ Diese drei Erweiterungen sind nur scripted geprüft, nicht mit echten Modellen; 
 
 ## Parallelität, Prüfung und Integration
 
-Standard: RPC-Transport, bis zu drei aktive Meilenstein-Pipelines, private Git-Worktrees und persistente Sessions. Eine Pipeline führt jeweils Entwicklung oder QA aus. Instanzen heißen z. B. `michael`, `dwight-m1`, `angela-m1`; Rollen sind keine eindeutigen Chat-Adressen bei parallelen Aufgaben.
+Standard: eigener dauerhafter Agentenloop, bis zu drei aktive Meilenstein-Pipelines, private Git-Worktrees und Scranton-OS-Sandbox. Instanzen heißen z. B. `michael`, `dwight-m1`, `angela-m1`; Rollen sind bei parallelen Aufgaben keine eindeutigen Chat-Adressen.
 
 Der Plan enthält `dependsOn`: Fehlt das Feld, hängt der Meilenstein vom Vorgänger ab; explizites `[]` bedeutet unabhängig. Unbekannte, eigene oder zyklische Abhängigkeiten werden abgewiesen. Eine Abhängigkeit ist erst nach erfolgreicher QA **und sicherer Integration** erfüllt; übersprungene/fehlgeschlagene Voraussetzungen geben Nachfolger nicht frei.
 
@@ -231,7 +251,7 @@ Nach `[TASK_COMPLETE]` erhält Angela einen eigenen Worktree aus genau diesem En
 
 ### Restore Points und Undo
 
-Für Team-Worktree-Integration (Trusted Host oder Docker) speichert Scranton die ursprünglichen Bytes der betroffenen Dateien vor dem Zurückschreiben unter `<hive>/restore-points/<runId>/`. Auch uncommittete Ausgangsdateien werden so erhalten. Der Start nennt in zwei Zeilen nur, ob im Ordner oder einem Elternordner `.git` gefunden wurde, sowie die Restore-Point-Grenzen. Er führt dafür kein Git aus, liest keine Git-Konfiguration und zählt keine uncommitteten/ungetrackten Dateien. Die Abschlussübersicht nennt den exakten Undo-Befehl nur, wenn noch Dateien zurückzusetzen sind, und weist auf die Anzahl nicht restaurierbarer Dateien hin.
+Für Team-Worktree-Integration (Scranton-Sandbox, Trusted Host oder Docker) speichert Scranton die ursprünglichen Bytes der betroffenen Dateien vor dem Zurückschreiben unter `<hive>/restore-points/<runId>/`. Auch uncommittete Ausgangsdateien werden so erhalten. Der Start nennt in zwei Zeilen nur, ob im Ordner oder einem Elternordner `.git` gefunden wurde, sowie die Restore-Point-Grenzen. Er führt dafür kein Git aus, liest keine Git-Konfiguration und zählt keine uncommitteten/ungetrackten Dateien. Die Abschlussübersicht nennt den exakten Undo-Befehl nur, wenn noch Dateien zurückzusetzen sind, und weist auf die Anzahl nicht restaurierbarer Dateien hin.
 
 ```powershell
 node bin/scranton.js undo --hive .scranton-hive --list
@@ -253,8 +273,8 @@ Bei Integrationskonflikten ist **Retry kein Rebase**: Der Entwickler-Worktree be
 | `--workspace DIR`, `--hive DIR`, `--config FILE` | Ziel, Laufzeitdaten, Konfiguration |
 | `--parallel N` | Maximale aktive Pipelines (Standard 3); Parallelität erfordert Worktrees |
 | `--sandbox docker` | Optionaler Container-Modus, kein stiller Host-Fallback |
-| `--sandbox-image IMAGE` | Lokal vorhandenes Linux-Image, Standard `scranton-sandbox:1.5.2-r1` |
-| `--sandbox-network bridge\|none` | `bridge` erlaubt Netzwerkzugang; `none` sperrt Container-Netz |
+| `--sandbox-image IMAGE` | Lokal vorhandenes Linux-Image, Standard `scranton-tools:24-r1` |
+| `--sandbox-network allow\|none` | `allow` erlaubt Tool-Netzwerkzugang (`bridge` nur als Alias); `none` sperrt ihn, nicht die hostseitigen LLM-Aufrufe |
 | `--trusted-host` | Explizit auf dem Host ausführen, Worktrees bleiben getrennt |
 | `--no-plan` | Eine Aufgabe ohne Modellplanung |
 | `--request-file FILE` | `run`: UTF-8 (BOM optional) oder UTF-16 mit BOM; erstes Nicht-Leerzeichen `{` verlangt das strikte Envelope `{"v":1,"request":"..."}`, sonst wörtlicher Text; höchstens 32768 Zeichen / 262144 Bytes |
@@ -268,11 +288,11 @@ Eine Anfrage kann statt als Argument mit `node bin/scranton.js run --request-fil
 
 ## Sessions und direkter Chat
 
-Bis zur ersten gültigen RPC-Antwort nach jedem Prozessstart gilt für **alle** Kommandos (auch Chat-Steering und Abbruch) dieselbe Frist: **60 Sekunden ab Spawn** für Docker-/Pi-Start und Prompt-Preflight. Ohne Antwort meldet Scranton `pi did not start within 60 s (no answer to the first prompt)`; auch bei Timeout/Abbruch wird der eigene Container entfernt und die Entfernung geprüft. Nach der ersten Antwort erhalten noch wartende sowie neue RPC-Kommandos jeweils 5 s; Brokerantworten behalten 10 s und die Erweiterung 15 s. Interne Overrides dürfen die Budgets nur verkürzen.
+Agentenaufrufe sind Workflows mit checkpointierten Modell- und Toolschritten, keine CLI-/RPC-Prozesse. Abbruch signalisiert laufende Anfragen und Werkzeuge; Cleanup wird vor Freigabe der Run-Lease abgewartet. Unklare externe Effekte werden nicht als sicher fehlgeschlagen behandelt oder blind wiederholt.
 
-Jede Run-/Instanz-Kombination hat eine stabile UUID und ein eigenes Sessionverzeichnis. Wiederholungen behalten bei aktivierten persistenten Sessions dieselbe ID und Historie; der RPC-Prozess kann zwischen Aufrufen enden. Stabile Scranton-Instanz-/Session-IDs garantieren nicht dieselbe Pi-Historie: Docker nutzt den festen Pfad `/workspace` und kann dort fortsetzen; Trusted-Host-Angela erhält pro QA-Zyklus ein neues Checkout-Verzeichnis und beginnt dort eine frische Pi-Historie. Pi 1.5.2 bindet geladene Sessions an ihren gespeicherten CWD; ein erzwungenes Laden alter QA-Sessions würde den falschen Checkout prüfen. Verifiziertes CWD-Rebinding bleibt eine künftige Erweiterung. Das ist **keine automatische Wiederaufnahme nach einem App-Absturz**. Hive/Sessions enthalten Aufgaben, Antworten und möglicherweise sensible Inhalte und gehören nicht in ein Release oder öffentliches Repository.
+Session-IDs identifizieren Instanzen, laden aber keine Pi-Sessiondateien. Kanonische Modellhistorie liegt im dauerhaften `history`-Stream des Workflows, Ausgaben im `output`-Stream; ein neuer Aufruf ist ein eigener Workflow. Gleicher expliziter Invocation-Key hängt an denselben Workflow an. Dauerhafte Schritte sind keine automatische Wiederaufnahme des gesamten Orchestrator-Runs. Hive und Datenbank enthalten sensible Aufgaben, Antworten und Reasoning und gehören nicht in Releases.
 
-Das verwaltete Pi-Tool `agent_chat` sendet `{to,text}` an eine **exakte Instanz-ID**; Sender und Run setzt der Broker. Menschen verwenden den Instanz-Chat der Oberfläche bzw. `POST /api/chat`. Nachrichten können warten; eine Queue-Bestätigung bedeutet nicht, dass das Modell den Text schon verarbeitet hat. Der Broker protokolliert `queued` (noch nicht gesendet), `delivered` (RPC-ACK), `rejected` (definitiv abgewiesen) oder `unknown` (Annahme unklar); auch ein RPC-ACK ist kein Nachweis inhaltlicher Verarbeitung. Unbekannte/beendete Empfänger werden abgewiesen. Bei `unknown` erfolgt kein automatischer Neuversand, auch nicht beim nächsten Instanzaufruf. ACK-Budgets: 5 s für RPC-Kommandos, 10 s für den Broker, 15 s für die Erweiterung. Ein eigenständiger `message`-CLI-Befehl existiert nicht; Server- und Tool-Chat sind implementiert. Details: [CONTROL.md](docs/CONTROL.md).
+`agent_chat({to,text})` ist ein eigenes Tool für exakte Instanz-IDs. Menschen verwenden den Instanz-Chat bzw. `POST /api/chat`. `queued` heißt nicht gesendet, `delivered` bestätigt die dauerhafte Steering-Queue, nicht Modellverarbeitung; `rejected` ist definitive Ablehnung, `unknown` bleibt unklar und wird nicht automatisch wiederholt. Kein eigenständiger `message`-CLI-Befehl. Details: [CONTROL.md](docs/CONTROL.md).
 
 ## Circuit Breaker und Oberflächen
 
@@ -324,20 +344,20 @@ Rangfolge: Flags > Umgebung > `scranton.config.json` > Defaults. `.env` wird gel
   "execution": {
     "maxParallel": 3,
     "isolation": "worktree",
-    "sandbox": { "mode": "host", "image": "scranton-sandbox:1.5.2-r1", "network": "bridge" },
+    "sandbox": { "mode": "scranton", "network": "allow" },
     "persistentSessions": true,
     "maxReplans": 0
   }
 }
 ```
 
-Dynamische Neuplanung ist nicht implementiert: Der veröffentlichte DAG bleibt unverändert. Effektiv ist `maxReplans` immer 0; ein konfigurierter Wert ungleich 0 wird mit Warnung ignoriert. Agentenmodelle über `agents.<rolle>.provider/model/thinking` oder `SCRANTON_<MICHAEL|DWIGHT|ANGELA>_PROVIDER`, `_MODEL`, `_THINKING`. Scranton erzwingt kein bestimmtes Modell. Anbieter-Keys werden zur Laufzeit gesetzt. Host-Pi kann sein Benutzerprofil verwenden; Docker mountet das Host-Pi-Profil **nicht** und reicht nur explizit erlaubte Provider-Umgebungsvariablen weiter. Docker-`bridge` ist keine Egress-Firewall; `none` verhindert auch Cloud-Modellzugang. Ollama unter Host-`localhost` ist aus dem Container nicht derselbe Dienst; eigene Netz-/Provider-Konfiguration erforderlich.
+Dynamische Team-Neuplanung ist nicht implementiert: veröffentlichter DAG unveränderlich, effektives `maxReplans:0`. Rollenmodelle kommen aus Agent-Defaults oder Run-Overrides. LLM-Zugang bleibt hostseitig; Docker-`none` sperrt nur Toolnetz, `allow` (Alias `bridge`) erlaubt Egress.
 
-Pi-Auflösung im Host-Modus: explizites `pi.command`/`SCRANTON_PI_COMMAND`, lokale Paketabhängigkeit, dann PATH. Die Desktop-Ressourcen enthalten die lokale Pi-Abhängigkeit und ihren echten Einstiegspunkt; kein globales Pi nötig. Eigene Overrides dürfen nicht auf Entwicklerpfade zeigen. Minimaler Kontext deaktiviert automatisch geladene Skills, Kontextdateien, Erweiterungen und MCP; die verwaltete Chat-Erweiterung und bei `google-antigravity` die passende Providererweiterung werden gezielt per `--extension` geladen: `src/core/antigravity/extension.js` für Host-Pi und Pipeline-Bridge, die Broker-Erweiterung für Team-Docker. Fremde Projektdateien bleiben untrusted Eingaben.
+Alte Pi-Einstellungen werden mit klarer Fehlermeldung abgewiesen: sämtliche `pi.*`-Optionen, `SCRANTON_PI_COMMAND` und `agents.<id>.extraArgs`. Modelle, Tools und Thinking direkt konfigurieren; keine fremden Pi-Erweiterungen, Skills oder MCP-Discovery. Projektdateien bleiben untrusted Eingaben.
 
 **Gate-Werkzeuge sind absichtlich eingeschränkt:** `agents.oscar.tools`, `agents.hank.tools` und `agents.angela.tools` müssen wie eigene Gates eine nichtleere Teilmenge von `read`, `grep`, `find`, `ls`, `bash` sein (Windows-Fallback `powershell`). `write`/`edit` oder andere Werkzeuge führen bei jedem Konfigurationsladen, auch bei `visualize`, zu einem `ConfigError`, der den Schlüssel `agents.<id>.tools` nennt. Bestehende Konfigurationen müssen entsprechend angepasst werden. Shellwerkzeuge können weiterhin Dateien verändern; dies ersetzt keine OS-Isolation.
 
-Für Gates akzeptieren `pi.extraArgs` und `agents.<id>.extraArgs` nur geprüfte Pi-1.5.2-Optionen mit vollständigen Werten. Werkzeugänderungen, Ressourcenlader (Erweiterungen, Skills, Templates, Themes), unbekannte Flags und positionale Argumente werden abgewiesen. MCP und Erweiterungs-Discovery bleiben für Gates auch bei `pi.minimalContext:false` deaktiviert; nur Scrantons verwaltete RPC-Chat-Erweiterung und bei `google-antigravity` die Providererweiterung werden gezielt geladen. Die abschließende Werkzeug-Allowlist bleibt unverändert, zusätzliche Erweiterungswerkzeuge werden dadurch nicht freigeschaltet. Michael und Dwight behalten ihr bisheriges Verhalten.
+Gates erlauben nur `read`, `grep`, `find`, `ls` und Shell (`bash` bzw. `powershell`). Keine `write`-/`edit`-Tools; Shell ist dennoch schreibfähig. Die OS-Sandbox begrenzt Prozesse, die Tool-Allowlist ersetzt diese Grenze nicht. `extraArgs` sind für alle Rollen abgewiesen.
 
 ## Entwicklung, Desktop und Prüfstand
 
@@ -347,9 +367,9 @@ npm.cmd test
 npm.cmd run test:packaging
 ```
 
-Die Paketierungsprüfung setzt vorbereitete Ressourcen voraus. Sie prüft Pi-Paketidentität, Produktionsabhängigkeiten, verwaltete Tools und einen credential-freien `--help`-Start mit gebündeltem Node und leerem PATH. Das ist kein Modell-, Container- oder Installer-End-to-End-Test. [DESKTOP.md](docs/DESKTOP.md) beschreibt Tauri-Build und Nutzerdaten.
+Die Paketierungsprüfung benötigt frisch vorbereitete Ressourcen: `npm.cmd run app:prepare`, dann `npm.cmd run test:packaging`. Sie ersetzt keinen echten Modell-, Sandbox- oder Installer-Lifecycle-Test. Der Verpackungsstand muss separat am aktuellen Quellstand bestätigt werden; [DESKTOP.md](docs/DESKTOP.md).
 
-Struktur: `src/core/` Orchestrierung/Isolation/RPC, `src/server/` Control/SSE, `src/dashboard/` Terminal, `visualizer/public/` Web, `agents/` Rollenprompts, `tools/` verwaltete Erweiterung/Fakes, `sandbox/` explizites Docker-Buildrezept. Tests verwenden temporäre Verzeichnisse, nicht den echten Hive.
+Struktur: `src/core/` Orchestrierung, Tools, LLM, Credentials, Durable und Sandboxadapter; `src/server/` Control/SSE; `src/dashboard/` Terminal; `visualizer/public/` Web; `agents/` Rollenprompts; `tools/` Completionbridges; `sandbox/` optionales Dockerrezept. Neue Testfixtures liegen unter `.scratch/`, nie im echten Hive.
 
 **Prüfgrenzen:** Deterministische Fake-/Protokolltests belegen keine echte Containergrenze, Modellkommunikation oder native Desktop-Lifecycle-Funktion. Der lokale Docker-/Modell-Prüfstand ist in [ISOLATION.md](docs/ISOLATION.md) dokumentiert; er ersetzt keinen vollständigen Agentenlauf oder nativen Lifecycle-Test. Einen Installer nur anhand des zugehörigen Builds und separater Installations-/Lifecycle-Prüfung freigeben, nicht anhand eines früheren Pakets.
 
@@ -362,15 +382,15 @@ node bin/scranton.js run "Prüfe und implementiere die Änderung" --gates "oscar
 node bin/scranton.js demo --scenario changes_once --gates "oscar,hank,angela" --delay 0
 ```
 
-Konfiguration: `"workflow": {"gates": [["oscar", "hank"], ["angela"]]}`. Komma trennt sequenzielle Stufen, Plus verbindet parallele Prüfer. Jede Gate-Rolle darf nur einmal vorkommen; leere Stufen sind ungültig. Parallelresultate werden stets in Listenreihenfolge bewertet. Eine fehlgeschlagene Stufe liefert Dwight einen gemeinsamen Bericht und zählt als ein Fehlzyklus. BLOCKED/Infrastrukturfehler pausieren nach Abschluss aller Gates der Stufe; Retry wiederholt nur diese Stufe. Integration erfolgt erst nach allen bestandenen Gates. Docker braucht explizite Modelle für alle aktiven Rollen; Oscar/Hank unterstützen ebenfalls `SCRANTON_OSCAR_PROVIDER/MODEL/THINKING` bzw. `SCRANTON_HANK_PROVIDER/MODEL/THINKING`.
+Konfiguration: `"workflow": {"gates": [["oscar", "hank"], ["angela"]]}`. Komma trennt sequenzielle Stufen, Plus verbindet parallele Prüfer. Jede Gate-Rolle darf nur einmal vorkommen; leere Stufen sind ungültig. Parallelresultate werden stets in Listenreihenfolge bewertet. Eine fehlgeschlagene Stufe liefert Dwight einen gemeinsamen Bericht und zählt als ein Fehlzyklus. BLOCKED/Infrastrukturfehler pausieren nach Abschluss aller Gates der Stufe; Retry wiederholt nur diese Stufe. Integration erfolgt erst nach allen bestandenen Gates. Auch Docker verwendet ohne explizite Modellwahl Automatic; Oscar/Hank unterstützen ebenfalls `SCRANTON_OSCAR_PROVIDER/MODEL/THINKING` bzw. `SCRANTON_HANK_PROVIDER/MODEL/THINKING`.
 
-Eigene Prompts gelten global pro Harness-Datenverzeichnis: im Single-Modus `<hive>/prompts/<rolle>.md`, im Registry-/Desktop-Modus `<data>/prompts/<rolle>.md`. Die Agents-API erlaubt Lesen, Speichern und Zurücksetzen (maximal 32 KiB, leere Texte werden abgewiesen). Fehlende Statuskeywords werden nur als Hinweis gemeldet. Vorrang hat ein explizites `agents.<rolle>.skill` in der Konfiguration; solche Prompts sind in der API nicht editierbar. Danach folgen gespeicherter Prompt und eingebauter Rollenprompt. Frontmatter wird entfernt; Pi bekommt nur die aufgelöste Datei, Docker als read-only Mount. Zu Runbeginn werden alle Prompts einmal aufgelöst; alle Aufrufe verwenden diesen Snapshot. Änderungen während eines Runs gelten erst für den nächsten Run. Events enthalten Herkunft und SHA-256 statt Prompttext. API-Details: [CONTROL.md](docs/CONTROL.md), Abschnitt 9.
+Eigene Prompts gelten pro Harness-Datenverzeichnis: `<hive>/prompts/<rolle>.md`, bei Registry `<data>/prompts/<rolle>.md`. Vorrang: explizites `agents.<rolle>.skill`, gespeicherter Prompt, eingebauter Prompt. Frontmatter wird entfernt; der Agentenworkflow erhält den aufgelösten Run-Snapshot. Keine Promptmounts in Docker. Änderungen gelten erst für nächste Runs; Events enthalten Herkunft und SHA-256, keinen Prompttext. API: [CONTROL.md](docs/CONTROL.md), Abschnitt 9.
 
 ## Eigene Agenten und Modelle
 
 Über **Agents** lassen sich bis zu zwölf eigene Prüfagenten anlegen: Name, Titel, Handoff-Anweisung, erlaubte Lesewerkzeuge und eindeutige Erfolgs-/Fehlerkeywords. Jeder Agent hat einen editierbaren Systemprompt; ohne gespeicherten Prompt entsteht automatisch ein Starter aus seiner aktuellen Definition. Prompt zurücksetzen stellt diesen Starter wieder her. Michael und Dwight bleiben feste Rollen, ihre Modelle und Prompts sind weiterhin einstellbar. Eigene Agenten sind ausschließlich Gates, keine zusätzlichen Entwickler.
 
-Modell und Thinking werden pro Agent dauerhaft in `agents.json` gespeichert: im Registry-Modus unter `--data`, sonst unter `--hive`. Vorrang auf dem Trusted-Host: Run-Auswahl > Umgebungsvariablen > `scranton.config.json` > `agents.json` > Pi-Standard. In Docker zählt die Run-Auswahl nicht: Umgebungsvariablen > `scranton.config.json` > `agents.json`, ohne Pi-Standard. Durch Umgebung oder Konfiguration festgelegte Felder sind gegen UI-/CLI-Änderungen gesperrt. Unterstützte Thinking-Werte: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Docker verlangt für jede aktive Rolle einen solchen Agent-Default (Provider und Modell); eine Modellwahl in **New run** gilt nur für Trusted-Host-Läufe.
+Modell und Thinking liegen pro Agent in `agents.json` unter `--data` bzw. `--hive`. Vorrang in allen Team-Sandboxmodi: Run-Auswahl > Umgebung > `scranton.config.json` > `agents.json` > Automatic. Umgebungs-/Configfelder sind im Editor gesperrt. Thinking: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 
 ```powershell
 node bin/scranton.js agents --data .scranton-data

@@ -628,7 +628,7 @@ engine stays independently testable through its CLI. (I3) long-lived Python HTTP
 dependencies for nothing the checkpointed CLI does not already give; rejected. (I4) port the graph to
 LangGraph.js - contradicts the Python requirement; rejected.
 
-Model: a chat has a fixed engine. `chat.json` gains optional `engine: "pipeline"` (absent = the existing pi
+Model: a chat has a fixed engine. `chat.json` gains optional `engine: "pipeline"` (absent = the existing Scranton
 team). In a pipeline chat the legacy POST routes (`/runs`, `/chat`, `/hitl`, `/stop`, `/release`) answer 409
 `This chat uses the pipeline engine`; pipeline routes on a team chat answer 409 `This chat does not use the
 pipeline engine`. The legacy lease / heartbeat / orphan-recovery machinery is NOT used for pipeline runs and
@@ -640,7 +640,7 @@ New modules: `src/core/pipeline-command.js` (command resolution + capability pro
 `withFsRetry` (util.js), `validateId`, `readBody`/`json`, `parseCommandSpec`. Zero new npm dependencies.
 
 Engine command resolution (first hit wins): (1) env `SCRANTON_PIPELINE_COMMAND` (JSON array of strings, same
-parsing as `SCRANTON_PI_COMMAND`); (2) bundled runtime `<PACKAGE_ROOT>/engine-runtime/launch.json` schema 1:
+JSON argv parsing with explicit validation); (2) bundled runtime `<PACKAGE_ROOT>/engine-runtime/launch.json` schema 1:
 `{schema:1,platform,arch,executable,args}` with native Node platform/arch, executable `python/python.exe` on
 Windows or `python/bin/python3` on POSIX, args exactly `["-I","-B","bootstrap.py"]`. Node validates the manifest
 and resolves interpreter and bootstrap to absolute paths inside the runtime; malformed/present manifests fail
@@ -666,7 +666,7 @@ normalise it to `suspended`. One non-terminal run per chat. A live engine proces
 
 Credentials: only accounts of kind `api_key` (stored key or provider env var) on OpenAI-compatible endpoints
 are usable: custom providers with `api: "openai-completions"` (their `baseUrl`) and built-in providers whose
-OpenAI-compatible base URL you can VERIFY (pi's provider definition or the vendor's official docs); everything
+OpenAI-compatible base URL you can VERIFY (Scranton's provider definition or the vendor's official docs); everything
 else, and every OAuth/subscription account, is listed as unsupported with a reason. The key is resolved
 server-side and handed to the child ONLY as an environment variable (`SCRANTON_PIPELINE_KEY_PLANNER`,
 `..._IMPLEMENTER`, `..._REVIEWER`); the generated config names these variables. A key is never written to
@@ -853,12 +853,9 @@ dev: `pytest==9.2.0`, `ruff==0.17.4`, `mypy==2.4.1`. `requires-python = ">=3.12"
   the native modes are tested with `ChatOpenAI` + `httpx.MockTransport` (offline round trip proven).
 
 ---------------------------------------------------------------------------------------------------
-## 14. Addendum (2026-11-09 21:50): `command` provider + pi bridge (lane B)
+## 14. Command provider and own completion bridge
 
-Why: on this machine every signed-in account is a subscription (OAuth) or not OpenAI-compatible, so section 9's
-"api_key on OpenAI-compatible endpoints only" rule leaves the desktop user with NO usable model. pi (already
-bundled) can act as a plain, tool-less completion client for every account it manages. This adds one provider
-to the registry; the graph does not change.
+The command provider adds host-side subscription/API completions without changing the Python graph. Direct verified compatible API-key accounts retain openai_compatible; other available own-catalogue models use command.
 
 Engine: `ModelConfig.provider` gains `"command"`; new field `command: list[str]` (1..32 non-empty strings,
 required iff provider is `command`, forbidden otherwise); `structured_output` must be `json_text` for it.
@@ -874,24 +871,9 @@ its credential store; this is a provider call, not untrusted code).
   with a redacted, bounded tail of the command's output. Request, response and the private directory are deleted
   after every call (they contain prompt text). Usage `null` is recorded as an estimate, as everywhere else.
 
-Node: `tools/pipeline-pi-complete.js --provider P --model M [--thinking T] <request.json> <response.json>`
-resolves pi exactly like the rest of the app (`resolvePiCommand`, so `SCRANTON_PI_COMMAND` / the fake pi work in
-tests) and runs ONE tool-less, session-less turn in an empty private temp cwd:
-`--mode json -p --no-tools --no-extensions --no-mcp --no-skills --no-context-files --no-prompt-templates
---no-themes --no-session --no-approve --provider P --model M --system-prompt <short fixed text>
---append-system-prompt <file with the request's system text> @<file with the request's user text>`.
-It extracts the final assistant text and token usage from pi's JSON event stream, writes the response file,
-exits 75 for network / timeout / rate-limit / 5xx-style failures and 1 otherwise, never prints prompt text or
-credentials. The tool-less flags are mandatory and pinned by a test.
+Node: `tools/pipeline-complete.js --provider P --model M [--thinking T] <request.json> <response.json>` uses tools/completion-client.js and own LLM/credentials, with tools:[] and no agent session. Request v1 contains system, user, max_output_tokens and temperature. It rejects tools, tool-call output and old SCRANTON_PI_COMMAND / SCRANTON_PIPELINE_PI_TIMEOUT_MS settings. SCRANTON_PIPELINE_COMPLETE_TIMEOUT_MS sets a deadline capped at 600000 ms. Successful text/usage is written to response; transient classified failures exit 75, permanent/protocol failures 1. No credentials or prompt text in logs.
 
-Supervisor mapping (replaces the "unsupported" verdict of section 9 for these cases): a model whose account is
-an `api_key` account on a verified OpenAI-compatible endpoint keeps the direct `openai_compatible` path; EVERY
-other model pi reports as available (subscriptions included) is offered as supported and configured as
-`provider: "command"`, `command: [process.execPath, <PACKAGE_ROOT>/tools/pipeline-pi-complete.js, "--provider",
-P, "--model", M]`, `structured_output: "json_text"`. No credential is passed by the supervisor on this path -
-pi reads its own store. `GET /api/pipeline` `models[*]` may carry an additive `via: "direct" | "pi"`.
-`tools/pipeline-pi-complete.js` must be staged with the desktop app (prepare-desktop `inputs`).
-A real model round trip through the bridge is NOT part of the automated tests (fake pi only).
+Supervisor maps bridge models to provider:command and argv [process.execPath, <PACKAGE_ROOT>/tools/pipeline-complete.js, --provider, P, --model, M], structured_output:json_text. GET /api/pipeline models expose via:"direct"|"bridge". Host credentials are resolved by the own store, never Pi settings or a checkcontainer. The bridge and shared completion-client must be staged in desktop packaging; verify that gate separately. Automated tests use local/scripted clients, not real models. Historical Pi smoke evidence is not an acceptance test of the new bridge.
 
 ---------------------------------------------------------------------------------------------------
 ## 15. Amendments after review round 1 (2026-11-09 22:15) - binding, override earlier sections where they differ
@@ -1386,7 +1368,7 @@ accepted, so scripted evolution demonstrates the mechanism, not an improvement.
 
 ### 25c. After the first real-model run with grounding (2026-11-10 16:07, run `3640798a7490`) - binding
 
-Evidence: planner `gpt-6.1-sol` through pi, `grounding.mode: enforce`, `policy.protected_paths: []`. Four planner
+Historical pre-switch evidence: planner `gpt-6.1-sol` through Pi, `grounding.mode: enforce`, `policy.protected_paths: []`. Four planner
 calls; three context-request turns were rejected with `protected_request`, detail "Outside or invalid path"; the
 run failed with `output_invalid` ("Output repair budget exhausted") in `plan` before any plan existed. What the
 model asked for was not recorded. Cause in the code: `nodes/grounding.py` `evaluate` sends every context-request

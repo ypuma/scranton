@@ -42,11 +42,11 @@ file: "src/core/orchestrator.js"
 symbol: "Orchestrator"
 ordinal: 0
 kind: "how"
-text: "`run` emits `run_started` with the audited role prompts (`auditRole`), gets Michael's plan (or a direct answer in conversation mode) and schedules the milestones with `runDag` (`maxParallel` from `config.execution`, default 1). In conversation mode a `run_reply` is emitted before `run_finished`; agent texts are journaled as `agent_message` cut to 16000 characters with a `truncated` flag. `#runAgent` wires `onLive` to the run's live writer (`this.rec.live.update`) and `onUsage` to durable `agent_usage` events. `#askHumanNow` in `onBreaker === 'hive'` mode first rejects a stale response (`rejectResponse`), writes `<hive>/human/request.json` atomically (temp file + rename, through `safePath`), waits in `waitForResponse` and removes the file when the wait ends."
-see_also: "src/core/live-activity.js; src/core/state.js; src/core/file-control.js; .enma/live-activity-contract.md; .enma/chat-view-contract.md; README section on --on-breaker hive"
-hash: "span:fedbbeabd2e3fedb"
-written: "2026-11-21"
-commit: "cd0d158"
+text: "`run` emits `run_started` with the audited role prompts (`auditRole`) and execution/workflow, opens ONE durable runtime per run via `runtimeFactory` (`<hive>/dbos.sqlite` by default, executor `run:${runId}`, shut down in `finally` after worktrees close), gets Michael's plan (or a direct answer in conversation mode) and schedules milestones with `runDag`. Each agent invocation gets a deterministic `invocationKey` (`<milestone|run>/cycle-N/<role>/<purpose>/attempt-N`, plan retries add `plan-retry/`), published on `instance_started`, then `this.startRunner(...)` (default `startAgent`) with the run's runtime and the sandbox (native `scranton` default with owned worktree roots, `docker` tool executor, or explicit `host`). `onLive` goes to `this.rec.live.update`, `onUsage` to `agent_usage` events; agent texts are journaled as `agent_message` cut to 16000 chars with `truncated`. In conversation mode a `run_reply` precedes `run_finished`. `#askHumanNow` (onBreaker 'hive') rejects stale responses, writes `<hive>/human/request.json` atomically and waits in `waitForResponse`."
+see_also: "src/core/agent/index.js startAgent; src/core/sandbox-native/README.md; src/core/sandbox-docker/README.md; .enma/live-activity-contract.md"
+hash: "span:cda9577bef9b8385"
+written: "2026-11-22"
+commit: "709b8c5"
 by: "core"
 ---
 
@@ -61,6 +61,27 @@ hash: "span:19fa2b27fda22ec4"
 written: "2026-11-21"
 commit: "64f1dee"
 by: "core"
+retired: true
+reason: "moved to src/core/redact.js :: errorText (how)"
+retired_by: "core"
+retired_at: "2026-11-22"
+---
+
+---
+file: "src/core/pi-runner.js"
+symbol: "startPi"
+ordinal: 0
+kind: "how"
+text: "The seam where the agent process is plugged in: `Orchestrator`'s constructor takes `startRunner = startPi` and calls `this.startRunner({...})` once per agent instance in `#runAgent`. A runner gets instanceId, sessionId, agentConfig (tools, model, provider, thinking, keywords), cwd (worktree), hive, systemPromptFile, timeoutMs, execution (sandbox) and the callbacks onAssistantMessage / onTool / onToolEnd / onLive / onUsage / onMessage / onSpawn. It returns { done: Promise<{ ok, text, keyword, usage, exitCode, durationMs, failure, sessionId, ... }>, sessionId, sendMessage(text), abort(), kill(reason) }. RPC mode goes through startPiRpc in pi-rpc-session.js. onLive receives Pi's own records (message_start / message_update / message_end, tool_execution_start / tool_execution_end), which live-activity.js parses. A replacement runner that keeps this contract and these record shapes leaves the orchestrator, live activity and UI unchanged."
+see_also: ".scratch/pi-migration/r1-team-runtime.md section 6.2 (full interface); memory plan pi-removal-plan"
+hash: "span:bcacc67130625862"
+written: "2026-11-21"
+commit: "709b8c5"
+by: "core"
+retired: true
+reason: "moved to src/core/agent/index.js :: startAgent (how)"
+retired_by: "core"
+retired_at: "2026-11-22"
 ---
 
 ---
@@ -127,6 +148,19 @@ see_also: ".enma/custom-agents-contract.md; src/core/orchestrator.js, src/core/p
 hash: "span:ff3c2abb1be537fc"
 written: "2026-11-11"
 commit: "2118ea5"
+by: "core"
+---
+
+---
+file: "src/core/redact.js"
+symbol: "errorText"
+ordinal: 0
+kind: "how"
+text: "Hardened masking for failure/error text, moved unchanged from the former Pi transport (`piErrorText`/`piErrorTail` renamed `errorText`/`errorTail`). Steps: cut to the last 8,192 chars, handle the cut boundary, mask env values whose names look like secrets, apply the general rules (cookies, URL credentials, Bearer, `label[:=]value` for a fixed `\\b` label list, JWT), clean activity text, return the LAST 2,048 chars. Boundary rules: a partial first line is dropped; if the last non-blank line before the kept text ends with `:` or `=`, everything through the first non-blank line is masked; a single long line is marked `[cut]` and the longer of two prefixes is masked. Callers: `src/core/agent/index.js` (runner failure message, env = process.env + extraEnv), `src/core/agent/redaction.js` (live/stream error records), `src/core/agent/workflow.js` (errorTail), `tools/completion-client.js` (helper stderr). A change here must never mask less than before; model answers, model-facing tool results and raw durable checkpoints are deliberately NOT masked."
+see_also: "test/core/redact.test.js (cut-alignment sweeps), test/core/agent/redaction.test.js, test/core/completion-redaction.test.js"
+hash: "span:5640365cc6ebd696"
+written: "2026-11-22"
+commit: "709b8c5"
 by: "core"
 ---
 
