@@ -21,15 +21,16 @@ Every event: `{ "v": 1, "seq": <int, starts at 1, strictly increasing within a r
 
 | type | fields |
 |---|---|
-| run_started | request: string, workspace: string (absolute), maxFailedCycles: number |
+| run_started | request: string, workspace: string (absolute), maxFailedCycles: number (safety cap, default 12), maxStalledCycles: number (default 2), milestoneTokenBudget: number (default 500000; 0 = off) |
 | plan_ready | milestones: [{ id: string, title: string, description: string, acceptanceCriteria: string[] }] |
 | milestone_started | milestoneId: string, index: number (0-based), total: number, title: string |
-| hive_write | from: participant, to: participant, file: string (relative to hive dir, forward slashes, e.g. "angela/inbox.md"), kind: "plan_request" \| "task" \| "handoff" \| "bug_report" \| "feedback" \| "hitl", summary: string (max 140 chars) |
+| hive_write | from: participant, to: participant, file: string (relative to hive dir, forward slashes, e.g. "angela/inbox.md"), kind: "plan_request" \| "task" \| "handoff" \| "bug_report" \| "feedback" \| "hitl" \| "progress", summary: string (max 140 chars) |
 | agent_status | agent: agentId, status: "idle" \| "thinking" \| "working" \| "waiting" \| "blocked" \| "error" \| "done", activity: string (normally <=80 chars; error/blocked retain the first diagnostic line up to 300 characters, including a trailing ... when truncated; log events retain full failure messages) |
 | agent_tool | agent: agentId, tool: string (Scranton tool name: read, write, edit, bash, grep, find, ls, powershell, agent_chat), detail: string (path or command, max 140 chars) |
 | agent_finished | agent: agentId, milestoneId: string \| null, cycle: number \| null, keyword: string \| null (no brackets, e.g. "TASK_COMPLETE"), exitCode: number, durationMs: number, usage?: { input: number, output: number, cost: number } |
 | cycle_result | milestoneId: string, cycle: number (1-based), result: "passed" \| "failed", failedCycles: number (consecutive failed cycles of this milestone after this result), reason: string |
-| circuit_breaker | milestoneId: string, state: "tripped" \| "reset", failedCycles: number, maxFailedCycles: number |
+| progress_check | milestoneId: string, cycle: number, verdict: "progress" \| "stalled", source: "rule" \| "michael", rule: "no_change" \| "repeat" \| null, reason: string (<=300 chars), changed: boolean \| null (unknown), stalledCycles: number, maxStalledCycles: number, tokens: number, tokenBudget: number |
+| circuit_breaker | milestoneId: string, state: "tripped" \| "reset", failedCycles: number, maxFailedCycles: number; when tripped also cause: "stalled" \| "budget" \| "limit", stalledCycles: number, maxStalledCycles: number, tokens: number, tokenBudget: number |
 | hitl_request | milestoneId: string \| null, reason: string, options: string[] |
 | hitl_response | milestoneId: string \| null, decision: "feedback" \| "retry" \| "skip" \| "abort", feedback?: string |
 | milestone_finished | milestoneId: string, status: "passed" \| "skipped" \| "failed" \| "aborted" |
@@ -50,10 +51,33 @@ milestone_started(m1) -> hive_write(michael->dwight, task) -> agent_status(dwigh
 -> agent_finished(dwight, TASK_COMPLETE) -> hive_write(dwight->angela, handoff) -> agent_status(angela ...) -> agent_tool...
 -> agent_finished(angela, TEST_FAILED) -> cycle_result(m1, 1, failed, failedCycles 1) -> hive_write(angela->dwight,
 bug_report) -> ... -> cycle_result(passed) -> milestone_finished(m1, passed) -> milestone_started(m2) ... -> run_finished(success).
-When failedCycles reaches maxFailedCycles (default 3): circuit_breaker(tripped) -> agent_status(michael blocked
+After each failed cycle, progress_check records progress or stalling. When the stall threshold, milestone token budget or failed-cycle safety cap is reached (see the additive extension below): circuit_breaker(tripped) -> agent_status(michael blocked
 "Needs a human!") -> hitl_request -> hitl_response -> "feedback": hive_write(human->dwight, feedback) +
 circuit_breaker(reset); "retry": circuit_breaker(reset); "skip": circuit_breaker(reset) (only if the pause came from a breaker trip) + milestone_finished(skipped);
 "abort": milestone_finished(aborted) -> run_finished(aborted).
+
+## Adaptive milestone cycles (additive v1)
+
+Contract version remains **1**. `progress_check` is new; the `run_started` and tripped `circuit_breaker` fields above are additive. Existing fields remain; `cycle_result` and `milestone_finished` are unchanged. Older journals may omit the additions; consumers must tolerate absent fields and ignore unknown fields/events.
+
+A milestone keeps cycling while it makes progress, subject to its budget and safety cap. After each failed cycle the orchestrator records the full failure report (not just its summary), snapshot change status and cycle invocation tokens. The progress check runs in this order:
+
+1. Deterministic rules yield `verdict:"stalled", source:"rule"`: `no_change` if Dwight's delivered snapshot is unchanged from the previous cycle (cycle 1 compares with the milestone starting state); `repeat` if the full failure text equals the previous failed cycle after lowercasing and collapsing whitespace. Digits are preserved, so a lower failed-test count is not an identical report.
+Shared trusted-host fingerprinting is asynchronous and bounded (32 MiB, 10000 entries, 2 seconds), with snapshot credential/build exclusions and nested Git ignore rules. Read errors or exceeded budgets yield `changed:null` (unknown), never an infrastructure pause or run failure; `no_change` requires known identical fingerprints. Progress requests use `hive_write {from:"michael",to:"michael",kind:"progress"}` rather than impersonating a human.
+2. If neither rule fires, Michael judges progress against the milestone title and acceptance criteria using at most the last four cycles since the last human decision, each failure text cut to about 1500 characters, with `changed`. A resolved or clearly narrowed previous failure with a different/smaller new problem means `[PROGRESS]`; recurring/reworded problems, oscillation or no movement toward acceptance mean `[STALLED]`. Output is one keyword and one reason line. The invocation purpose is `progress`, key `<milestone>/cycle-N/michael/progress/attempt-N`. Missing keywords, errors and timeouts count as stalled with source `michael` and reason `progress check failed: ...`. Michael verdicts use `rule:null`.
+3. `stalledCycles` counts consecutive stalled verdicts; progress resets it to 0. `tokens` in `progress_check` and tripped `circuit_breaker` is the milestone's invocation tokens since the last human decision, not just the current cycle. `tokenBudget` is the effective `milestoneTokenBudget`; 0 disables that trip.
+
+The breaker asks the human when any threshold is reached:
+
+| cause | Condition | Default | Configuration (flags > env > file > default) |
+|---|---|---|---|
+| `stalled` | `stalledCycles >= maxStalledCycles` | 2 | `--max-stalled`, `SCRANTON_MAX_STALLED_CYCLES`, `maxStalledCycles` (1..10) |
+| `budget` | milestone invocation tokens since the last human decision >= `milestoneTokenBudget` | 500000 | `--milestone-tokens`, `SCRANTON_MILESTONE_TOKEN_BUDGET`, `milestoneTokenBudget` (0 = off; server: 0..20000000) |
+| `limit` | failed cycles since the last human decision >= `maxFailedCycles` | 12 | `--max-cycles`, `SCRANTON_MAX_FAILED_CYCLES`, `maxFailedCycles` (server/UI: 1..50) |
+
+`maxFailedCycles` now means a **safety cap only**, replacing the old default of 3 with 12. Team runs no longer apply learned Dreaming cycle caps; progress checks and the token budget govern adaptive stopping, alongside the configured safety cap. Human feedback or retry resets the stalled count, failed-cycle count and token window. Skip/abort retain their existing meanings; automatic `onBreaker:'skip'` remains opt-in. Breaker titles are `No progress on <m>: <reason>`, `<m> used <N> tokens without passing`, and `<m> reached the cycle limit (<N>)` respectively; the reason text contains the title plus one clipped failure line, at most 300 characters; the separate excerpt retains the detailed report.
+
+While any milestone waits for a human decision, the scheduler starts no new milestone. Already running milestones continue. Scheduling resumes immediately after the decision, without waiting for a sibling to finish. A milestone is never automatically left unfinished; dependents of non-passed/skipped prerequisites remain blocked.
 
 ## Repository instructions (additive v1)
 
@@ -151,7 +175,7 @@ Real runs default to own agent workflows, private shadow worktrees and the Scran
 
 State adds `activeMilestoneIds: string[]`, `instances: {[instanceId]: {id,agent,milestoneId,status,tool,sessionId,worktree,sandbox}}`, `execution`, and bounded `chat` (last 200 messages). Milestones add `dependsOn`, `cycle`, `failedCycles` and `blocked` status. Legacy role totals remain cumulative; active sibling instances take precedence over an idle role update. `currentMilestoneId` is the first active milestone or null. Legacy scalar cycle/failure fields represent latest aggregate progress; per-milestone counters are authoritative for parallel runs.
 
-Human questions are serialized: only the head emits `hitl_request` and owns the response file. Other pipelines keep running. Abort cancels queued human questions and kills every active runner; run completion waits for runner/container cleanup. CLI writers acquire `hive/control/owner.json`; guarded desktop children validate and reuse the parent's lease. Failed container cleanup retains ownership for explicit recovery. Standalone `agent` commands use the same lease, isolated workspace and audit events, but retain their unreviewed changes privately rather than integrating them.
+Human questions are serialized: only the head emits `hitl_request` and owns the response file. Already running pipelines keep running, but no new milestone starts while any milestone waits for a human decision; scheduling resumes immediately after the decision. Abort cancels queued human questions and kills every active runner; run completion waits for runner/container cleanup. CLI writers acquire `hive/control/owner.json`; guarded desktop children validate and reuse the parent's lease. Failed container cleanup retains ownership for explicit recovery. Standalone `agent` commands use the same lease, isolated workspace and audit events, but retain their unreviewed changes privately rather than integrating them.
 
 Replanning is not implemented: the validated published DAG is immutable for the duration of the run. Effective `maxReplans` is always 0; a nonzero configured value is ignored with a warning. There is no standalone `message` CLI command; use the controlled server chat route.
 
@@ -175,11 +199,11 @@ Oscar uses `[REVIEW_APPROVED]`, `[CHANGES_REQUESTED]`, `[BLOCKED]`; Hank uses `[
 
 Gate handoff bodies name their purpose: Oscar reviews changes (correctness, edge cases, error handling, regressions, maintainability and test coverage), Hank audits security vulnerabilities, and Angela independently verifies acceptance criteria. Oscar/Hank see acceptance criteria as context only, not their verdict basis. All handoffs forbid creating or modifying project files. Where worktree snapshots exist, Oscar/Hank receive paths changed relative to the milestone base (control characters removed, at most 200 paths plus `and N more`); shared trusted-host mode omits this section. Angela's legacy handoff bytes and event sequence remain unchanged. Nonlegacy gate bug reports, including retries after human intervention, use the neutral `Gate verification failed for your previous work...` intro with role-labeled report sections; human feedback keeps the human-feedback intro. Only legacy Angela-only bug reports retain `Angela's QA failed...`.
 
-`run_started.prompts` maps only the roles used by the run (Michael unless noPlan, Dwight, and every configured gate; standalone agent commands include only that role) to `{source:"builtin"|"custom"|"config",sha256:string}`. SHA-256 covers resolved, frontmatter-stripped, trimmed UTF-8 text. Prompts are resolved once before any agent starts; every invocation uses that run snapshot. Edits during a run apply to the next run. A resolution failure emits run_started with roles:[] and without prompt hashes and ends with run_finished(failed), without launching agents. Prompt text is never included in events. All five keys remain present in state.agents, including inactive roles.
+`run_started.prompts` maps only the roles used by the run (Michael (also with noPlan, for progress checks), Dwight, and every configured gate; standalone agent commands include only that role) to `{source:"builtin"|"custom"|"config",sha256:string}`. SHA-256 covers resolved, frontmatter-stripped, trimmed UTF-8 text plus Michael's run-only progress/conversation instructions. The prompt editor shows only editable source text; legacy generated progress sections are removed and staging appends exactly one. Prompts are resolved once before any agent starts; every invocation uses that run snapshot. Edits during a run apply to the next run. A resolution failure emits run_started with roles:[] and without prompt hashes and ends with run_finished(failed), without launching agents. Prompt text is never included in events. All five keys remain present in state.agents, including inactive roles.
 
 ## Custom gate definitions (additive v1)
 
-`run_started.roles` contains ONLY invoked roles in order: Michael unless noPlan, Dwight, then gates stage by stage in listed order (standalone commands include only that role). Each role is `{id,name,title,kind:"planner"|"developer"|"gate",builtin,keywords,passKeyword?,failKeyword?,definitionHash}`. The hash is SHA-256 of recursively key-sorted EFFECTIVE definition JSON for every role, built-ins included: id, name, title, kind, builtin, keywords, passKeyword/failKeyword when present, effective tools after config overrides and the Windows fallback, and instruction when present; text and tools are not published. Definitions and prompts are snapshotted before execution. Mid-run edits/deletion affect only later runs.
+`run_started.roles` contains ONLY invoked roles in order: Michael (also with noPlan, for progress checks), Dwight, then gates stage by stage in listed order (standalone commands include only that role). Each role is `{id,name,title,kind:"planner"|"developer"|"gate",builtin,keywords,passKeyword?,failKeyword?,definitionHash}`. The hash is SHA-256 of recursively key-sorted EFFECTIVE definition JSON for every role, built-ins included: id, name, title, kind, builtin, keywords, passKeyword/failKeyword when present, effective tools after config overrides and the Windows fallback, and instruction when present; text and tools are not published. Definitions and prompts are snapshotted before execution. Mid-run edits/deletion affect only later runs.
 
 `run_started.prompts` has exactly the invoked role IDs. Custom agents without a saved prompt use a deterministic starter from their current definition, reported as source `builtin`; its hash follows the same resolved-text rule above. `run_started.roles` is always present (`[]` on startup failure); reducers replace missing lists with `[]`. `state.roles` copies the latest run's roles and is absent before any run. `state.agents` ALWAYS starts with the five built-ins in canonical order, followed by custom roles invoked in that run in run order. Unused registered custom roles are absent.
 
@@ -212,8 +236,8 @@ Older journals lack these fields; consumers fall back to `detail`. Instance `too
 these fields and `startedAt`/`ts`; `touchedFiles` is newest-first, unique by path, capped at eight
 `{path,kind:"read"|"write"|"edit",ts}` entries.
 
-`agent_usage {agent,instanceId,model:string|null,usage:{input,output,cost,cacheRead?,cacheWrite?}}`
-carries one successful request's usage delta, with the normal v/seq/ts/runId envelope.
+`agent_usage {agent,instanceId,milestoneId:string|null,model:string|null,usage:{input,output,cost,cacheRead?,cacheWrite?}}`
+carries one successful request's usage delta, with the normal v/seq/ts/runId envelope. `milestoneId` attributes the delta to that milestone (including Michael's progress checks); planning/reporting use null. Older journals may omit it.
 The own workflow emits usage only for successfully checkpointed requests, including compaction; failed-attempt billing is outside this accounting contract. Streaming snapshots are not counted.
 `agent_finished.usage` remains the invocation total. Usage events are not Activity or conversation rows.
 

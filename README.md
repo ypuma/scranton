@@ -213,7 +213,7 @@ node bin/scranton.js dreaming off --data .scranton-data --project PROJEKT-ID
 node bin/scranton.js dreaming rollback --data .scranton-data --project PROJEKT-ID
 ```
 
-`on` aktiviert ausschließlich automatische Sweeps im laufenden Registry-Server (Standard alle 360 Minuten), nur bei projektweitem Leerlauf ohne Recovery-Blockade. Das Abschalten bewahrt das Gedächtnis. Vorschau schreibt nichts; Rollback stellt das letzte Vorbild wieder her. **Policy-Anwendung ist separat aus**: Erst `applyPolicy:true` über Settings erlaubt beim nächsten echten Run ausschließlich eine Verringerung bis `min(Nutzergrenze, gelernte Grenze)`, passend zu Engine, Wiederholungsgrenze und exakter Prüfrezept-Kohorte. Keine Schritte, Checks, Rechte oder menschlichen Freigaben werden dadurch übersprungen; laufende Runs bleiben unverändert.
+`on` aktiviert ausschließlich automatische Sweeps im laufenden Registry-Server (Standard alle 360 Minuten), nur bei projektweitem Leerlauf ohne Recovery-Blockade. Das Abschalten bewahrt das Gedächtnis. Vorschau schreibt nichts; Rollback stellt das letzte Vorbild wieder her. **Policy-Anwendung ist separat aus**: Erst `applyPolicy:true` über Settings erlaubt beim nächsten echten Pipeline-Run ausschließlich eine Verringerung bis `min(Nutzergrenze, gelernte Grenze)`, passend zu Wiederholungsgrenze und exakter Prüfrezept-Kohorte. **Dreaming senkt die Zyklusgrenze von Team-Runs nicht mehr**; Fortschrittsprüfung und Tokenbudget bestimmen, wann eine Rückfrage nötig ist, zusätzlich bleibt die eingestellte Sicherheitsgrenze bestehen. Keine Schritte, Checks, Rechte oder menschlichen Freigaben werden dadurch übersprungen; laufende Runs bleiben unverändert.
 
 Team nutzt strukturierte Zyklus-/Gate-Ergebnisse. Neue Pipeline-Läufe liefern explizite `dream_attempt`-Ereignisse; alte `check_finished`-Historien haben keine zuverlässige Versuchsbindung und liefern nur finale strukturelle Beobachtungen, **keine erfundenen Replay-Versuche**. Pipeline-Replay und -Anwendung enthalten sich außerdem bei erforderlichen Final-Checks oder fehlenden erforderlichen Schritt-Checks. Das begrenzte Projektgedächtnis kommt nur als neu belegter, ausdrücklich beratender Kontext in die nächste Planung; fehlgeschlagene Änderungen gelten nicht als geliefert. Python-Guidance/Procedural Graphs bleiben davon getrennt.
 
@@ -288,7 +288,9 @@ Bei Integrationskonflikten ist **Retry kein Rebase**: Der Entwickler-Worktree be
 | `--trusted-host` | Explizit auf dem Host ausführen, Worktrees bleiben getrennt |
 | `--no-plan` | Eine Aufgabe ohne Modellplanung |
 | `--request-file FILE` | `run`: UTF-8 (BOM optional) oder UTF-16 mit BOM; erstes Nicht-Leerzeichen `{` verlangt das strikte Envelope `{"v":1,"request":"..."}`, sonst wörtlicher Text; höchstens 32768 Zeichen / 262144 Bytes |
-| `--max-cycles N` | Fehlgeschlagene QA-Zyklen bis zum Circuit Breaker (Standard 3) |
+| `--max-cycles N` | Sicherheitsgrenze für fehlgeschlagene Zyklen je Meilenstein seit der letzten menschlichen Entscheidung (Standard 12; Server/UI: 1–50) |
+| `--max-stalled N` | Aufeinanderfolgende Zyklen ohne Fortschritt bis zur Rückfrage (Standard 2; 1–10) |
+| `--milestone-tokens N` | Tokenbudget je Meilenstein seit der letzten menschlichen Entscheidung (Standard 500000; 0 = aus; Server: 0–20000000) |
 | `--on-breaker ask\|abort\|skip\|hive` | Menschliche Entscheidung im Terminal, automatisch oder dateibasiert |
 | `--timeout-min N` | Zeitlimit pro Agent (Standard 20 Minuten) |
 
@@ -306,7 +308,25 @@ Session-IDs identifizieren Instanzen, laden aber keine Pi-Sessiondateien. Kanoni
 
 ## Circuit Breaker und Oberflächen
 
-Nach drei aufeinanderfolgenden fehlgeschlagenen Testzyklen fragt Scranton nach Feedback, Retry, Skip oder Abort. `[BLOCKED]` und Infrastrukturfehler fragen nach Abschluss aller Gates der Stufe, ohne drei Zyklen zu verbrauchen. Menschliche Rückfragen werden serialisiert; unabhängige Pipelines können weiterlaufen. Abort betrifft alle aktiven Prozesse.
+Ein Meilenstein läuft weiter, solange er Fortschritt macht. Nach jedem fehlgeschlagenen Zyklus prüft Scranton zuerst ohne Modellaufruf: Hat Dwight nichts am gelieferten Dateistand geändert (`no_change`)? Oder ist der vollständige Fehlerbericht derselbe wie zuvor (`repeat`, ohne Unterschiede bei Groß-/Kleinschreibung und Leerraum)? Zahlen bleiben beim Vergleich erhalten: „5 Tests fehlgeschlagen“ und „3 Tests fehlgeschlagen“ sind nicht derselbe Fehlerbericht. Trifft eine Regel zu, zählt der Zyklus als ohne Fortschritt. Sonst beurteilt Michael anhand der letzten höchstens vier Zyklen und der Abnahmekriterien, ob der vorige Fehler behoben oder klar eingegrenzt wurde. Wiederholte oder wechselnde Varianten desselben Problems zählen nicht als Fortschritt; auch eine fehlgeschlagene Fortschrittsprüfung zählt als Stillstand.
+
+Scranton fragt nach Feedback, Retry, Skip oder Abort, sobald eine dieser Grenzen erreicht ist:
+
+- **2 aufeinanderfolgende Zyklen ohne Fortschritt**; ein Fortschrittsurteil setzt diesen Zähler auf 0.
+- **500000 Tokens je Meilenstein** aus dessen Agentenaufrufen seit der letzten menschlichen Entscheidung; mit `0` abschaltbar.
+- **12 fehlgeschlagene Zyklen** seit der letzten menschlichen Entscheidung als reine Sicherheitsgrenze (`maxFailedCycles`), nicht als übliche Wiederholungsgrenze.
+
+Feedback oder Retry setzt Stillstandszähler, Fehlversuchszähler und Tokenfenster zurück. Solange irgendein Meilenstein auf dich wartet, startet **kein neuer Meilenstein**; bereits laufende Pipelines arbeiten weiter. Nach deiner Entscheidung geht die Planung der nächsten Starts sofort weiter. Abhängige Meilensteine bleiben gesperrt, bis ihre Voraussetzungen bestanden sind. Skip bleibt eine ausdrückliche Entscheidung; automatisches Überspringen über `--on-breaker skip` ist nur nach bewusster Auswahl aktiv. `[BLOCKED]` und Infrastrukturfehler fragen nach Abschluss aller Gates der Stufe direkt nach, ohne als fehlgeschlagene Zyklen zu zählen. Menschliche Rückfragen werden nacheinander gestellt. Abort betrifft alle aktiven Prozesse.
+
+Die Grenzen lassen sich so einstellen; Vorrang: **Flags > Umgebung > `scranton.config.json` > Standard**:
+
+| Flag | Umgebungsvariable | Konfigurationsschlüssel | Standard |
+|---|---|---|---|
+| `--max-stalled N` | `SCRANTON_MAX_STALLED_CYCLES` | `maxStalledCycles` | `2` |
+| `--milestone-tokens N` | `SCRANTON_MILESTONE_TOKEN_BUDGET` | `milestoneTokenBudget` | `500000` (`0` = aus) |
+| `--max-cycles N` | `SCRANTON_MAX_FAILED_CYCLES` | `maxFailedCycles` | `12` (Sicherheitsgrenze) |
+
+Die HTTP-Runfelder heißen `maxStalledCycles` (1–10), `milestoneTokenBudget` (0–20000000) und `maxCycles` (1–50), jeweils ganzzahlig; Details: [CONTROL.md](docs/CONTROL.md).
 
 ```powershell
 node bin/scranton.js dashboard

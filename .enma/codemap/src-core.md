@@ -139,6 +139,17 @@ by: "core"
 ---
 
 ---
+file: "src/core/progress.js"
+kind: "where"
+text: "Pure helpers for the adaptive milestone cycles (spec .enma/adaptive-cycles-contract.md). normalizeFailure (lowercase + collapse whitespace, digits kept) feeds the `repeat` rule over the FULL failure text, never summaryLine. snapshotFingerprint (worktree snapshot paths/modes/bytes) and sharedFingerprint (shared mode: async, yielding, bounded scan of 32 MiB / 10,000 entries / 2 s with snapshot exclusions, nested gitignore, and Git-tracked files kept even when ignored) feed the `no_change` rule; any failure returns null (= unknown, the rule does not fire). The verdict, Michael's [PROGRESS]/[STALLED] call, token window and the stalled / budget / limit trips live in Orchestrator #runMilestone (failCycle); runDag holds new milestones while a human decision is pending."
+see_also: ".scratch/adaptive-cycles-runtime/REPORT.md, .scratch/adaptive-cycles-review/REPORT.md; tests test/core/adaptive-cycles.test.js, test/core/progress.test.js, test/visualizer/adaptive-cycles.test.js"
+hash: "shape:98c1261b40630206"
+written: "2026-11-22"
+commit: "4668aae"
+by: "core"
+---
+
+---
 file: "src/core/prompts.js"
 symbol: "resolvePrompt"
 ordinal: 0

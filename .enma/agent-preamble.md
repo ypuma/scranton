@@ -3,8 +3,9 @@
 Project Scranton is an open-source multi-agent harness with its own tools, LLM clients and durable agent runtime; Pi has been removed from agent execution.
 An orchestrator ("Michael") splits requests into milestones; a dev agent ("Dwight", may write code)
 and a QA agent ("Angela", read-only tools plus commands) run as separate workflows in private worktrees.
-Live instance chat accompanies durable Hive records (see `.enma/parallel-contract.md`). Final status keywords drive handoff; after
-3 failed test cycles a circuit breaker pauses for a human. A terminal dashboard and a web dashboard
+Live instance chat accompanies durable Hive records (see `.enma/parallel-contract.md`). Final status keywords drive handoff; a milestone keeps cycling
+while it makes progress and pauses for a human when it stalls, uses its token budget or hits the safety cap
+(`.enma/adaptive-cycles-contract.md`). A terminal dashboard and a web dashboard
 visualise the run. USER DIRECTION for every UI: professional, dark, strictly monochrome/grayscale
 dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use inversion).
 
