@@ -1,6 +1,6 @@
 // Pure reducer: Contract v1 events -> dashboard view model.
 // No DOM, so Node can import it for tests.
-import { formatDuration, stripBidi } from './format.js';
+import { formatDuration, formatTokens, stripBidi } from './format.js';
 
 export const AGENT_IDS = ['michael', 'dwight', 'oscar', 'hank', 'angela'];
 export const PARTICIPANTS = [...AGENT_IDS, 'human'];
@@ -36,6 +36,17 @@ export const TERMINAL_STATUSES = new Set(['finished', 'failed', 'aborted', 'stop
 export const DELIVERIES = ['queued', 'delivered', 'rejected', 'unknown'];
 // Milestone outcomes that never satisfy a dependency.
 const UNMET = new Set(['skipped', 'failed', 'aborted', 'blocked', 'interrupted']);
+// The progress check after a failed cycle and why the breaker asks (.enma/adaptive-cycles-contract.md).
+export const PROGRESS_REASON_MAX = 300;
+export const DEFAULT_MAX_FAILED_CYCLES = 12;
+const VERDICTS = ['progress', 'stalled'];
+const CHECK_SOURCES = ['rule', 'michael'];
+const CHECK_RULES = ['no_change', 'repeat'];
+export const TRIP_CAUSES = ['stalled', 'budget', 'limit'];
+const VERDICT_WORD = { progress: 'Progress', stalled: 'No progress' };
+const CHECK_HOW = { no_change: 'nothing changed', repeat: 'same failure again' };
+// what the breaker tile and a milestone card say a trip is
+export const TRIP_WORD = { stalled: 'No progress', budget: 'Budget used', limit: 'Cycle limit' };
 
 const NAMES = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela', human: 'Human' };
 // what a gate card says about its result for the cycle
@@ -51,7 +62,7 @@ const KNOWN_TYPES = new Set([
   'run_started', 'plan_ready', 'milestone_started', 'hive_write', 'agent_status', 'agent_tool',
   'agent_finished', 'cycle_result', 'circuit_breaker', 'hitl_request', 'hitl_response',
   'milestone_finished', 'run_finished', 'log', 'instance_started', 'chat_message', 'chat_delivery', 'milestone_integrated',
-  'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply', 'agent_usage',
+  'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply', 'agent_usage', 'progress_check',
 ]);
 
 const CATEGORY = {
@@ -68,6 +79,7 @@ const CATEGORY = {
   run_finished: 'results',
   run_reply: 'results',
   circuit_breaker: 'results',
+  progress_check: 'results',
   hitl_request: 'results',
   hitl_response: 'results',
 };
@@ -182,6 +194,7 @@ export function laneGate(state, inst) {
 
 const text = (v) => (typeof v === 'string' ? v : '');
 const posInt = (v) => (Number.isInteger(v) && v > 0 ? v : null);
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
 
 // run_started.execution and GET /api/control defaults.execution -> one shape; null when not reported.
 export function normalizeExecution(x) {
@@ -287,8 +300,13 @@ export function createState() {
     cycle: 0,
     cycleOpen: false,
     failedCycles: 0,
-    maxFailedCycles: 3,
+    maxFailedCycles: DEFAULT_MAX_FAILED_CYCLES,
+    // null: not reported (a run from before the progress check)
+    maxStalledCycles: null,
+    milestoneTokenBudget: null,
     breaker: 'closed',
+    // why the breaker tripped: { cause, milestoneId, ... }; cause null for a run from before the progress check
+    trip: null,
     hitl: null,
     lastDecision: null,
     agents: Object.fromEntries(AGENT_IDS.map((id) => [id, freshAgent()])),
@@ -401,6 +419,37 @@ function freshMilestone(id, title) {
   return {
     id: String(id), title: String(title ?? id), description: '', acceptanceCriteria: [], status: 'pending', cycles: 0,
     lastReason: null, lastResult: null, dependsOn: null, blockedBy: [], cycleOpen: false, integrated: false, gates: {},
+    // tokens: this milestone's tokens since the last human decision, live from agent_usage like state.json
+    progressCheck: null, trip: null, tokens: 0,
+  };
+}
+
+// progress_check -> what the view keeps of it; null when it names no known verdict
+function progressCheckOf(e) {
+  if (!VERDICTS.includes(e.verdict)) return null;
+  return {
+    cycle: posInt(e.cycle), verdict: e.verdict,
+    source: CHECK_SOURCES.includes(e.source) ? e.source : null,
+    rule: CHECK_RULES.includes(e.rule) ? e.rule : null,
+    reason: clip(e.reason, PROGRESS_REASON_MAX),
+    changed: typeof e.changed === 'boolean' ? e.changed : null,
+    stalledCycles: count(e.stalledCycles), maxStalledCycles: posInt(e.maxStalledCycles),
+    // tokenBudget 0: no budget
+    tokens: count(e.tokens), tokenBudget: count(e.tokenBudget),
+    seq: e.seq, ts: e.ts ?? null,
+  };
+}
+
+function tripOf(s, e) {
+  const m = milestone(s, e.milestoneId);
+  return {
+    cause: TRIP_CAUSES.includes(e.cause) ? e.cause : null,
+    milestoneId: text(e.milestoneId) || null,
+    failedCycles: count(e.failedCycles), maxFailedCycles: posInt(e.maxFailedCycles),
+    stalledCycles: count(e.stalledCycles), maxStalledCycles: posInt(e.maxStalledCycles),
+    tokens: count(e.tokens), tokenBudget: count(e.tokenBudget),
+    // the check that stopped it says why
+    reason: m?.progressCheck?.reason ?? '',
   };
 }
 
@@ -420,6 +469,8 @@ function apply(s, e) {
       s.agents = Object.fromEntries([...AGENT_IDS, ...customRoles(s).map((r) => r.id)].map((id) => [id, own(s.agents, id) ?? freshAgent()]));
       s.workflow = normalizeWorkflow(e.execution?.workflow, gateIds(s));
       if (Number.isInteger(e.maxFailedCycles) && e.maxFailedCycles > 0) s.maxFailedCycles = e.maxFailedCycles;
+      s.maxStalledCycles = posInt(e.maxStalledCycles);
+      s.milestoneTokenBudget = count(e.milestoneTokenBudget);
       break;
 
     case 'plan_ready':
@@ -584,6 +635,12 @@ function apply(s, e) {
       const p = own(s.usagePending, key) ?? { input: 0, output: 0, cost: 0 };
       s.usagePending[key] = { input: p.input + d.input, output: p.output + d.output, cost: p.cost + d.cost };
       addUsage(s.usage, e.agent, d, e.ts);
+      // a stream from before milestoneId on agent_usage counts no milestone tokens
+      const m = milestone(s, e.milestoneId);
+      if (m) {
+        m.tokens += d.input + d.output;
+        if (m.progressCheck) m.progressCheck = { ...m.progressCheck, tokens: m.tokens };
+      }
       const a = agentOf(s, e.agent);
       if (a) for (const key of ['input', 'output', 'cost']) a.totals[key] += d[key];
       break;
@@ -655,17 +712,40 @@ function apply(s, e) {
       break;
     }
 
-    case 'circuit_breaker':
+    case 'progress_check': {
+      const m = milestone(s, e.milestoneId);
+      const c = progressCheckOf(e);
+      if (!m || !c) break;
+      m.progressCheck = c;
+      if (c.tokens !== null) m.tokens = c.tokens;
+      if (c.maxStalledCycles) s.maxStalledCycles = c.maxStalledCycles;
+      if (c.tokenBudget !== null) s.milestoneTokenBudget = c.tokenBudget;
+      break;
+    }
+
+    case 'circuit_breaker': {
+      const m = milestone(s, e.milestoneId);
+      if (m && e.state !== 'reset' && count(e.tokens) !== null) m.tokens = e.tokens;
       if (Number.isInteger(e.maxFailedCycles) && e.maxFailedCycles > 0) s.maxFailedCycles = e.maxFailedCycles;
       if (Number.isInteger(e.failedCycles)) s.failedCycles = e.failedCycles;
       if (e.state === 'tripped') {
         s.breaker = 'tripped';
         s.status = 'paused';
+        s.trip = tripOf(s, e);
+        if (m) m.trip = s.trip;
       } else if (e.state === 'reset') {
         s.breaker = 'closed';
+        s.trip = null;
+        for (const x of s.milestones) if (!e.milestoneId || x.id === e.milestoneId) x.trip = null;
+        // like src/core/state.js: the reset drops the check, and its tokens count only next to stalledCycles
+        if (m) {
+          m.progressCheck = null;
+          if (e.stalledCycles !== undefined) m.tokens = count(e.tokens) ?? 0;
+        }
         if (s.status === 'paused' && !s.hitl) s.status = 'running';
       }
       break;
+    }
 
     case 'hitl_request':
       s.hitl = { milestoneId: e.milestoneId ?? null, reason: e.reason ?? '', options: Array.isArray(e.options) ? e.options : [] };
@@ -674,18 +754,27 @@ function apply(s, e) {
 
     // Any answer ends the wait; the breaker closes on reset or once the milestone is over, because
     // skip and [BLOCKED]/infra pauses do not always come with a reset.
-    case 'hitl_response':
+    case 'hitl_response': {
+      // feedback or retry starts the milestone's count again: the last check is dropped and the token window is 0
+      const m = milestone(s, e.milestoneId ?? s.hitl?.milestoneId);
+      if (m && (e.decision === 'feedback' || e.decision === 'retry')) {
+        m.progressCheck = null;
+        m.tokens = 0;
+      }
+      if (m) m.trip = null;
       s.hitl = null;
       if (s.mailboxes.human) s.mailboxes.human.read = true;
       s.lastDecision = { decision: e.decision, feedback: e.feedback ?? null };
       if (s.status === 'paused') s.status = 'running';
       break;
+    }
 
     case 'milestone_finished': {
       const m = milestone(s, e.milestoneId);
       if (m) {
         m.status = e.status;
         m.cycleOpen = false;
+        m.trip = null;
         const by = Array.isArray(e.blockedBy) ? e.blockedBy : Array.isArray(e.dependsOn) ? e.dependsOn : null;
         if (by) m.blockedBy = by.map(String);
         if (e.reason) m.lastReason = e.reason;
@@ -983,6 +1072,42 @@ export function dependencyState(state, m) {
 function closeBreaker(s) {
   s.breaker = 'closed';
   s.failedCycles = 0;
+  s.trip = null;
+}
+
+// "no progress 1 of 2"; '' when the check did not report it
+export function stalledText(c) {
+  return Number.isInteger(c?.stalledCycles) && c.maxStalledCycles ? `no progress ${c.stalledCycles} of ${c.maxStalledCycles}` : '';
+}
+
+// "120.0k of 500.0k tokens", or "120.0k tokens" without a budget
+export function budgetText(c) {
+  if (!Number.isInteger(c?.tokens)) return '';
+  return c.tokenBudget ? `${formatTokens(c.tokens)} of ${formatTokens(c.tokenBudget)} tokens` : `${formatTokens(c.tokens)} tokens`;
+}
+
+// A milestone's last progress check in words; null for a milestone without one (or a run from before the check).
+// -> { cycle, verdict, word, how, reason, meter }
+export function checkView(m) {
+  const c = m?.progressCheck;
+  if (!c) return null;
+  const how = c.source === 'rule' ? CHECK_HOW[c.rule] ?? 'rule' : c.source === 'michael' ? 'judged by Michael' : '';
+  return {
+    cycle: c.cycle, verdict: c.verdict, word: VERDICT_WORD[c.verdict], how, reason: c.reason,
+    meter: [stalledText(c), budgetText(c)].filter(Boolean).join(' · '),
+  };
+}
+
+// The contract's title for a tripped breaker: why it asks the human. null when the breaker is closed, when the run
+// is from before the progress check, or when milestoneId names another milestone than the one that tripped.
+export function breakerTitle(state, milestoneId = null) {
+  const t = state?.trip;
+  if (state?.breaker !== 'tripped' || !t?.cause) return null;
+  if (milestoneId && t.milestoneId && t.milestoneId !== milestoneId) return null;
+  const m = t.milestoneId || milestoneId || 'The milestone';
+  if (t.cause === 'stalled') return t.reason ? `No progress on ${m}: ${t.reason}` : `No progress on ${m}`;
+  if (t.cause === 'budget') return `${m} used ${formatTokens(t.tokens ?? 0)} tokens without passing`;
+  return `${m} reached the cycle limit (${t.maxFailedCycles ?? state.maxFailedCycles})`;
 }
 
 // True only while the orchestrator actually waits for an answer in its terminal.
@@ -1052,10 +1177,17 @@ export function describe(e, state = null) {
     case 'cycle_result':
       return { tone: e.result === 'passed' ? 'good' : 'bad',
         text: `${e.milestoneId} cycle ${e.cycle} ${e.result} (${e.failedCycles} consecutive failed): ${clip(e.reason, 120)}` };
-    case 'circuit_breaker':
-      return e.state === 'tripped'
-        ? { tone: 'bad', text: `Circuit breaker tripped after ${e.failedCycles}/${e.maxFailedCycles} failed cycles` }
-        : { tone: 'good', text: 'Circuit breaker reset' };
+    case 'circuit_breaker': {
+      if (e.state !== 'tripped') return { tone: 'good', text: 'Circuit breaker reset' };
+      const title = state && TRIP_CAUSES.includes(e.cause) ? breakerTitle(state, e.milestoneId) : null;
+      return { tone: 'bad', text: title ? `Circuit breaker tripped: ${clip(title, 200)}` : `Circuit breaker tripped after ${e.failedCycles}/${e.maxFailedCycles} failed cycles` };
+    }
+    case 'progress_check': {
+      const v = checkView({ progressCheck: progressCheckOf(e) });
+      if (!v) return null;
+      const head = `${e.milestoneId} cycle ${e.cycle} ${v.word.toLowerCase()}${v.how ? ` (${v.how})` : ''}`;
+      return { tone: v.verdict === 'progress' ? 'info' : 'warn', text: [`${head}${v.reason ? `: ${v.reason}` : ''}`, v.meter].filter(Boolean).join(' · ') };
+    }
     case 'hitl_request':
       return { tone: 'bad', text: `Human input requested: ${clip(e.reason, 140)}` };
     case 'hitl_response':

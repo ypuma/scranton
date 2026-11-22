@@ -2,6 +2,7 @@
 // the board (board.js).
 import {
   PARTICIPANTS, displayName, totals, humanNeeded, lanesOf, isBusy, workflowOf, workflowText, stepNames, customRoles,
+  breakerTitle, checkView, stalledText, TRIP_WORD,
 } from './state.js';
 import { formatTokens, formatCost, formatDuration, formatWhen, runElapsed, plural } from './format.js';
 import { countUp } from './motion.js';
@@ -24,6 +25,40 @@ function el(tag, cls, text) {
   return e;
 }
 
+// The breaker tile. A run with the progress check shows the last check of the milestone that tripped or is current:
+// its cycle, verdict and reason, the cycles without progress against the limit and the tokens against the budget.
+// An older run keeps the failed-cycle meter. -> { label, value, sub, reason, filled, of, tripped, progress }
+export function breakerTile(s) {
+  const tripped = s?.breaker === 'tripped';
+  const ms = s?.milestones ?? [];
+  const find = (id) => ms.find((x) => x.id === id);
+  // the one that tripped, else the current one, else the parallel lane that was checked last
+  const latest = (s?.activeMilestoneIds ?? []).map(find).filter((x) => x?.progressCheck).sort((a, b) => b.progressCheck.seq - a.progressCheck.seq)[0];
+  const current = find(s?.currentMilestoneId);
+  const m = find(s?.trip?.milestoneId) ?? (current?.progressCheck ? current : latest ?? current);
+  const check = checkView(m);
+  const cause = tripped ? s.trip?.cause : null;
+  if (check) {
+    const c = m.progressCheck;
+    const parallel = (s.activeMilestoneIds?.length ?? 0) > 1;
+    return {
+      label: 'Progress', value: cause ? TRIP_WORD[cause] : tripped ? 'Tripped' : check.word,
+      sub: [`${parallel ? `${m.id} ` : ''}cycle ${check.cycle ?? s.cycle}`, check.meter].filter(Boolean).join(' · '),
+      reason: [check.how && `${check.word}, ${check.how}`, check.reason].filter(Boolean).join(': '),
+      filled: c.stalledCycles ?? 0, of: c.maxStalledCycles ?? s.maxStalledCycles ?? 0, tripped, progress: true,
+    };
+  }
+  if (s?.maxStalledCycles) {
+    return {
+      label: 'Progress', value: cause ? TRIP_WORD[cause] : tripped ? 'Tripped' : 'Closed',
+      sub: stalledText({ stalledCycles: 0, maxStalledCycles: s.maxStalledCycles }), reason: '', filled: 0, of: s.maxStalledCycles, tripped, progress: false,
+    };
+  }
+  const max = Math.max(1, s?.maxFailedCycles ?? 3);
+  const failed = s?.failedCycles ?? 0;
+  return { label: 'Breaker', value: tripped ? 'Tripped' : 'Closed', sub: `${failed}/${max} failed`, reason: '', filled: failed, of: max, tripped, progress: false };
+}
+
 function segments(container, fills) {
   container.replaceChildren(...fills.map((f) => {
     const i = document.createElement('i');
@@ -41,7 +76,8 @@ export function createDashboard({ hasRun = () => null } = {}) {
     alert: $('alert'), alertTitle: $('alert-title'), alertDetail: $('alert-detail'), empty: $('empty'),
     kMs: $('kpi-milestones'), kMsBar: $('kpi-milestone-bar'), kMsSub: $('kpi-milestones-sub'),
     kCur: $('kpi-current'), kCurSub: $('kpi-current-sub'), kCurFig: $('kpi-current-fig'),
-    kBrTile: $('kpi-breaker-tile'), kBr: $('kpi-breaker'), kBrMeter: $('kpi-breaker-meter'), kBrSub: $('kpi-breaker-sub'),
+    kBrTile: $('kpi-breaker-tile'), kBrLabel: $('kpi-breaker-label'), kBr: $('kpi-breaker'), kBrMeter: $('kpi-breaker-meter'),
+    kBrSub: $('kpi-breaker-sub'), kBrReason: $('kpi-breaker-reason'),
     kTok: $('kpi-tokens'), kTokSub: $('kpi-tokens-sub'), kCost: $('kpi-cost'), kCostSub: $('kpi-cost-sub'),
     kDur: $('kpi-duration'), kDurSub: $('kpi-duration-sub'), workflow: $('run-workflow'),
     pipeAside: $('pipeline-aside'),
@@ -82,6 +118,9 @@ export function createDashboard({ hasRun = () => null } = {}) {
     const where = humanWhere === 'here' ? '' : ' in the orchestrator terminal';
     if (humanNeeded(s) && humanWhere === 'exited') {
       a = { tone: 'critical', title: 'Run process exited while waiting for a human', detail: s.hitl?.reason ?? '' };
+    } else if (humanNeeded(s) && breakerTitle(s)) {
+      a = { tone: 'critical', kind: 'human', title: breakerTitle(s),
+        detail: [`Human input required${where}.`, s.hitl?.reason].filter(Boolean).join(' ') };
     } else if (humanNeeded(s) && s.breaker === 'tripped') {
       a = { tone: 'critical', kind: 'human', title: `Circuit breaker tripped - human input required${where}`,
         detail: s.hitl?.reason ?? `${s.failedCycles}/${s.maxFailedCycles} consecutive failed cycles` };
@@ -98,7 +137,7 @@ export function createDashboard({ hasRun = () => null } = {}) {
       // the Chat view leaves this one out: its reply and the run line already say it
       a = { tone: 'info', kind: s.result === 'success' ? 'finished' : 'attention', title: `Run finished - ${s.result}`, detail: s.summary ?? '' };
     } else if (s?.breaker === 'tripped') {
-      a = { tone: 'info', title: 'Circuit breaker tripped - resuming', detail: s.lastDecision ? `Decision: ${s.lastDecision.decision}` : '' };
+      a = { tone: 'info', title: `${breakerTitle(s) ?? 'Circuit breaker tripped'} - resuming`, detail: s.lastDecision ? `Decision: ${s.lastDecision.decision}` : '' };
     } else if (modeInfo.error) {
       a = { tone: 'info', title: mode === 'unavailable' ? 'Chat stream unavailable' : 'Demo unavailable', detail: modeInfo.error };
     }
@@ -135,13 +174,16 @@ export function createDashboard({ hasRun = () => null } = {}) {
     // between milestones, or after the last one, there is nothing current to show
     e.kCurFig.hidden = active.length <= 1 && !cur;
 
-    const max = Math.max(1, s?.maxFailedCycles ?? 3);
-    const failed = s?.failedCycles ?? 0;
-    const tripped = s?.breaker === 'tripped';
-    e.kBr.textContent = tripped ? 'Tripped' : 'Closed';
-    e.kBrTile.dataset.critical = String(tripped);
-    segments(e.kBrMeter, Array.from({ length: Math.min(max, 10) }, (_, i) => (i < failed ? 'full' : 'none')));
-    e.kBrSub.textContent = `${failed}/${max} failed`;
+    const br = breakerTile(s);
+    e.kBrLabel.textContent = br.label;
+    e.kBr.textContent = br.value;
+    e.kBrTile.dataset.critical = String(br.tripped);
+    e.kBrTile.dataset.progress = String(br.progress);
+    segments(e.kBrMeter, Array.from({ length: Math.min(br.of, 10) }, (_, i) => (i < br.filled ? 'full' : 'none')));
+    e.kBrSub.textContent = br.sub;
+    e.kBrReason.textContent = br.reason;
+    e.kBrReason.title = br.reason;
+    e.kBrReason.hidden = !br.reason;
 
     const t = s ? totals(s) : { runs: 0, durationMs: 0 };
     // the usage counts every model call as it is reported; the agents' totals only move when a turn has ended
@@ -195,7 +237,7 @@ export function createDashboard({ hasRun = () => null } = {}) {
   function announce(s) {
     const parts = [
       s?.status && `Run status ${s.status}`,
-      s?.breaker === 'tripped' && 'circuit breaker tripped',
+      s?.breaker === 'tripped' && (s.trip?.cause ? `circuit breaker tripped: ${TRIP_WORD[s.trip.cause].toLowerCase()}` : 'circuit breaker tripped'),
       (s?.activeMilestoneIds?.length ?? 0) > 1 ? `${s.activeMilestoneIds.length} milestones in parallel` : s?.currentMilestoneId && `milestone ${s.currentMilestoneId}`,
       s?.result && `result ${s.result}`,
     ].filter(Boolean);

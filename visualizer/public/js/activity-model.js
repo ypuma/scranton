@@ -4,6 +4,7 @@
 import {
   AGENT_IDS, lanesOf, isLive, isBusy, settledStatus, laneGate, gateView, displayName, roleTitle, own, activeRoles, workflowOf, isGate,
   dependencyState, humanNeeded, customRoles, freshUsage, addUsage, countWritten, USAGE_POINTS_MAX, TOUCHED_MAX,
+  checkView, TRIP_WORD,
 } from './state.js';
 import { stripBidi, formatDuration, runElapsed } from './format.js';
 import { ROLE_LABEL, TERMINAL, lastWorkNode, stepper } from './pipeline-model.js';
@@ -223,7 +224,11 @@ export function milestoneColumn(state, m) {
   }
   const mine = Object.values(state.instances ?? {}).filter((i) => i.milestoneId === m.id);
   const asked = state.hitl?.milestoneId ?? null;
-  if (state.breaker === 'tripped') return { column: 'blocked', word: !asked || asked === m.id ? 'breaker tripped' : 'paused by the breaker' };
+  if (state.breaker === 'tripped') {
+    const cause = state.trip?.cause;
+    const here = !asked || asked === m.id;
+    return { column: 'blocked', word: here && cause && (!state.trip.milestoneId || state.trip.milestoneId === m.id) ? TRIP_WORD[cause].toLowerCase() : here ? 'breaker tripped' : 'paused by the breaker' };
+  }
   if (asked === m.id) return { column: 'blocked', word: 'needs you' };
   if (mine.some((i) => i.status === 'blocked')) return { column: 'blocked', word: 'blocked' };
   return inReview(state, m, mine) ? { column: 'in_review', word: 'in review' } : { column: 'in_progress', word: 'in progress' };
@@ -259,12 +264,15 @@ export function teamBoard(state, agents = teamAgents(state)) {
     const mine = lanesOf(state).filter((i) => i.milestoneId === m.id);
     const dep = dependencyState(state, m);
     const failed = m.lastResult === 'failed' && m.lastReason && column !== 'done' && column !== 'todo';
+    const check = column === 'done' || column === 'todo' ? null : checkView(m);
     return {
       id: m.id, title: m.title, column, state: word, loud: column === 'blocked' || word === 'blocked',
       note: dependencyText(dep, m),
       reason: failed ? m.lastReason : m.status !== 'passed' && m.status !== 'active' && m.status !== 'pending' ? str(m.lastReason) : '',
       agents: m.status === 'active' ? mine.filter(isLive).map((i) => ({ id: i.id, status: i.status, line: lines.get(i.id)?.line ?? i.status })) : [],
       attempt: m.cycles ?? 0, failed: failedCycles(m), gates: milestoneGates(state, m, mine),
+      // the last progress check (a run from before it has none): { word, how, reason, meter }
+      check: check && { word: check.word, how: check.how, reason: check.reason, meter: check.meter },
       description: str(m.description), criteria: m.acceptanceCriteria ?? [],
     };
   });

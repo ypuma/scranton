@@ -23,10 +23,12 @@ function place(parent, nodes) {
   });
 }
 
-// "cycle 3 · 2 failed" for a milestone, "attempt 2 · 1 failed" for a pipeline step; '' before the first one
+// "cycle 3 · 2 failed" for a milestone, "attempt 2 · 1 failed" for a pipeline step; '' before the first one. A
+// milestone with a progress check counts the cycles without progress instead: "cycle 3 · no progress 1 of 2 · ..."
 export function attemptText(card, kind) {
   if (!card.attempt) return '';
-  return [`${kind === 'step' ? 'attempt' : 'cycle'} ${card.attempt}`, card.failed ? `${card.failed} failed` : ''].filter(Boolean).join(' · ');
+  const count = card.check?.meter || (card.failed ? `${card.failed} failed` : '');
+  return [`${kind === 'step' ? 'attempt' : 'cycle'} ${card.attempt}`, count].filter(Boolean).join(' · ');
 }
 
 // root: the element the board fills. name: what its columns are labelled against (several boards may be on a page).
@@ -70,6 +72,11 @@ export function createBoard(root, { name = 'board' } = {}) {
     if (c.reason) {
       const p = el('p', 'card-reason');
       p.append(el('b', '', 'last failure '), c.reason);
+      li.append(p);
+    }
+    if (c.check) {
+      const p = el('p', 'card-reason card-check');
+      p.append(el('b', '', `${c.check.word.toLowerCase()}${c.check.how ? `, ${c.check.how}` : ''} `), c.check.reason);
       li.append(p);
     }
     if (c.agents.length) {

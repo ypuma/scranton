@@ -65,8 +65,8 @@ test('buildRunRequest: validation names the field', () => {
   assert.match(buildRunRequest({ request: 'x'.repeat(32769) }, c).error, /32769 characters; the limit is 32768/);
   assert.ok(buildRunRequest({ request: 'x'.repeat(32768) }, c).body);
   assert.equal(buildRunRequest({ request: 'x', workspace: 'relative\\ws' }, c).field, 'workspace');
-  for (const bad of ['0', '11', '2.5', '-1', 'three']) assert.equal(buildRunRequest({ request: 'x', maxCycles: bad }, c).field, 'maxCycles', bad);
-  assert.equal(buildRunRequest({ request: 'x', maxCycles: '10' }, c).body.maxCycles, 10);
+  for (const bad of ['0', '51', '2.5', '-1', 'three']) assert.equal(buildRunRequest({ request: 'x', maxCycles: bad }, c).field, 'maxCycles', bad);
+  assert.equal(buildRunRequest({ request: 'x', maxCycles: '50' }, c).body.maxCycles, 50);
 });
 
 test('buildRunRequest: a demo needs no request but a known scenario and a sane delay', () => {

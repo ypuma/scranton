@@ -3,6 +3,7 @@
 import { stripBidi, formatWhen } from './format.js';
 import {
   normalizeExecution, normalizeWorkflow, workflowText, displayName, AGENT_IDS, GATE_ROLES, LEGACY_GATES, ROLE_ID_RE, ROLE_TITLES,
+  breakerTitle,
 } from './state.js';
 
 // Every control route answers 403 without it, GETs included (/api/auth carries the PKCE sign-in address).
@@ -25,6 +26,10 @@ export const EXIT_SETTLE_MS = 1500;
 // Events older than this are history even when they arrive outside the replay window.
 export const NOTIFY_MAX_AGE_MS = 60000;
 export const PARALLEL_MAX = 32;
+// the run start body's cycle settings (.enma/adaptive-cycles-contract.md); an empty field leaves the server default
+export const CYCLES_MAX = 50;
+export const STALLED_MAX = 10;
+export const TOKEN_BUDGET_MAX = 20000000;
 // 'bridge' is the older name of 'allow' (.enma/run-options-contract.md)
 export const SANDBOX_NETWORKS = ['allow', 'none', 'bridge'];
 export const SANDBOX_MODES = ['scranton', 'docker', 'host'];
@@ -395,7 +400,7 @@ function intIn(raw, min, max) {
   return n >= min && n <= max ? { value: n } : { bad: true };
 }
 
-// form: { request, workspace, maxCycles, noPlan, demo, scenario, delayMs, maxParallel,
+// form: { request, workspace, maxCycles, maxStalledCycles, milestoneTokenBudget, noPlan, demo, scenario, delayMs, maxParallel,
 //         sandbox: 'scranton' | 'docker' | 'host', trustedHost, sandboxImage, sandboxNetwork: 'allow' | 'none',
 //         approveShell, approveFiles, approvalTimeout } as read from the inputs,
 //         models: { role: { provider, model } } already checked against the catalog (accounts.js buildModels),
@@ -417,9 +422,15 @@ export function buildRunRequest(form, control = DISABLED) {
     body.workspace = workspace;
   }
 
-  const cycles = intIn(form.maxCycles, 1, 10);
-  if (cycles.bad) return { error: 'Max failed cycles must be a whole number from 1 to 10.', field: 'maxCycles' };
+  const cycles = intIn(form.maxCycles, 1, CYCLES_MAX);
+  if (cycles.bad) return { error: `The cycle limit must be a whole number from 1 to ${CYCLES_MAX}.`, field: 'maxCycles' };
   if (!cycles.empty) body.maxCycles = cycles.value;
+  const stalled = intIn(form.maxStalledCycles, 1, STALLED_MAX);
+  if (stalled.bad) return { error: `Cycles without progress must be a whole number from 1 to ${STALLED_MAX}.`, field: 'maxStalledCycles' };
+  if (!stalled.empty) body.maxStalledCycles = stalled.value;
+  const budget = intIn(form.milestoneTokenBudget, 0, TOKEN_BUDGET_MAX);
+  if (budget.bad) return { error: `The token budget must be a whole number from 0 (off) to ${TOKEN_BUDGET_MAX}.`, field: 'milestoneTokenBudget' };
+  if (!budget.empty) body.milestoneTokenBudget = budget.value;
   if (form.noPlan) body.noPlan = true;
 
   const parallel = intIn(form.maxParallel, 1, PARALLEL_MAX);
@@ -549,6 +560,13 @@ export function hitlAnnouncement({ prev, next, fresh = false, pending = null, ou
   return null;
 }
 
+export const HITL_TITLE = 'Human input required';
+
+// The heading of the answer card: why the breaker asks, when the event stream says so for this question.
+export function hitlTitle(pending, state) {
+  return (pending && breakerTitle(state, pending.milestoneId)) || HITL_TITLE;
+}
+
 // What the human-answer panel shows. sent = { runId, requestSeq, decision, at } of the answer we
 // posted and that is not settled yet, or null. -> 'none' | 'answer' | 'sent' | 'stale'
 export function hitlPhase({ pending, sent = null, now = Date.now() }) {
@@ -663,7 +681,8 @@ export function documentTitle({ enabled, pending, live, hitl, gone = false }) {
 
 // Server 400 messages name the field in their own case ("Workspace must be absolute").
 const ERROR_FIELDS = {
-  request: 'request', workspace: 'workspace', maxcycles: 'maxCycles', scenario: 'scenario', delayms: 'delayMs',
+  request: 'request', workspace: 'workspace', maxcycles: 'maxCycles', maxstalledcycles: 'maxStalledCycles',
+  milestonetokenbudget: 'milestoneTokenBudget', scenario: 'scenario', delayms: 'delayMs',
   maxparallel: 'maxParallel', trustedhost: 'trustedHost', sandboximage: 'sandboxImage', sandboxnetwork: 'sandboxNetwork', sandbox: 'sandbox',
   models: 'models', workflow: 'workflow', gates: 'workflow', approvals: 'approvals',
 };
@@ -683,7 +702,7 @@ export function errorField(message, roles = MODEL_ROLES) {
   if (role && roles.includes(role[1].toLowerCase())) return `models.${role[1].toLowerCase()}`;
   // "approvals.timeoutSeconds ..." is about the wait, not the boxes
   if (/\btimeoutseconds\b/i.test(text)) return 'approvalTimeout';
-  const m = /\b(request|workspace|maxcycles|scenario|delayms|maxparallel|trustedhost|sandboximage|sandboxnetwork|sandbox|models|workflow|gates|approvals)\b/i.exec(text);
+  const m = /\b(request|workspace|maxcycles|maxstalledcycles|milestonetokenbudget|scenario|delayms|maxparallel|trustedhost|sandboximage|sandboxnetwork|sandbox|models|workflow|gates|approvals)\b/i.exec(text);
   return m ? ERROR_FIELDS[m[1].toLowerCase()] : null;
 }
 

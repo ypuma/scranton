@@ -11,7 +11,7 @@ const DETAIL = 3;
 const TYPE_LABEL = {
   run_started: 'Run started', run_finished: 'Run ended', run_reply: 'Reply', plan_ready: 'Plan', milestone_started: 'Milestone',
   milestone_finished: 'Milestone', milestone_integrated: 'Integrated', cycle_result: 'Cycle', gate_result: 'Gate',
-  circuit_breaker: 'Breaker', hitl_request: 'Question', hitl_response: 'Answer', instance_started: 'Agent started',
+  circuit_breaker: 'Breaker', progress_check: 'Progress', hitl_request: 'Question', hitl_response: 'Answer', instance_started: 'Agent started',
   agent_status: 'Status', agent_tool: 'Tool', agent_finished: 'Turn ended', agent_message: 'Message', hive_write: 'Handoff',
   chat_message: 'Chat', chat_delivery: 'Chat', chat_command_rejected: 'Chat', log: 'Note',
 };

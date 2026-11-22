@@ -483,6 +483,9 @@ body[data-scope="none"] .conn { display: none; }
 .fig-current dd { flex-wrap: nowrap; }
 .fig-current .fig-value { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fig-current .fig-sub { flex: none; max-width: 100%; }
+/* the last progress verdict's reason: one line, in full in its title */
+.fig-reason { flex: 1 1 100%; max-width: 32rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fig-reason[hidden] { display: none; }
 .fig[data-critical="true"] { padding: 0 var(--s2); border-radius: var(--radius-s); background: var(--bad-bg); }
 .fig[data-critical="true"] :is(dt, .fig-value, .fig-sub) { color: var(--bad); }
 .more-toggle { width: 1.75rem; height: 1.75rem; margin-left: auto; }
@@ -692,8 +695,8 @@ body[data-view="dashboard"] .main > * { flex-shrink: 0; }
 /* the run line is the head of the Dashboard: one surface with the state and the figures that matter */
 body[data-view="dashboard"] .runline { margin: var(--s4) var(--gutter) 0; padding: var(--s3) var(--s4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 body[data-view="dashboard"] .alert { margin-top: var(--s3); }
-/* a closed breaker with no failed cycle says nothing; it shows from the first failure on */
-body[data-view="dashboard"] #kpi-breaker-tile:not([data-critical="true"]):not(:has(i[data-fill="full"])) { display: none; }
+/* a closed breaker with no failed cycle says nothing; it shows from the first failure (or progress check) on */
+body[data-view="dashboard"] #kpi-breaker-tile:not([data-critical="true"]):not([data-progress="true"]):not(:has(i[data-fill="full"])) { display: none; }
 body[data-view="dashboard"][data-run="yes"] .followup { max-width: none; margin-top: var(--s3); gap: var(--s1); }
 body[data-view="dashboard"][data-run="yes"] .followup:not([data-off="true"]) .composer { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 body[data-view="dashboard"][data-run="yes"] .followup:not([data-off="true"]) textarea { height: 3.25rem; min-height: 3.25rem; }

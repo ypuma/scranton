@@ -154,8 +154,8 @@
           <dd><span class="fig-value" id="kpi-current">-</span> <span class="fig-sub" id="kpi-current-sub">-</span></dd>
         </div>
         <div class="fig" id="kpi-breaker-tile">
-          <dt>Breaker</dt>
-          <dd><span class="fig-value" id="kpi-breaker">Closed</span> <span class="segments meter" id="kpi-breaker-meter" aria-hidden="true"></span> <span class="fig-sub" id="kpi-breaker-sub">0/3 failed</span></dd>
+          <dt id="kpi-breaker-label">Breaker</dt>
+          <dd><span class="fig-value" id="kpi-breaker">Closed</span> <span class="segments meter" id="kpi-breaker-meter" aria-hidden="true"></span> <span class="fig-sub" id="kpi-breaker-sub">0/12 failed</span> <span class="fig-sub fig-reason" id="kpi-breaker-reason" hidden></span></dd>
         </div>
         <div class="fig">
           <dt>Tokens</dt>
@@ -736,9 +736,19 @@
         <details class="advanced team-only" id="run-advanced">
           <summary>Advanced</summary>
           <div class="field">
-            <label for="f-cycles">Max failed cycles</label>
-            <input id="f-cycles" name="maxCycles" class="mono narrow" type="text" inputmode="numeric" placeholder="3" aria-describedby="f-cycles-hint">
-            <span class="hint" id="f-cycles-hint">Failed test cycles before the circuit breaker asks you (1-10).</span>
+            <label for="f-stalled">Stop after N cycles without progress</label>
+            <input id="f-stalled" name="maxStalledCycles" class="mono narrow" type="text" inputmode="numeric" placeholder="2" aria-describedby="f-stalled-hint">
+            <span class="hint" id="f-stalled-hint">A milestone keeps cycling while each failed cycle makes progress. After this many cycles in a row without progress it asks you (1-10).</span>
+          </div>
+          <div class="field">
+            <label for="f-budget">Token budget per milestone <span class="hint">optional</span></label>
+            <input id="f-budget" name="milestoneTokenBudget" class="mono" type="text" inputmode="numeric" placeholder="500000" aria-describedby="f-budget-hint">
+            <span class="hint" id="f-budget-hint">Tokens a milestone may use without passing before it asks you (0-20000000, 0 = off).</span>
+          </div>
+          <div class="field">
+            <label for="f-cycles">Cycle limit (safety)</label>
+            <input id="f-cycles" name="maxCycles" class="mono narrow" type="text" inputmode="numeric" placeholder="12" aria-describedby="f-cycles-hint">
+            <span class="hint" id="f-cycles-hint">Failed cycles after which a milestone asks you even while it makes progress (1-50).</span>
           </div>
           <label class="check"><input type="checkbox" id="f-noplan" name="noPlan"><span>Skip planning <span class="hint">one milestone for the whole request</span></span></label>
           <label class="check" id="f-demo-row"><input type="checkbox" id="f-demo" name="demo"><span>Demo (scripted model) <span class="hint">scripted agents, no model or API key</span></span></label>

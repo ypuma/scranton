@@ -22,11 +22,12 @@ export function scratchDir(t) {
   return dir;
 }
 
-export function createRun(dir, { env = {}, hitl, onBreaker = 'ask', maxParallel = 2, maxFailedCycles = 3, simulated = false } = {}) {
+// maxStalledCycles: only set when given, so a runtime from before the progress check still loads the config
+export function createRun(dir, { env = {}, hitl, onBreaker = 'ask', maxParallel = 2, maxFailedCycles = 3, maxStalledCycles, simulated = false } = {}) {
   const config = loadConfig({
     cwd: dir, env: {}, hasBash: true,
     fileConfig: {
-      workspace: path.join(dir, 'workspace'), hiveDir: path.join(dir, 'hive'), maxFailedCycles,
+      workspace: path.join(dir, 'workspace'), hiveDir: path.join(dir, 'hive'), maxFailedCycles, ...(maxStalledCycles ? { maxStalledCycles } : {}),
       execution: { maxParallel: 1, isolation: 'shared', sandbox: { mode: 'host' } },
     },
   });
@@ -39,7 +40,10 @@ export function createRun(dir, { env = {}, hitl, onBreaker = 'ask', maxParallel 
       const {agentId, instanceId, milestone, cycle} = options;
       const call = (name, args) => ({text: 'Using ' + name, toolCalls: [{id: name, name, arguments: args}]});
       let turns;
-      if (agentId === 'michael') {
+      if (agentId === 'michael' && /\/michael\/progress\//.test(options.invocationKey ?? '')) {
+        // the progress check after a failed cycle (.enma/adaptive-cycles-contract.md)
+        turns = [{text: env.SCRIPTED_STALLED ? '[STALLED]\nThe same failure came back.' : '[PROGRESS]\nThe failure is narrower than before.'}];
+      } else if (agentId === 'michael') {
         const milestones = [
           {id: 'm1', title: 'Todo storage module', description: 'Implement storage.', dependsOn: []},
           {id: 'm2', title: 'Command line interface', description: 'Implement CLI.', dependsOn: []},

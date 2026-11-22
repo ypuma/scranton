@@ -1,6 +1,8 @@
 // Records the offline demo: node test/visualizer/fixtures/record-demo.js
-// A real orchestrator run (RPC, worktrees, two parallel pipelines, agent and human chat, a QA failure that
-// trips the breaker and a human answer) against the scripted pi in project scratch; no model is called.
+// A real orchestrator run (RPC, worktrees, two parallel pipelines, agent and human chat, a QA failure whose
+// progress check stalls and trips the breaker, and a human answer) against the scripted pi in project scratch; no
+// model is called. The checked-in recording's progress checks were written by hand to the contract
+// (.enma/adaptive-cycles-contract.md) while the runtime lane built them: a new recording replaces them.
 // Machine paths, ids and wall-clock times are then replaced by fixed ones, so the file is the same on every
 // machine and replays at a readable pace. Rebuild the terminal fixtures afterwards (build-fixtures.js).
 import fs from 'node:fs';
@@ -17,7 +19,7 @@ const DEMO = 'C:\\demo';
 // Seconds before each event type in the replay; the order of the recording is kept exactly.
 const GAP = {
   run_started: 0, plan_ready: 0.6, milestone_started: 0.5, hive_write: 0.6, instance_started: 0.8, agent_tool: 3,
-  agent_finished: 2, cycle_result: 0.8, circuit_breaker: 0.4, hitl_request: 0.4, hitl_response: 45, milestone_finished: 0.5,
+  agent_finished: 2, cycle_result: 0.8, progress_check: 0.3, circuit_breaker: 0.4, hitl_request: 0.4, hitl_response: 45, milestone_finished: 0.5,
   milestone_integrated: 1.2, chat_message: 1.5, chat_delivery: 0.8, run_finished: 1, log: 0.2,
 };
 const STATUS_GAP = { working: 0.4, thinking: 1.6, idle: 0.3, done: 0.3, waiting: 0.3, blocked: 0.3, error: 0.3 };
@@ -27,7 +29,7 @@ async function record() {
   try {
     let asked = 0;
     const { orchestrator, hive, config } = createRun(dir, {
-      maxParallel: 2, maxFailedCycles: 2, simulated: true,
+      maxParallel: 2, maxFailedCycles: 12, maxStalledCycles: 1, simulated: true,
       env: { SCRIPTED_MODE: 'chat', SCRIPTED_FLAKY: 'm2:2', SCRIPTED_STEP_MS: '120' },
       hitl: async () => {
         asked += 1;

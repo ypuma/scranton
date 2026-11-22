@@ -8,7 +8,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { reduceAll, parseJsonl, humanNeeded, AGENT_IDS } from '../../visualizer/public/js/state.js';
+import { reduceAll, parseJsonl, humanNeeded, AGENT_IDS, TRIP_CAUSES, checkView } from '../../visualizer/public/js/state.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CLI = path.join(ROOT, 'bin', 'scranton.js');
@@ -108,4 +108,31 @@ test('the real runs cover the breaker, the human in the loop and skip/abort deci
   const decisions = new Set(all.filter((e) => e.type === 'hitl_response').map((e) => e.decision));
   assert.ok(decisions.has('skip') && decisions.has('abort'), [...decisions].join(', '));
   assert.ok(all.some((e) => e.type === 'circuit_breaker' && e.state === 'tripped'));
+});
+
+test('the real runs check progress after a failed cycle and say why the breaker tripped', () => {
+  const runs = [...done.values()].filter((r) => r.events.length);
+  const all = runs.flatMap((r) => r.events);
+  assert.ok(all.filter((e) => e.type === 'run_started').every((e) => Number.isInteger(e.maxStalledCycles) && Number.isInteger(e.milestoneTokenBudget)), 'run_started carries the cycle settings');
+  const failed = all.filter((e) => e.type === 'cycle_result' && e.result === 'failed');
+  assert.ok(failed.length, 'no failed cycle in any run');
+  assert.ok(all.some((e) => e.type === 'progress_check'), 'no progress_check in any run');
+  const trips = all.filter((e) => e.type === 'circuit_breaker' && e.state === 'tripped');
+  assert.ok(trips.length && trips.every((e) => TRIP_CAUSES.includes(e.cause)), trips.map((e) => e.cause).join(', '));
+  let kept = 0;
+  for (const { events, snapshot } of runs) {
+    const s = reduceAll(events);
+    for (const m of s.milestones) {
+      // state.json drops the check on a breaker reset or a feedback/retry answer
+      const theirs = snapshot.milestones.find((x) => x.id === m.id)?.progress ?? null;
+      if (!theirs) {
+        assert.equal(m.progressCheck, null, `${m.id} has no check in state.json`);
+        continue;
+      }
+      kept += 1;
+      assert.equal(m.progressCheck?.verdict, theirs.verdict, `${m.id} keeps the verdict state.json keeps`);
+      assert.equal(checkView(m).cycle, theirs.cycle);
+    }
+  }
+  assert.ok(kept, 'no milestone keeps a check in any run');
 });

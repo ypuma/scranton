@@ -243,7 +243,7 @@ test('parity: REQUEST_MAX is what POST /api/runs accepts as a request', async (t
   const srv = await startVisualizerServer({ hiveDir: path.join(dir, 'hive'), publicDir: dir, port: 0, control: { workspace: path.join(dir, 'ws') } });
   t.after(() => srv.close());
   // an invalid maxCycles after the request keeps the run from starting: which error comes back tells the request passed
-  const at = await post(srv, '/api/runs', { request: 'x'.repeat(REQUEST_MAX), maxCycles: 11 });
+  const at = await post(srv, '/api/runs', { request: 'x'.repeat(REQUEST_MAX), maxCycles: 51 });
   assert.deepEqual([at.status, at.value.error], [400, 'Invalid maxCycles'], 'the browser maximum is a valid request');
   const over = await post(srv, '/api/runs', { request: 'x'.repeat(REQUEST_MAX + 1) });
   assert.deepEqual([over.status, over.value.error], [400, 'Invalid request'], 'one more is refused');

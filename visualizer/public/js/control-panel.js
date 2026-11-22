@@ -3,7 +3,7 @@
 import {
   CLIENT_HEADERS, CONTROL_HEADERS, DECISION_LABEL, CONFIRM_DECISIONS, REQUEST_MAX, FEEDBACK_MAX,
   parseControl, buildRunRequest, buildHitlRequest, responseError, answeredInState, sentOutcome, hitlPhase,
-  hitlAnnouncement, openPending, exitToShow, exitSettleLeft, exitKey, runInterrupted, notificationFor, documentTitle, humanWhere,
+  hitlAnnouncement, hitlTitle, openPending, exitToShow, exitSettleLeft, exitKey, runInterrupted, notificationFor, documentTitle, humanWhere,
   errorField, modelErrorRoles, controlGates, clip, executionDefaults, exitHint, runModeOf,
   WORKFLOW_KEY, WORKFLOW_DEFAULT, WORKFLOW_ERROR, parseStoredWorkflow, workflowGates, buildWorkflow, configuredChoice, workflowNote,
   gateCatalog, roleIds, customNames, stagesOf, canReleaseOrphan, releaseOffered, recoveryText, recoveryTimes, startBlock,
@@ -81,7 +81,7 @@ export function createControlPanel({
     emptyCli: $('empty-cli'), emptyControl: $('empty-control'), emptyTitle: $('empty-control-title'), emptyDetail: $('empty-control-detail'),
     runDialog: $('run-dialog'), runForm: $('run-form'), runSubmit: $('run-submit'), runBusy: $('run-busy'), runError: $('run-error'),
     advanced: $('run-advanced'), options: $('run-options'), optionsSummary: $('run-options-summary'), trustKept: $('f-trust-kept'), fRequest: $('f-request'), fRequestOpt: $('f-request-opt'), fRequestCount: $('f-request-count'),
-    fWorkspace: $('f-workspace'), fCycles: $('f-cycles'), fNoPlan: $('f-noplan'), fDemo: $('f-demo'),
+    fWorkspace: $('f-workspace'), fCycles: $('f-cycles'), fStalled: $('f-stalled'), fBudget: $('f-budget'), fNoPlan: $('f-noplan'), fDemo: $('f-demo'),
     fScenario: $('f-scenario'), fDelay: $('f-delay'), demoFields: $('demo-fields'), fDemoRow: $('f-demo-row'), demoNone: $('f-demo-none'),
     exec: $('exec-fields'), fParallel: $('f-parallel'), fScranton: $('f-sandbox-scranton'), fDocker: $('f-sandbox-docker'), fHost: $('f-sandbox-host'),
     trustRow: $('f-trust-row'), fTrusted: $('f-trusted'), dockerFields: $('docker-fields'), fImage: $('f-image'), fNetwork: $('f-network'),
@@ -501,6 +501,9 @@ export function createControlPanel({
     e.hitl.hidden = false;
 
     if (next === 'answer') {
+      // the cause arrives on the event stream, the question on the poll: either may come first
+      const title = hitlTitle(pending, s);
+      if (e.hitlTitle.textContent !== title) e.hitlTitle.textContent = title;
       if (key !== hitlKey) {
         hitlKey = key;
         e.hitlMeta.textContent = pending.milestoneId ? `milestone ${pending.milestoneId}` : 'run';
@@ -924,7 +927,8 @@ export function createControlPanel({
   }
 
   const FIELD = {
-    request: 'fRequest', workspace: 'fWorkspace', maxCycles: 'fCycles', scenario: 'fScenario', delayMs: 'fDelay',
+    request: 'fRequest', workspace: 'fWorkspace', maxCycles: 'fCycles', maxStalledCycles: 'fStalled', milestoneTokenBudget: 'fBudget',
+    scenario: 'fScenario', delayMs: 'fDelay',
     maxParallel: 'fParallel', sandbox: 'fScranton', trustedHost: 'fTrusted', sandboxImage: 'fImage', sandboxNetwork: 'fNetwork',
     approvals: 'fApproveShell', approvalTimeout: 'fApproveTimeout',
     models: 'fModelMichael', 'models.michael': 'fModelMichael', 'models.dwight': 'fModelDwight', 'models.oscar': 'fModelOscar',
@@ -1056,7 +1060,8 @@ export function createControlPanel({
   // The execution choices as the drawer holds them; a follow-up starts with the same ones.
   function executionForm() {
     return {
-      maxCycles: e.fCycles.value, noPlan: e.fNoPlan.checked, maxParallel: e.fParallel.value,
+      maxCycles: e.fCycles.value, maxStalledCycles: e.fStalled.value, milestoneTokenBudget: e.fBudget.value,
+      noPlan: e.fNoPlan.checked, maxParallel: e.fParallel.value,
       sandbox: sandboxPick(), trustedHost: e.fTrusted.checked,
       sandboxImage: e.fImage.value, sandboxNetwork: e.fNetwork.checked ? 'none' : 'allow', workflow: workflowChoice(),
       approveShell: e.fApproveShell.checked, approveFiles: e.fApproveFiles.checked, approvalTimeout: e.fApproveTimeout.value,
