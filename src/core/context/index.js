@@ -1,3 +1,6 @@
+import path from 'node:path';
+import { createInstructionCache } from '../instructions.js';
+import { loadAgentsMd, PACKAGE_ROOT } from '../config.js';
 import { createContextStore } from './store.js';
 import { readTurns } from './turns.js';
 import { buildTeamPack, buildPipelineContext, pipelineSections, safeText } from './pack.js';
@@ -9,7 +12,15 @@ import { listRuns, formatThreadContext, countContextRuns } from '../thread.js';
 import { teamDreamingContext } from '../dreaming-sources.js';
 import { buildPipelineHistory, listPipelineHistoryRuns, readPipelineHistoryJson } from '../pipeline-history.js';
 
-export function createContext({ dataDir, registry, redact = defaultRedact, now = () => new Date().toISOString() }) {
+export function createContext({ dataDir, registry, redact = defaultRedact, now = () => new Date().toISOString(), agentsMd, env = process.env }) {
+  const cachedInstructions = createInstructionCache();
+  const instructions = (p) => {
+    const project = registry.getProject(p);
+    const enabled = agentsMd ?? loadAgentsMd({ cwd: PACKAGE_ROOT, env });
+    let exclude = [];
+    try { exclude = registry.listChats(p).map(chat => chat.hiveDir).filter(dir => typeof dir === 'string'); } catch { /* Instructions remain available when chat history is degraded. */ }
+    return cachedInstructions(project.workspace, { enabled, scratchDir: path.join(dataDir, '.scratch'), exclude });
+  };
   const store = (p, c) => createContextStore(dataDir, p, c);
   const scope = (p, c) => { registry.getProject(p); return registry.getChat(p, c); };
   function gather(p, c, options = {}) {
@@ -59,9 +70,12 @@ export function createContext({ dataDir, registry, redact = defaultRedact, now =
   }
   function status(p) {
     registry.getProject(p);
+    return instructions(p).then(value => statusDocument(p, value));
+  }
+  function statusDocument(p, instructionStatus) {
     const project = store(p);
     let degraded = false;
-    const result = { v: 2, settings: project.settings(), defaults: { budget: { ...DEFAULT_BUDGET }, window: L.window, percent: [L.percentMin, L.percentMax], tokens: [L.tokensMin, L.tokensMax], models: L.overrides,
+    const result = { v: 2, instructions: instructionStatus, settings: project.settings(), defaults: { budget: { ...DEFAULT_BUDGET }, window: L.window, percent: [L.percentMin, L.percentMax], tokens: [L.tokensMin, L.tokensMax], models: L.overrides,
       pipeline: [Math.floor((L.pipelineHistoryFloor + L.pipelineContextFloor) / 4), Math.floor((Math.floor(L.enginePromptBytes / 4) + Math.floor(L.enginePromptBytes / 8)) / 4)], pipelineBytes: { history: [L.pipelineHistoryFloor, Math.floor(L.enginePromptBytes / 4)], context: [L.pipelineContextFloor, Math.floor(L.enginePromptBytes / 8)] } }, notes: project.notes(), chats: registry.listChats(p).filter((c) => c.projectId === p).map((chat) => {
       const state = store(p, chat.id), resetAt = state.state().resetAt;
       degraded ||= state.degraded;
@@ -81,6 +95,10 @@ export function createContext({ dataDir, registry, redact = defaultRedact, now =
     return result;
   }
   function inspect(p, c, options = {}) {
+    scope(p, c);
+    return instructions(p).then(value => inspectDocument(p, c, options, value));
+  }
+  function inspectDocument(p, c, options, instructionStatus) {
     const chat = scope(p, c), engine = chat.engine === 'pipeline' ? 'pipeline' : 'team';
     const recipients = recipientsFor(options);
     let g, pack, wire, pipelineNotes = '', degraded = false;
@@ -107,7 +125,7 @@ export function createContext({ dataDir, registry, redact = defaultRedact, now =
     const wireBytes = wire ? Buffer.byteLength(JSON.stringify(wire)) : 0;
     const budget = engine === 'team' ? { ...budgetFor(g.settings, recipients.planner), used: tokens(pack.text) } : { ...allowance,
       used: Math.ceil((Math.min(wireBytes - contextBytes, allowance.historyBytes) + Math.min(contextBytes, allowance.contextBytes)) / 4) };
-    return { v: 2, engine, settings: g.settings, reset: g.resetAt ? { at: g.resetAt } : null, ...meta, model: recipients.planner, budget,
+    return { v: 2, instructions: instructionStatus, engine, settings: g.settings, reset: g.resetAt ? { at: g.resetAt } : null, ...meta, model: recipients.planner, budget,
       notes: { ...meta.notes, limit: L.notes }, degraded: Boolean(degraded || g.own.degraded || g.budget?.degraded || pack?.meta.degraded),
       sections, developer: engine === 'team' ? { model: recipients.developer, budget: { tokens: briefFor(g.settings, recipients.developer), used: tokens(pack.developer) }, chars: pack.developer.length, tokens: tokens(pack.developer), text: pack.developer } : null };
   }

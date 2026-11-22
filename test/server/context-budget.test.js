@@ -89,7 +89,7 @@ test('budget request: 32768 quoted UTF-8 characters reach the real orchestrator 
 // Revert launchConfig model resolution, recipients closure, or v:3 in control.start to fail.
 for (const docker of [false, true]) test(`budget Team: v3 pack uses ${docker ? 'Docker per-run picks' : 'per-run planner and developer picks'}`, async (t) => {
   const f = await fixture(t), core = createContext({ dataDir: f.dataDir, registry: f.registry });
-  core.setNotes(f.project.id, 'Standing notes\n'.repeat(1000));
+  await core.setNotes(f.project.id, 'Standing notes\n'.repeat(1000));
   const recipients = { planner: recipient('pick', 200000), developer: recipient('dev', 64000) };
   const expected = core.forTeam(f.project.id, f.chat.id, { recipients });
   const defaults = (await f.req(f.route + '/context')).value;
@@ -141,7 +141,7 @@ test('budget documents: Pipeline pick is optional, paired and validated; Team ig
 // Revert supervisor's recipients:{planner} forwarding to fail the small-window allowance.
 test('budget Pipeline start: selected planner budgets the persisted history file; demo and decision attach none', async (t) => {
   const f = await fixture(t, { pipeline: true });
-  createContext({ dataDir: f.dataDir, registry: f.registry }).setNotes(f.project.id, 'History notes');
+  await createContext({ dataDir: f.dataDir, registry: f.registry }).setNotes(f.project.id, 'History notes');
   const route = f.route + '/pipeline/runs', models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, ref()]));
   const started = await f.req(route, { task: 'Fresh task', models }); assert.equal(started.status, 202);
   const root = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chat.id, 'pipeline'), id = started.value.runId;

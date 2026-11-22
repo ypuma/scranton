@@ -12,6 +12,7 @@ import {
   contextUrl, chatContextUrl, parseProjectContext, parseChatContext, contextLine, summaryRows, buildNotes, buildCrossChat,
   contextError, flagsText, resetQuestion, NOTES_MAX, UNREADABLE, LAYER_TITLE, units, tokens, pct, compactTokens, usageText,
   cappedText, windowNote, meterFill, budgetState, buildBudget, buildBudgetReset, switchMode, budgetPreview, developerText, notesCount,
+  parseInstructions, instructionsText, instructionsPaths,
 } from '../../visualizer/public/js/context.js';
 import { createProjectRegistry } from '../../src/core/projects.js';
 import { createContext } from '../../src/core/context/index.js';
@@ -1208,7 +1209,7 @@ test('an error on the project document while the chat document is fine: the chat
 });
 
 // real documents, built by the server's own context module on a small registry under .scratch
-function realDocs(t) {
+async function realDocs(t) {
   const base = path.resolve('.scratch/context-system/lane-f2');
   fs.mkdirSync(base, { recursive: true });
   const root = fs.mkdtempSync(path.join(base, 'docs-'));
@@ -1230,17 +1231,17 @@ function realDocs(t) {
   write(path.join(run, 'status.json'), { status: 'succeeded', task: 'Pipeline task', created_at: date, updated_at: date });
   write(path.join(run, 'run.json'), { task: 'Pipeline task' });
   const context = createContext({ dataDir, registry, now: () => '2026-01-02T00:00:00.000Z' });
-  context.setNotes(p.id, 'Use tabs.');
+  await context.setNotes(p.id, 'Use tabs.');
   const wire = (x) => JSON.parse(JSON.stringify(x));
   const broken = createContext({ dataDir, registry: { ...registry, listChats() { throw Error('injected'); } } });
   return {
-    project: wire(context.status(p.id)), team: wire(context.inspect(p.id, team.id)), pipeline: wire(context.inspect(p.id, pipe.id)),
-    legacy: wire(broken.inspect(p.id, team.id)), ids: { project: p.id, team: team.id, pipe: pipe.id }, context, wire,
+    project: wire(await context.status(p.id)), team: wire(await context.inspect(p.id, team.id)), pipeline: wire(await context.inspect(p.id, pipe.id)),
+    legacy: wire(await broken.inspect(p.id, team.id)), ids: { project: p.id, team: team.id, pipe: pipe.id }, context, wire,
   };
 }
 
-test('real documents from createContext: the parsers read the Team, Pipeline and project documents', (t) => {
-  const r = realDocs(t);
+test('real documents from createContext: the parsers read the Team, Pipeline and project documents', async (t) => {
+  const r = await realDocs(t);
   const team = parseChatContext(r.team);
   assert.equal(team.valid, true);
   assert.equal(team.engine, 'team');
@@ -1288,7 +1289,7 @@ test('real documents from createContext: the parsers read the Team, Pipeline and
 });
 
 test('real documents from createContext: the panel shows the Team and the Pipeline chat', async (t) => {
-  const r = realDocs(t);
+  const r = await realDocs(t);
   for (const [doc, engine] of [[r.team, 'Team'], [r.pipeline, 'Pipeline']]) {
     const h = harness({ answers: { 'a:get': [200, doc], 'project:get': [200, r.project] } });
     await h.scope('a');
@@ -1310,13 +1311,13 @@ const SONNET = { id: MODEL, window: 200000, known: true };
 const GPT = { id: 'openai/gpt-5', window: 400000, known: true };
 const GEMINI = { id: 'google/gemini-2.5-pro', window: 1000000, known: true };
 
-test('real documents from createContext: a known model, an override and every cap read as the server meant them', (t) => {
-  const { context, ids, wire } = realDocs(t);
-  const team = (planner, developer = GPT) => parseChatContext(wire(context.inspect(ids.project, ids.team, { recipients: { planner, developer } })));
+test('real documents from createContext: a known model, an override and every cap read as the server meant them', async (t) => {
+  const { context, ids, wire } = await realDocs(t);
+  const team = async (planner, developer = GPT) => parseChatContext(wire(await context.inspect(ids.project, ids.team, { recipients: { planner, developer } })));
   const k = (v) => v.toLocaleString('en-US');
 
   // a known window with the default rule: 10 % of it, nothing assumed
-  const known = team(SONNET);
+  const known = await team(SONNET);
   assert.deepEqual(known.model, SONNET);
   assert.deepEqual([known.budget.tokens, known.budget.mode, known.budget.value, known.budget.source, known.budget.capped], [20000, 'percent', 10, 'project', null]);
   assert.equal(windowNote(known.model), '');
@@ -1325,42 +1326,42 @@ test('real documents from createContext: a known model, an override and every ca
   assert.equal(summaryRows(known).at(-2)[1], `${MODEL} · 200,000-token window`);
 
   // an override for that model
-  const p = parseProjectContext(wire(context.configure(ids.project, { models: { [MODEL]: { mode: 'tokens', value: 50000 } } })));
+  const p = parseProjectContext(wire(await context.configure(ids.project, { models: { [MODEL]: { mode: 'tokens', value: 50000 } } })));
   assert.deepEqual(plain(p.settings.models), { [MODEL]: { mode: 'tokens', value: 50000 } });
-  const own = team(SONNET);
+  const own = await team(SONNET);
   assert.deepEqual([own.budget.tokens, own.budget.mode, own.budget.value, own.budget.source, own.budget.capped], [50000, 'tokens', 50000, 'model', null]);
   assert.deepEqual(budgetState(own, p), { id: MODEL, override: true, mode: 'tokens', value: '50000', only: true });
   assert.equal(summaryRows(own).at(-1)[1], `50,000 tokens · only for ${MODEL}`);
   assert.deepEqual(buildBudgetReset(budgetState(own, p)).body, { models: { [MODEL]: null } });
-  assert.equal(team(GPT).budget.source, 'project', 'another model keeps the project rule');
+  assert.equal((await team(GPT)).budget.source, 'project', 'another model keeps the project rule');
 
   // the caps of section 4
-  const half = team({ id: MODEL, window: 32000, known: true });
+  const half = await team({ id: MODEL, window: 32000, known: true });
   assert.deepEqual([half.budget.tokens, half.budget.source, half.budget.capped], [16000, 'model', 'window']);
   assert.equal(cappedText(half), 'The budget was limited to half of the model\'s 32,000-token context window.');
-  context.configure(ids.project, { budget: { mode: 'percent', value: 50 } });
-  const max = team(GEMINI);
+  await context.configure(ids.project, { budget: { mode: 'percent', value: 50 } });
+  const max = await team(GEMINI);
   assert.deepEqual([max.budget.tokens, max.budget.capped], [200000, 'max']);
   assert.equal(cappedText(max), 'The budget was limited to the maximum of 200,000 tokens.');
-  context.configure(ids.project, { budget: { mode: 'tokens', value: 1000 } });
-  const min = team({ id: 'tiny/model', window: 400, known: true });
+  await context.configure(ids.project, { budget: { mode: 'tokens', value: 1000 } });
+  const min = await team({ id: 'tiny/model', window: 400, known: true });
   assert.deepEqual([min.budget.tokens, min.budget.capped], [256, 'min']);
   assert.equal(cappedText(min), 'The budget was limited to the minimum of 256 tokens; the rule asks for less.');
 
   // the Pipeline engine's bound for a planner with a large window (section 8: 18750 tokens)
-  context.configure(ids.project, { budget: null });
-  const pipe = parseChatContext(wire(context.inspect(ids.project, ids.pipe, { recipients: { planner: GEMINI } })));
+  await context.configure(ids.project, { budget: null });
+  const pipe = parseChatContext(wire(await context.inspect(ids.project, ids.pipe, { recipients: { planner: GEMINI } })));
   assert.deepEqual([pipe.model, pipe.budget.tokens, pipe.budget.capped, pipe.developer], [GEMINI, 18750, 'engine', null]);
   assert.match(cappedText(pipe), /^Set by the Pipeline engine's prompt budget/);
   // defaults.pipeline is optional in the project document
-  const status = wire(context.status(ids.project));
+  const status = wire(await context.status(ids.project));
   assert.deepEqual(parseProjectContext(status).defaults.pipeline, status.defaults.pipeline ?? null);
 });
 
 test('real documents from createContext: the drawer shows a capped override of a known model', async (t) => {
-  const { context, ids, wire } = realDocs(t);
-  const project = wire(context.configure(ids.project, { models: { [MODEL]: { mode: 'tokens', value: 50000 } } }));
-  const doc = wire(context.inspect(ids.project, ids.team, { recipients: { planner: { id: MODEL, window: 32000, known: true }, developer: GPT } }));
+  const { context, ids, wire } = await realDocs(t);
+  const project = wire(await context.configure(ids.project, { models: { [MODEL]: { mode: 'tokens', value: 50000 } } }));
+  const doc = wire(await context.inspect(ids.project, ids.team, { recipients: { planner: { id: MODEL, window: 32000, known: true }, developer: GPT } }));
   const h = harness({ answers: { 'a:get': [200, doc], 'project:get': [200, project] } });
   await h.scope('a');
   await h.open();
@@ -1374,4 +1375,117 @@ test('real documents from createContext: the drawer shows a capped override of a
   assert.equal(h.$('context-budget-reset').title, `Remove the override for ${MODEL}; the project rule applies again`);
   assert.equal(h.$('context-budget-preview').textContent, `≈16,000 tokens with the 32,000-token window of ${MODEL}.`);
   assert.equal(h.$('context-developer-usage').textContent, `≈${d.developer.budget.used.toLocaleString('en-US')} of 2,000 tokens (${pct(d.developer.budget.used, 2000)}% of the brief's budget) · openai/gpt-5, 400,000-token window`);
+});
+
+// the AGENTS.md summary of .enma/agents-md-contract.md, Audit and visibility
+const AGENTS = { file: 'AGENTS.md', bytes: 12345, tokens: 3086, truncated: false, nested: [] };
+
+test('AGENTS.md: used, truncated, nested, no file, and a server from before that sends nothing', () => {
+  const text = (v) => instructionsText(parseInstructions(v));
+  assert.equal(text(AGENTS), 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens)');
+  assert.equal(text({ ...AGENTS, bytes: 300, tokens: 1 }), 'Repository instructions: AGENTS.md (0.3 KB, ~1 token)');
+  assert.equal(text({ ...AGENTS, bytes: 40000, tokens: 8192, truncated: true }), 'Repository instructions: AGENTS.md (39 KB, ~8,192 tokens) - truncated at 32 KiB');
+  const nested = { ...AGENTS, nested: ['engine/AGENTS.md', 'src/core/AGENTS.md'] };
+  assert.equal(text(nested), 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - 2 more in subfolders');
+  assert.equal(instructionsPaths(parseInstructions(nested)), 'engine/AGENTS.md\nsrc/core/AGENTS.md');
+  assert.equal(text(null), 'No AGENTS.md in this project');
+  assert.equal(text({ file: null, nested: [] }), 'No AGENTS.md in this project', 'neither a root nor a nested file');
+  assert.equal(text({ file: null, nested: ['a/AGENTS.md'] }), 'No AGENTS.md at the project root - 1 in subfolders');
+  // the list stops at 50; nestedCount is the full total
+  const fifty = Array.from({ length: 50 }, (_, k) => `d${k}/AGENTS.md`);
+  const many = parseInstructions({ ...AGENTS, nested: fifty, nestedCount: 60 });
+  assert.deepEqual([many.nested.length, many.more], [50, 10]);
+  assert.equal(instructionsText(many), 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - 60 more in subfolders');
+  assert.match(instructionsPaths(many), /^d0\/AGENTS\.md\n[^]*\nd49\/AGENTS\.md\n\(\+10 more\)$/);
+  assert.equal(parseInstructions({ ...AGENTS, nested: [...fifty, 'd50/AGENTS.md'], nestedCount: 51 }).nested.length, 50, 'never more than 50 listed');
+  assert.equal(text({ file: null, nested: fifty, nestedCount: 60 }), 'No AGENTS.md at the project root - 60 in subfolders');
+  // without nestedCount (or with one that cannot be right) the list is the count
+  for (const nestedCount of [undefined, 'sixty', -1, 1.5, 1]) {
+    assert.equal(text({ ...nested, nestedCount }), 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - 2 more in subfolders', String(nestedCount));
+  }
+  assert.equal(text({ file: null, nested: [], nestedCount: 0 }), 'No AGENTS.md in this project');
+  // a server from before the field, or anything unreadable in it: nothing at all
+  for (const junk of [undefined, 'AGENTS.md', 7, true, ['AGENTS.md']]) {
+    assert.equal(parseInstructions(junk), undefined, JSON.stringify(junk));
+    assert.equal(text(junk), '');
+  }
+  assert.equal(parseProjectContext(projectDoc()).instructions, undefined, 'the project document without the field');
+  assert.equal(parseChatContext(chatDoc()).instructions, undefined, 'the chat document without the field');
+  assert.equal(parseProjectContext(projectDoc({ instructions: null })).instructions, null, 'absent is not the same as none');
+  assert.equal(parseProjectContext({ v: 3, instructions: AGENTS }).instructions, undefined, 'an unreadable document says nothing');
+  // hostile counts and paths
+  const odd = parseInstructions({ file: 'AGENTS.md', bytes: -4, tokens: 'many', truncated: 'yes', nested: [7, '', 'a\u202Eb/AGENTS.md', '<b>x</b>/AGENTS.md'] });
+  assert.deepEqual(odd, { root: true, bytes: 0, tokens: 0, truncated: false, nested: ['ab/AGENTS.md', '<b>x</b>/AGENTS.md'], more: 0, partial: false });
+});
+
+test('AGENTS.md: a subfolder scan that stopped early is a hint, never "no AGENTS.md"', () => {
+  const text = (v) => instructionsText(parseInstructions(v));
+  const incomplete = ' - subfolder scan incomplete';
+  assert.equal(text({ ...AGENTS, partial: true }), `Repository instructions: AGENTS.md (12 KB, ~3,086 tokens)${incomplete}`);
+  assert.equal(text({ ...AGENTS, truncated: true, nested: ['engine/AGENTS.md'], partial: true }),
+    `Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - truncated at 32 KiB - 1 more in subfolders${incomplete}`);
+  // without a root file
+  const none = parseInstructions({ file: null, nested: [], partial: true });
+  assert.notEqual(none, null, 'a partial scan is not "none"');
+  assert.equal(instructionsText(none), `No AGENTS.md at the project root${incomplete}`);
+  assert.equal(instructionsPaths(none), '');
+  assert.equal(text({ file: null, nested: ['a/AGENTS.md'], partial: true }), `No AGENTS.md at the project root - 1 in subfolders${incomplete}`);
+  // negative control: only a literal true marks it
+  for (const partial of [false, 'true', 1, undefined]) {
+    assert.equal(text({ ...AGENTS, partial }), 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens)', String(partial));
+    assert.equal(text({ file: null, nested: [], partial }), 'No AGENTS.md in this project', String(partial));
+  }
+});
+
+test('AGENTS.md in the drawer: the line and the nested paths as plain text; none; nothing from a server from before', async () => {
+  const shown = async (project, chat = {}) => {
+    const h = harness({ answers: { 'project:get': [200, projectDoc(project)], 'a:get': [200, chatDoc(chat)] } });
+    await h.scope('a');
+    await h.open();
+    return h;
+  };
+  const used = await shown({ instructions: { ...AGENTS, truncated: true, nested: ['engine/AGENTS.md', '<img src=x>/AGENTS.md'] } });
+  assert.equal(used.$('context-instructions').hidden, false);
+  assert.equal(used.$('context-instructions').textContent, 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - truncated at 32 KiB - 2 more in subfolders');
+  assert.equal(used.$('context-instructions-nested').hidden, false);
+  assert.equal(used.$('context-instructions-paths').textContent, 'engine/AGENTS.md\n<img src=x>/AGENTS.md', 'set as text, never parsed');
+
+  const fifty = Array.from({ length: 50 }, (_, k) => `d${k}/AGENTS.md`);
+  const capped = await shown({ instructions: { ...AGENTS, nested: fifty, nestedCount: 60 } });
+  assert.equal(capped.$('context-instructions').textContent, 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - 60 more in subfolders');
+  assert.equal(capped.$('context-instructions-paths').textContent, [...fifty, '(+10 more)'].join('\n'));
+
+  const plain = await shown({ instructions: AGENTS });
+  assert.equal(plain.$('context-instructions').textContent, 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens)');
+  assert.equal(plain.$('context-instructions-nested').hidden, true, 'no nested file, no disclosure');
+
+  const none = await shown({ instructions: null });
+  assert.deepEqual([none.$('context-instructions').hidden, none.$('context-instructions').textContent], [false, 'No AGENTS.md in this project']);
+  assert.equal(none.$('context-instructions-nested').hidden, true);
+
+  const partRoot = await shown({ instructions: { ...AGENTS, partial: true } });
+  assert.equal(partRoot.$('context-instructions').textContent, 'Repository instructions: AGENTS.md (12 KB, ~3,086 tokens) - subfolder scan incomplete');
+  const partNone = await shown({ instructions: { file: null, nested: [], partial: true } });
+  assert.deepEqual([partNone.$('context-instructions').hidden, partNone.$('context-instructions').textContent], [false, 'No AGENTS.md at the project root - subfolder scan incomplete']);
+  assert.equal(partNone.$('context-instructions-nested').hidden, true);
+
+  // negative control: a server from before the field shows neither the line nor the disclosure
+  const older = await shown({});
+  assert.deepEqual([older.$('context-instructions').hidden, older.$('context-instructions').textContent], [true, '']);
+  assert.equal(older.$('context-instructions-nested').hidden, true);
+  assert.equal(older.$('context-content').hidden, false, 'the rest of the drawer is there');
+
+  // a chat document that carries it stands in for a project document without it; the project document wins
+  const fromChat = await shown({}, { instructions: null });
+  assert.equal(fromChat.$('context-instructions').textContent, 'No AGENTS.md in this project');
+  const both = await shown({ instructions: AGENTS }, { instructions: null });
+  assert.match(both.$('context-instructions').textContent, /^Repository instructions: AGENTS\.md/);
+});
+
+test('AGENTS.md markup: a quiet line and a disclosure in the Project section, both hidden until the server says', () => {
+  const start = html.indexOf('<form class="keyform" id="context-project"');
+  const project = html.slice(start, html.indexOf('</form>', start));
+  assert.match(project, /<p class="hint" id="context-instructions" hidden><\/p>/);
+  assert.match(project, /<details class="context-block" id="context-instructions-nested" hidden>/);
+  assert.match(project, /<pre class="context-text" id="context-instructions-paths" tabindex="0" aria-label="[^"]+"><\/pre>/);
 });

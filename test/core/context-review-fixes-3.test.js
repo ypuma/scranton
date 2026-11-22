@@ -24,7 +24,7 @@ function fixture(t) {
   return { dir, dataDir, projectId, chatId, root, chat, registry, write, run, scope: { dataDir, projectId, chatId } };
 }
 
-for (const budgeted of [false, true]) for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`C2.1 Pipeline rejects same-size replacement at ${phase} (${budgeted ? 'budget' : 'legacy'}, ${reuseIndex ? 'reused' : 'native'} index)`, (t) => {
+for (const budgeted of [false, true]) for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`C2.1 Pipeline rejects same-size replacement at ${phase} (${budgeted ? 'budget' : 'legacy'}, ${reuseIndex ? 'reused' : 'native'} index)`, async (t) => {
   const f = fixture(t), file = f.run('run1'); f.run('good');
   const replaced = replaceDuringRead(t, file, phase, reuseIndex);
   const diagnostics = {}, options = budgeted ? { budget: { bytes: 1024 }, diagnostics } : { diagnostics };
@@ -33,14 +33,14 @@ for (const budgeted of [false, true]) for (const phase of ['open', 'read']) for 
   const history = buildPipelineHistory(f.scope); assert.equal(history.runs.find((r) => r.run_id === 'good').task, 'good');
 });
 
-for (const field of ['dev', 'ino', 'size', 'nlink', 'mtimeNs', 'ctimeNs', 'birthtimeNs']) test(`C2.1 Pipeline rejects descriptor ${field} mismatch`, (t) => {
+for (const field of ['dev', 'ino', 'size', 'nlink', 'mtimeNs', 'ctimeNs', 'birthtimeNs']) test(`C2.1 Pipeline rejects descriptor ${field} mismatch`, async (t) => {
   const f = fixture(t), file = f.run('run1'), fstat = fs.fstatSync; let fieldType;
   t.mock.method(fs, 'fstatSync', (...args) => { const stat = fstat(...args); fieldType = typeof stat[field]; Object.defineProperty(stat, field, { value: stat[field] + 1n }); return stat; });
   assert.equal(readPipelineHistoryJson(f.dataDir, path.relative(f.dataDir, file).split(path.sep).join('/')), null);
   assert.equal(fieldType, 'bigint');
 });
 
-test('C2.1 file identity ignores access time but requires BigInt fields', (t) => {
+test('C2.1 file identity ignores access time but requires BigInt fields', async (t) => {
   const f = fixture(t), file = f.run('run1'), stat = fs.lstatSync(file, { bigint: true });
   const copy = () => Object.assign(Object.create(Object.getPrototypeOf(stat)), stat);
   const accessed = copy(); accessed.atimeNs += 1n; accessed.atimeMs += 1n; accessed.atime = new Date(0);
@@ -49,7 +49,7 @@ test('C2.1 file identity ignores access time but requires BigInt fields', (t) =>
   assert.equal(sameFileIdentity(stat, rounded), false);
 });
 
-test('C2.2 linked data ancestor preserves Pipeline history but links below the root degrade alone', (t) => {
+test('C2.2 linked data ancestor preserves Pipeline history but links below the root degrade alone', async (t) => {
   const f = fixture(t); f.run('run1');
   const alias = path.join(f.dir, 'alias');
   try { fs.symlinkSync(path.join(f.dir, 'real'), alias, 'junction'); }
@@ -57,16 +57,16 @@ test('C2.2 linked data ancestor preserves Pipeline history but links below the r
   const dataDir = path.join(alias, 'data'), expected = buildPipelineHistory(f.scope);
   assert.deepEqual(buildPipelineHistory({ ...f.scope, dataDir }), expected);
   const context = createContext({ ...f.scope, dataDir, registry: f.registry });
-  assert.equal(context.inspect(f.projectId, f.chatId).degraded, false);
-  assert.equal(context.status(f.projectId).chats[0].turns, 1);
+  assert.equal((await context.inspect(f.projectId, f.chatId)).degraded, false);
+  assert.equal((await context.status(f.projectId)).chats[0].turns, 1);
   const target = path.join(f.dir, 'linked-run'); fs.mkdirSync(target);
   f.write(path.join(target, 'status.json'), { status: 'succeeded', task: 'DO-NOT-READ' });
   fs.symlinkSync(target, path.join(f.root, 'linked'), 'junction');
   const history = buildPipelineHistory({ ...f.scope, dataDir });
-  assert.deepEqual(history, expected); assert.equal(context.inspect(f.projectId, f.chatId).degraded, true);
+  assert.deepEqual(history, expected); assert.equal((await context.inspect(f.projectId, f.chatId)).degraded, true);
 });
 
-for (const code of ['ELOOP', 'EACCES']) test(`C2.3 ${code} canonicalisation uses defaults and legacy fallbacks; mutations fail clearly`, (t) => {
+for (const code of ['ELOOP', 'EACCES']) test(`C2.3 ${code} canonicalisation uses defaults and legacy fallbacks; mutations fail clearly`, async (t) => {
   const f = fixture(t); f.run('run1');
   f.write(path.join(f.chat.hiveDir, 'runs/old/events.jsonl'), [
     { type: 'run_started', runId: 'old', request: 'LEGACY-TEAM', ts: '2026-01-01' },
@@ -81,8 +81,8 @@ for (const code of ['ELOOP', 'EACCES']) test(`C2.3 ${code} canonicalisation uses
   const store = createContextStore(f.dataDir, f.projectId, f.chatId);
   assert.deepEqual(store.settings(), { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} }); assert.equal(store.notes().text, ''); assert.deepEqual(store.state(), { resetAt: null }); assert.equal(store.degraded, true);
   const c = createContext({ ...f.scope, registry: f.registry });
-  const status = c.status(f.projectId); assert.deepEqual(status.settings, { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} }); assert.equal(status.notes.text, ''); assert.equal(status.degraded, true);
-  assert.equal(c.inspect(f.projectId, f.chatId).degraded, true);
+  const status = (await c.status(f.projectId)); assert.deepEqual(status.settings, { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} }); assert.equal(status.notes.text, ''); assert.equal(status.degraded, true);
+  assert.equal((await c.inspect(f.projectId, f.chatId)).degraded, true);
   assert.equal(c.forTeam(f.projectId, f.chatId, { memory: 'MEMORY' }).text, expectedTeam); assert.equal(c.forTeam(f.projectId, f.chatId).meta.degraded, true);
   const expectedPipeline = buildPipelineHistory({ ...f.scope, projectMemory });
   assert.equal(expectedPipeline.project_memory[0].text, 'LEGACY-PIPELINE-MEMORY');
@@ -90,7 +90,7 @@ for (const code of ['ELOOP', 'EACCES']) test(`C2.3 ${code} canonicalisation uses
   for (const mutate of [() => c.configure(f.projectId, { crossChat: false }), () => c.setNotes(f.projectId, 'notes'), () => c.reset(f.projectId, f.chatId), () => c.restore(f.projectId, f.chatId)]) assert.throws(mutate, /Cannot resolve context data directory.*(?:ELOOP|EACCES)/);
 });
 
-test('C2.3 absent filesystem root terminates without recursion and reads degrade', (t) => {
+test('C2.3 absent filesystem root terminates without recursion and reads degrade', async (t) => {
   const f = fixture(t);
   let dataDir;
   if (process.platform === 'win32') {
@@ -104,7 +104,7 @@ test('C2.3 absent filesystem root terminates without recursion and reads degrade
   }
   assert.throws(() => canonicalDirectory(dataDir), (error) => error.code === 'ENOENT' && !(error instanceof RangeError));
   const c = createContext({ dataDir, registry: f.registry });
-  assert.equal(c.status(f.projectId).degraded, true); assert.equal(c.inspect(f.projectId, f.chatId).degraded, true);
+  assert.equal((await c.status(f.projectId)).degraded, true); assert.equal((await c.inspect(f.projectId, f.chatId)).degraded, true);
   assert.equal(c.forTeam(f.projectId, f.chatId).meta.degraded, true); assert.equal(c.forPipeline(f.projectId, f.chatId), null);
   for (const mutate of [() => c.configure(f.projectId, { crossChat: true }), () => c.setNotes(f.projectId, 'notes'), () => c.reset(f.projectId, f.chatId), () => c.restore(f.projectId, f.chatId)]) assert.throws(mutate, /Cannot resolve context data directory.*ENOENT/);
 });
@@ -120,7 +120,7 @@ test('C2.4 Pipeline readable single-line fields cannot forge summary lines and w
   assert.equal(JSON.stringify(wire), before);
 });
 
-test('C2.5 legacy whitespace-only task and plan fields match the pre-context golden bytes', (t) => {
+test('C2.5 legacy whitespace-only task and plan fields match the pre-context golden bytes', async (t) => {
   const f = fixture(t); f.run('run1'); const whitespace = ' \n\t\r\u2028\u2029 ';
   f.write(path.join(f.root, 'run1/run.json'), { task: whitespace });
   f.write(path.join(f.root, 'run1/artifacts/plan.json'), { summary: whitespace, steps: [{ id: whitespace, title: whitespace, description: whitespace, files: [{ path: whitespace, action: whitespace }], criteria: [whitespace] }], acceptance_criteria: [{ id: whitespace, text: whitespace, verified_by: whitespace }] });

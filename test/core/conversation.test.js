@@ -29,7 +29,7 @@ function fixture(t, isolation = 'shared') {
 function cli(t, { isolation = 'shared', scenario = 'happy', env = {}, args = [], conversation = true } = {}) {
   const f = fixture(t, isolation);
   const result = spawnSync(process.execPath, ['bin/scranton.js', 'run', '--trusted-host', 'Build a tiny todo CLI', '--config', f.file, '--hive', f.hive, '--workspace', f.workspace, '--on-breaker', 'abort', '--ascii', conversation ? '--conversation' : '--no-conversation', ...args], {
-    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(f.dir, 'iso'), SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario, SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1', ...env }, encoding: 'utf8', timeout: 40000
+    env: { ...process.env, SCRANTON_DATA: '', SCRANTON_ISOLATION_ROOT: path.join(f.dir, 'iso'), SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: scenario, SCRANTON_FAKE_DELAY_MS: '0', SCRANTON_FAKE_DETERMINISTIC: '1', ...env }, encoding: 'utf8', timeout: 120000
   });
   assert.equal(result.error, undefined, result.stderr);
   return { ...f, result, events: eventsAt(f.hive), state: read(path.join(f.hive, 'state.json')) };

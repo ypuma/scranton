@@ -93,11 +93,11 @@ test('context routes enforce guards, strict bodies, unknown paths and unknown sc
 test('context documents, notes round trip, crossChat setting, reset and restore use disk context', async (t) => {
   const f = await server(t);
   let project = (await f.req(f.projectRoute)).value;
-  assert.deepEqual(Object.keys(project).sort(), ['chats', 'defaults', 'notes', 'settings', 'v']); assert.equal(project.v, 2); assert.deepEqual(project.settings, { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} });
+  assert.deepEqual(Object.keys(project).sort(), ['chats', 'defaults', 'instructions', 'notes', 'settings', 'v']); assert.equal(project.v, 2); assert.deepEqual(project.settings, { crossChat: true, budget: { mode: 'percent', value: 10 }, models: {} });
   assert.deepEqual(project.notes, { text: '', chars: 0, tokens: 0, limit: 16000, updatedAt: null });
   assert.deepEqual(Object.keys(project.chats[0]).sort(), ['engine', 'id', 'lastActiveAt', 'reset', 'title', 'turns']);
   let doc = (await f.req(f.chatRoute())).value;
-  assert.deepEqual(Object.keys(doc).sort(), ['budget', 'degraded', 'developer', 'engine', 'memory', 'model', 'notes', 'otherChats', 'reset', 'sections', 'settings', 'truncated', 'turns', 'v']);
+  assert.deepEqual(Object.keys(doc).sort(), ['budget', 'degraded', 'developer', 'engine', 'instructions', 'memory', 'model', 'notes', 'otherChats', 'reset', 'sections', 'settings', 'truncated', 'turns', 'v']);
   assert.deepEqual(doc.turns, { total: 0, visible: 0, detailed: 0, condensed: 0, omitted: 0 }); assert.equal(doc.developer.chars, 0); assert.equal(doc.developer.text, ''); assert.equal(doc.reset, null); assert.deepEqual(doc.sections, []); assert.equal(doc.budget.tokens, 12800);
   f.teamRun(f.team, 'ownold', 'OWN-OLD'); f.teamRun(f.sibling, 'siblingold', 'SIBLING-OLD'); f.teamRun(f.stranger, 'foreignold', 'FOREIGN-SECRET'); f.pipelineRun('pipe0001', 'PIPE-OLD');
   project = (await f.req(f.projectRoute + '/notes', { text: 'Grüße 😀\r\nkeep\u0001 tabs\t' })).value;
@@ -196,19 +196,19 @@ test('Pipeline start writes context unchanged, siblings only in other_chats, res
 });
 
 // The real Python validator rejects extra/invalid wire keys; the fixture requires all three new layers.
-test('forPipeline UTF-8 wire with notes, earlier and other_chats is accepted and rendered by Python', (t) => {
+test('forPipeline UTF-8 wire with notes, earlier and other_chats is accepted and rendered by Python', async (t) => {
   const python = path.resolve('.scratch/pipeline/venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   if (!fs.existsSync(python)) { t.skip('Development Python runtime is missing'); return; }
   const f = fixture(t); for (let i = 1; i <= 5; i++) f.pipelineRun('pipe000' + i, 'Own Grüße 😀 ' + i, i);
   f.registry.updateChat(f.project.id, f.sibling.id, { title: 'Sibling Grüße 😀 cut \ud83d' });
   f.teamRun(f.sibling, 'siblingt', 'Sibling Grüße 😀 cut \ud83d request');
-  const context = createContext({ dataDir: f.dataDir, registry: f.registry }); context.setNotes(f.project.id, 'Notes Grüße 😀');
+  const context = createContext({ dataDir: f.dataDir, registry: f.registry }); await context.setNotes(f.project.id, 'Notes Grüße 😀');
   const wire = context.forPipeline(f.project.id, f.pipeline.id), file = path.join(f.dir, 'history.json');
   assert.ok(wire.context.earlier.length); assert.ok(wire.context.other_chats.length); f.write(file, wire);
   f.pipelineRun('pipe0005', '😀'.repeat(4000), 5);
   f.write(path.join(f.pipeRoot(), 'runs/pipe0005/artifacts/plan.json'), { summary: 'P'.repeat(7600), steps: [{ id: 'fresh', title: 'Fresh work', files: [], depends_on: [] }] });
   f.write(path.join(f.pipeRoot(), 'runs/pipe0005/delivery/reply.json'), { kind: 'answer', text: 'R'.repeat(3500) });
-  context.setNotes(f.project.id, '😀'.repeat(1000) + 'N'.repeat(1000));
+  await context.setNotes(f.project.id, '😀'.repeat(1000) + 'N'.repeat(1000));
   const large = context.forPipeline(f.project.id, f.pipeline.id), largeFile = path.join(f.dir, 'history-large.json'), bytes = Buffer.byteLength(JSON.stringify(large));
   assert.ok(bytes >= 32000 && bytes <= Math.max(32768, large.budget.history_bytes + large.budget.context_bytes), `Near-limit wire: ${bytes} bytes; runs ${JSON.stringify(large.runs.map((r) => ({ task: Buffer.byteLength(r.task), plan: Buffer.byteLength(r.plan), outcome: Buffer.byteLength(r.outcome) })))}; context ${Buffer.byteLength(JSON.stringify(large.context))}`); assert.ok(Buffer.byteLength(JSON.stringify(large.context)) <= Math.max(8000, large.budget.context_bytes)); f.write(largeFile, large);
   const script = path.join(f.dir, 'validate.py');
@@ -236,4 +236,26 @@ test('C1.5 Team demo neither builds nor writes nor passes a context pack', async
   assert.equal(args.includes('--thread-context'), false);
   assert.equal(fs.existsSync(path.join(f.team.hiveDir, 'control/thread-context.json')), false);
   assert.equal(builds, 0);
+});
+
+
+test('context routes expose repository instructions separately and respect the environment opt-out', async t => {
+  const f = await server(t);
+  f.write(path.join(f.workspace, 'AGENTS.md'), 'Use project tests.');
+  f.write(path.join(f.workspace, 'src/AGENTS.md'), 'Use subtree tests.');
+  const before = process.env.SCRANTON_AGENTS_MD;
+  t.after(() => { if (before === undefined) delete process.env.SCRANTON_AGENTS_MD; else process.env.SCRANTON_AGENTS_MD = before; });
+  process.env.SCRANTON_AGENTS_MD = '1';
+  const project = (await f.req(f.projectRoute)).value;
+  const chat = (await f.req(f.chatRoute())).value;
+  assert.deepEqual(project.instructions, chat.instructions);
+  assert.equal(project.instructions.file, 'AGENTS.md');
+  assert.equal(project.instructions.bytes, 18);
+  assert.ok(project.instructions.tokens > 0);
+  assert.deepEqual(project.instructions.nested, ['src/AGENTS.md']);
+  assert.equal(project.instructions.nestedCount, 1);
+  assert.equal(chat.budget.used, 0);
+  process.env.SCRANTON_AGENTS_MD = '0';
+  assert.equal((await f.req(f.projectRoute)).value.instructions, null);
+  assert.equal((await f.req(f.chatRoute())).value.instructions, null);
 });

@@ -29,7 +29,7 @@ function wellFormed(value) {
   else if (value && typeof value === 'object') for (const v of Object.values(value)) wellFormed(v);
 }
 
-test('R1 all emitted strings repair lone high and low surrogates before and after clipping', (t) => {
+test('R1 all emitted strings repair lone high and low surrogates before and after clipping', async (t) => {
   const f = fixture(t), c = f.chat('pipe', 'pipeline'), root = f.pipeline(c, 'run1');
   for (const bad of ['\ud83d', '\ude00']) {
     const row = turn(bad), title = 'a'.repeat(59) + bad;
@@ -46,7 +46,7 @@ test('R1 all emitted strings repair lone high and low surrogates before and afte
   }
 });
 
-test('R2 sibling pack exhaustion cannot erase legacy Pipeline runs or double-read own artifacts', (t) => {
+test('R2 sibling pack exhaustion cannot erase legacy Pipeline runs or double-read own artifacts', async (t) => {
   const f = fixture(t), c = f.chat('pipe', 'pipeline'); f.pipeline(c, 'run1');
   const ownRoot = path.join(f.pipelineRoot(c), 'runs/run1');
   const ownBytes = ['status.json', 'run.json'].reduce((n, file) => n + fs.statSync(path.join(ownRoot, file)).size, 0);
@@ -66,23 +66,23 @@ test('R2 sibling pack exhaustion cannot erase legacy Pipeline runs or double-rea
   assert.ok([...opened.values()].every((n) => n === 1), 'each existing own artifact is opened once');
 });
 
-test('R2 legacy plan anchor outside the new 500-run scan remains eligible', (t) => {
+test('R2 legacy plan anchor outside the new 500-run scan remains eligible', async (t) => {
   const f = fixture(t), c = f.chat('pipe', 'pipeline');
   const root = f.pipeline(c, 'anchor'); f.write(path.join(root, 'artifacts/plan.json'), { summary: 'anchor', steps: [{ title: 'Keep anchor' }] }); fs.utimesSync(root, 1, 1);
   for (let i = 0; i < 501; i++) { const dir = path.join(f.pipelineRoot(c), 'runs', 'busy' + i); f.write(path.join(dir, 'status.json'), { status: 'running' }); fs.utimesSync(dir, i + 2, i + 2); }
   assert.deepEqual(f.context.forPipeline(f.projectId, c.id)?.runs.map((r) => r.run_id), ['anchor']);
 });
 
-test('R3 null agents do not discard good turns, notes or sibling context', (t) => {
+test('R3 null agents do not discard good turns, notes or sibling context', async (t) => {
   const f = fixture(t), c = f.chat('own'), sibling = f.chat('sibling'); f.team(c, 'good', 'GOOD'); f.team(sibling, 'other', 'SIBLING');
   f.write(path.join(c.hiveDir, 'state.json'), { runId: 'corrupt', agents: { x: null } });
-  f.context.setNotes(f.projectId, 'NOTES');
+  (await f.context.setNotes(f.projectId, 'NOTES'));
   assert.doesNotThrow(() => listRuns(c.hiveDir));
   const pack = f.context.forTeam(f.projectId, c.id);
   for (const text of ['GOOD', 'SIBLING', 'NOTES']) assert.ok(pack.text.includes(text), text);
 });
 
-test('R3 an unexpected per-run projection error only degrades that run', (t) => {
+test('R3 an unexpected per-run projection error only degrades that run', async (t) => {
   const f = fixture(t), c = f.chat('own'); f.team(c, 'good', 'GOOD');
   f.write(path.join(c.hiveDir, 'runs/bad/state.json'), { runId: 'bad', agents: { explode: true } });
   const values = Object.values;
@@ -91,21 +91,21 @@ test('R3 an unexpected per-run projection error only degrades that run', (t) => 
   assert.match(pack.text, /GOOD/); assert.equal(pack.meta.degraded, true); assert.equal(pack.meta.truncated, true);
 });
 
-test('R4 project status/configure/setNotes never open journals and use cheap counts and chat activity', (t) => {
+test('R4 project status/configure/setNotes never open journals and use cheap counts and chat activity', async (t) => {
   const f = fixture(t), c = f.chat('own'), p = f.chat('pipe', 'pipeline'); f.team(c, 'archived');
   f.write(path.join(c.hiveDir, 'state.json'), { runId: 'root' }); f.team(c, 'empty'); fs.rmSync(path.join(c.hiveDir, 'runs/empty/events.jsonl'));
   f.pipeline(p, 'done'); f.write(path.join(f.pipelineRoot(p), 'runs/busy/status.json'), { status: 'running' });
   createContextStore(f.dataDir, f.projectId, c.id).setReset('2026-01-31');
   const open = fs.openSync; let journals = 0;
   t.mock.method(fs, 'openSync', (file, ...args) => { if (String(file).endsWith('events.jsonl')) { journals++; throw Error('journal reads forbidden'); } return open(file, ...args); });
-  for (const doc of [f.context.status(f.projectId), f.context.configure(f.projectId, { crossChat: false }), f.context.setNotes(f.projectId, 'notes')]) {
+  for (const doc of [(await f.context.status(f.projectId)), (await f.context.configure(f.projectId, { crossChat: false })), (await f.context.setNotes(f.projectId, 'notes'))]) {
     const own = doc.chats.find((r) => r.id === c.id), pipe = doc.chats.find((r) => r.id === p.id);
     assert.equal(own.turns, 3); assert.equal(pipe.turns, 1); assert.equal(own.lastActiveAt, c.updatedAt); assert.equal(own.reset, true);
   }
   assert.equal(journals, 0);
 });
 
-for (const engine of ['team', 'pipeline']) test(`R5 ${engine} budget stops before older runs and reset retains explicit omissions`, (t) => {
+for (const engine of ['team', 'pipeline']) test(`R5 ${engine} budget stops before older runs and reset retains explicit omissions`, async (t) => {
   const f = fixture(t), c = f.chat('own', engine);
   if (engine === 'team') {
     const old = f.team(c, 'old'), newer = f.team(c, 'new', 'N'.repeat(2000));
@@ -124,7 +124,7 @@ test('R6 whitespace-only notes stay empty and condensed empty outcomes have no d
   const line = condensedTurn({ ...turn(), outcome: ' \n ' }); assert.equal(line, line.trim()); assert.doesNotMatch(line, /->/);
 });
 
-test('R7 redact credentials before any request/reply/file or Pipeline line cut', (t) => {
+test('R7 redact credentials before any request/reply/file or Pipeline line cut', async (t) => {
   const f = fixture(t), c = f.chat('own');
   const key = 'sk-ABCDEF0123456789abcdefghijklmnop', row = { ...turn(), request: 'R'.repeat(145) + ' ' + key };
   assert.doesNotMatch(buildPipelineContext({ turns: [row] }).lines[0].line, /sk-ABC/);
@@ -133,14 +133,14 @@ test('R7 redact credentials before any request/reply/file or Pipeline line cut',
   assert.doesNotMatch(JSON.stringify(turns), /sk-ABC/);
 });
 
-for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`R8 hardened Team reader rejects same-size path replacement at ${phase} (${reuseIndex ? 'reused' : 'native'} index)`, (t) => {
+for (const phase of ['open', 'read']) for (const reuseIndex of [false, true]) test(`R8 hardened Team reader rejects same-size path replacement at ${phase} (${reuseIndex ? 'reused' : 'native'} index)`, async (t) => {
   const f = fixture(t), c = f.chat('own'), file = f.team(c, 'run1', 'ORIGINAL'); f.team(c, 'good', 'HEALTHY');
   const replaced = replaceDuringRead(t, file, phase, reuseIndex);
   const result = listContextRuns(c.hiveDir); assert.equal(replaced(), true); assert.doesNotMatch(JSON.stringify(result.runs), /ORIGINAL/);
   assert.equal(result.degraded, true); assert.equal(result.runs.find((r) => r.id === 'good').request, 'HEALTHY');
 });
 
-test('R8 context storage reports context paths, not dreaming paths', (t) => {
+test('R8 context storage reports context paths, not dreaming paths', async (t) => {
   const f = fixture(t), victim = path.join(f.dataDir, 'victim'); fs.mkdirSync(victim);
   fs.mkdirSync(path.join(f.dataDir, 'projects')); fs.symlinkSync(victim, path.join(f.dataDir, 'projects/project'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => createContextStore(f.dataDir, f.projectId).setNotes('notes'), (e) => /context path/i.test(e.message) && !/dreaming/i.test(e.message));
@@ -159,7 +159,7 @@ test('A3 packs neutralise whitespace delimiter variants before either consumer s
   }
 });
 
-for (const mode of ['legacy', 'context']) test(`A3 ${mode} Pipeline history rejects hard-linked artifacts independently`, (t) => {
+for (const mode of ['legacy', 'context']) test(`A3 ${mode} Pipeline history rejects hard-linked artifacts independently`, async (t) => {
   const base = path.resolve('.scratch/context-system/lane-a3'); fs.mkdirSync(base, { recursive: true });
   const dataDir = fs.mkdtempSync(path.join(base, 'hardlink-')); t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const scope = { dataDir, projectId: 'project', chatId: 'chat' };

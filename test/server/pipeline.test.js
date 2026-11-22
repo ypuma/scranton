@@ -756,12 +756,12 @@ test('Pipeline conversation field validates strict booleans before creating a re
 
 test('Pipeline conversation config is opt-in, byte-compatible off, and list replies use task redaction', async (t) => {
   const f = await setup(t);
-  const expected = { schema: 1, models: Object.fromEntries(['planner', 'implementer', 'reviewer'].map((role) => [role, { provider: 'openai_compatible', model: 'gpt-4o', base_url: 'https://api.openai.com/v1', api_key_env: `SCRANTON_PIPELINE_KEY_${role.toUpperCase()}` }])), limits: { max_replans: 1 }, execution: { max_parallel_steps: 1 }, sandbox: { mode: 'host' }, checks: [], setup: [], allow_no_checks: true, approvals: { plan: 'always' }, review: { enabled: true } };
+  const expected = { schema: 1, agentsMd: true, models: Object.fromEntries(['planner', 'implementer', 'reviewer'].map((role) => [role, { provider: 'openai_compatible', model: 'gpt-4o', base_url: 'https://api.openai.com/v1', api_key_env: `SCRANTON_PIPELINE_KEY_${role.toUpperCase()}` }])), limits: { max_replans: 1 }, execution: { max_parallel_steps: 1 }, sandbox: { mode: 'host' }, checks: [], setup: [], allow_no_checks: true, approvals: { plan: 'always' }, review: { enabled: true } };
   for (const fields of [{}, { conversation: false }, { conversation: true }]) {
     const id = await f.start({ ...hostRun, ...fields }), gate = await f.wait(id, 'awaiting_approval');
     const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
     const bytes = fs.readFileSync(path.join(base, 'requests', id + '.json'), 'utf8');
-    const cfg = fields.conversation ? { schema: 1, conversation: true, ...Object.fromEntries(Object.entries(expected).filter(([name]) => name !== 'schema')) } : expected;
+    const cfg = fields.conversation ? { schema: 1, agentsMd: true, conversation: true, ...Object.fromEntries(Object.entries(expected).filter(([name]) => !['schema', 'agentsMd'].includes(name))) } : expected;
     assert.equal(bytes, JSON.stringify(cfg, null, 2) + '\n');
     await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
     const file = path.join(base, 'runs', id, 'status.json'), status = JSON.parse(fs.readFileSync(file));
@@ -814,4 +814,38 @@ test('Pipeline omitted sandbox defaults to host even without Docker; explicit ho
   const argv = JSON.parse(fs.readFileSync(path.join(base, 'runs', id, 'argv.json')));
   assert.ok(argv.includes('--trust-host'));
   await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
+});
+
+for (const setting of ['0', '1']) test(`AGENTS.md effective setting ${setting} reaches fake Pipeline config`, async t => {
+  const f = await setup(t, { env: { SCRANTON_AGENTS_MD: setting } });
+  const id = await f.start(hostRun), gate = await f.wait(id, 'awaiting_approval');
+  const config = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs', id, 'config.json')));
+  assert.equal(config.agentsMd, setting === '1');
+  await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
+});
+
+test('AGENTS.md file opt-out and flags > env > file reach the fake Pipeline', async t => {
+  const { createPipelineSupervisor } = await import('../../src/core/pipeline-supervisor.js');
+  const f = await setup(t);
+  fs.writeFileSync(path.join(f.dir, 'scranton.config.json'), JSON.stringify({ agentsMd: false }));
+  const auth = { listAccounts: () => [{ id: 'openai', kind: 'api_key', status: 'signed_in' }], resolveAuth: async () => ({ key }) };
+  for (const [override, flags, expected] of [[undefined, {}, false], ['1', {}, true], ['1', { agentsMd: false }, false]]) {
+    const env = { ...process.env }; delete env.SCRANTON_AGENTS_MD;
+    if (override !== undefined) env.SCRANTON_AGENTS_MD = override;
+    const supervisor = createPipelineSupervisor({ dataDir: f.dataDir, cwd: f.dir, flags, env, auth });
+    try {
+      const { runId } = await supervisor.start(f.project, f.chats[0], hostRun);
+      const file = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs', runId, 'config.json');
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(file) && Date.now() < deadline) await sleep(20);
+      assert.equal(JSON.parse(fs.readFileSync(file)).agentsMd, expected);
+    } finally { await supervisor.close(); }
+    // Each subsequent start needs a terminal previous run, not a paused gate.
+    for (const run of supervisor.list(f.chats[0]).runs) {
+      if (!['succeeded', 'failed', 'rejected', 'cancelled'].includes(run.status)) {
+        const other = createPipelineSupervisor({ dataDir: f.dataDir, env, auth });
+        try { await other.action(f.chats[0], run.runId, 'cancel', {}); } finally { await other.close(); }
+      }
+    }
+  }
 });

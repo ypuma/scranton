@@ -74,13 +74,13 @@ test('registry turns use the exact Team pack and brief; same-chat continuity, si
   assert.match(call.text, /Other chats/); assert.match(call.text, /#2 \[success\] SECOND-REQUEST -> Delivered SECOND-REQUEST/);
   assert.doesNotMatch(call.text + call.developer, /FOREIGN-SECRET/); assert.equal(call.developer, '');
   // The new run has finished by now; compare its earlier sibling section, not its own newly recorded turn.
-  assert.equal(call.text, f.context.inspect(f.project.id, newChat.id).sections.find((s) => s.id === 'other-chats').text);
+  assert.equal(call.text, (await f.context.inspect(f.project.id, newChat.id)).sections.find((s) => s.id === 'other-chats').text);
 });
 
 // Regression anchors: cmdRun uses memory inside forTeam, never teamDreamingContext for a generated pack.
 test('registry pack renders notes, memory, siblings, earlier and recent in order', async (t) => {
   const f = fixture(t); f.mockRun(); const memory = await f.memory(); assert.ok(memory);
-  f.context.setNotes(f.project.id, 'STANDING-NOTES');
+  (await f.context.setNotes(f.project.id, 'STANDING-NOTES'));
   for (let i = 4; i <= 12; i++) f.turn(f.chat, 'turn' + i, 'Earlier task ' + i);
   const sibling = f.registry.createChat(f.project.id); f.turn(sibling, 'sibling', 'SIBLING-TASK');
   // Additions do not alter the source-bound memory of the first three runs.
@@ -106,7 +106,7 @@ for (const version of [1, 2]) test(`registry v${version} file keeps its transpor
 
 // Regression anchor: cmdRun builds forTeam outside the optional Dreaming try/catch with memory='' after failure.
 test('unsafe optional Dreaming cannot prevent context, developer brief or a registry run', async (t) => {
-  const f = fixture(t); f.mockRun(); f.turn(f.chat, 'old', 'HISTORICAL'); f.context.setNotes(f.project.id, 'NOTES');
+  const f = fixture(t); f.mockRun(); f.turn(f.chat, 'old', 'HISTORICAL'); (await f.context.setNotes(f.project.id, 'NOTES'));
   const target = path.join(f.dir, 'redirect'); fs.mkdirSync(target);
   fs.symlinkSync(target, path.join(f.dataDir, 'projects', f.project.id, 'dreaming'), process.platform === 'win32' ? 'junction' : 'dir');
   ok(await f.run(['--chat', f.chat.id, '--max-cycles', '5']));
@@ -117,10 +117,10 @@ test('unsafe optional Dreaming cannot prevent context, developer brief or a regi
 // Regression anchors for command tests: runCli's context dispatch; cmdContext action branches and contextSummary rendering.
 test('context show prints project/chat documents, counters, exact sections, brief and raw JSON', async (t) => {
   const f = fixture(t); f.turn(f.chat, 'old', 'OLD-REQUEST');
-  const project = json(await f.command(['show', '--json'])); assert.deepEqual(project, f.context.status(f.project.id));
+  const project = json(await f.command(['show', '--json'])); assert.deepEqual(project, (await f.context.status(f.project.id)));
   const output = ok(await f.command(['show'])).output;
   assert.match(output, /Sharing: on; notes: 0\/16000 chars/); assert.match(output, new RegExp(`${f.chat.id} \\| First chat \\| team \\| 1 turns`));
-  const doc = json(await f.command(['show', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, f.context.inspect(f.project.id, f.chat.id));
+  const doc = json(await f.command(['show', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, (await f.context.inspect(f.project.id, f.chat.id)));
   const text = ok(await f.command(['show', '--chat', f.chat.id])).output;
   assert.match(text, /Turns: 1 total; 1 visible; 1 detailed; 0 condensed; 0 omitted/); assert.match(text, /Budget: ≈\d+\/12800 tokens \(.*128000-token window of Automatic\) \[window assumed\]/);
   for (const section of doc.sections) { assert.ok(text.includes(`${section.title} (${section.chars} chars; ≈${section.tokens} tokens)`)); assert.ok(text.includes(section.text)); }
@@ -131,7 +131,7 @@ test('context show prints project/chat documents, counters, exact sections, brie
 test('context show includes existing advisory memory and supports Pipeline documents', async (t) => {
   const f = fixture(t); const memory = await f.memory();
   const doc = json(await f.command(['show', '--chat', f.chat.id, '--json']));
-  assert.deepEqual(doc, f.context.inspect(f.project.id, f.chat.id, { memory })); assert.ok(doc.memory.chars > 0);
+  assert.deepEqual(doc, (await f.context.inspect(f.project.id, f.chat.id, { memory }))); assert.ok(doc.memory.chars > 0);
   const pipe = f.registry.createChat(f.project.id, { engine: 'pipeline' });
   const pipeline = json(await f.command(['show', '--chat', pipe.id, '--json']));
   assert.equal(pipeline.engine, 'pipeline'); assert.equal(pipeline.developer, null); assert.equal(pipeline.budget.tokens, 12800); assert.equal(pipeline.v, 2); assert.equal(Object.hasOwn(pipeline.budget, 'limit'), false);
@@ -171,7 +171,7 @@ test('reset then restore changes visible counters and sections but preserves pro
 // Regression anchors: terminalText strips the same unsafe formatting as run_reply; JSON escaping retains raw values.
 test('human context output strips controls, ANSI and bidi; JSON round-trips raw notes', async (t) => {
   const f = fixture(t), note = 'Safe\u202e\u2066\ufe0f notes';
-  f.context.setNotes(f.project.id, note); f.turn(f.chat, 'old', 'Request\x1b[31m\u202e\x07 end');
+  (await f.context.setNotes(f.project.id, note)); f.turn(f.chat, 'old', 'Request\x1b[31m\u202e\x07 end');
   const output = ok(await f.command(['show', '--chat', f.chat.id])).output;
   assert.doesNotMatch(output, /[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ufe0f]/); assert.match(output, /Safe notes/);
   const raw = ok(await f.command(['show', '--json'])).output;
@@ -187,7 +187,7 @@ test('notes rejects oversized files before reading, character overflow, missing 
   f.write(file, 'x'.repeat(16001)); result = await f.command(['notes', '--file', file]);
   assert.equal(result.code, 2); assert.match(result.errors, /Context notes limit exceeded/);
   for (const input of [path.join(f.dir, 'missing'), f.dir]) { result = await f.command(['notes', '--file', input]); assert.equal(result.code, 2); }
-  assert.equal(f.context.status(f.project.id).notes.chars, 0);
+  assert.equal((await f.context.status(f.project.id)).notes.chars, 0);
 });
 
 for (const [name, args, message] of [
@@ -229,11 +229,11 @@ for (const action of ['show', 'budget', 'notes', 'share', 'reset', 'restore']) t
 // Regression anchor: cmdContext's --json branch must serialize each mutation's returned document, not its text summary.
 test('every context mutation supports raw --json results', async (t) => {
   const f = fixture(t), file = f.write(path.join(f.dir, 'notes.md'), 'JSON note'); f.turn(f.chat, 'old', 'JSON-REQUEST');
-  let doc = json(await f.command(['notes', '--file', file, '--json'])); assert.deepEqual(doc, f.context.status(f.project.id));
-  doc = json(await f.command(['share', 'off', '--json'])); assert.deepEqual(doc, f.context.status(f.project.id)); assert.equal(doc.settings.crossChat, false);
+  let doc = json(await f.command(['notes', '--file', file, '--json'])); assert.deepEqual(doc, (await f.context.status(f.project.id)));
+  doc = json(await f.command(['share', 'off', '--json'])); assert.deepEqual(doc, (await f.context.status(f.project.id))); assert.equal(doc.settings.crossChat, false);
   doc = json(await f.command(['share', 'on', '--json'])); assert.equal(doc.settings.crossChat, true);
-  doc = json(await f.command(['reset', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, f.context.inspect(f.project.id, f.chat.id)); assert.equal(doc.turns.visible, 0);
-  doc = json(await f.command(['restore', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, f.context.inspect(f.project.id, f.chat.id)); assert.equal(doc.turns.visible, 1);
+  doc = json(await f.command(['reset', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, (await f.context.inspect(f.project.id, f.chat.id))); assert.equal(doc.turns.visible, 0);
+  doc = json(await f.command(['restore', '--chat', f.chat.id, '--json'])); assert.deepEqual(doc, (await f.context.inspect(f.project.id, f.chat.id))); assert.equal(doc.turns.visible, 1);
   doc = json(await f.command(['notes', '--clear', '--json'])); assert.equal(doc.notes.chars, 0);
 });
 
@@ -252,19 +252,19 @@ async function declaredModels(t, f) {
 
 // Regression: cmdContext's budget branch must pass { budget: rule } or a computed-key { models: ... } merge patch.
 test('context budget sets percent, tokens and default for project and model without replacing other settings', async (t) => {
-  const f = fixture(t); f.context.configure(f.project.id, { crossChat: false });
+  const f = fixture(t); (await f.context.configure(f.project.id, { crossChat: false }));
   for (const [args, rule] of [[['--percent', '50'], { mode: 'percent', value: 50 }], [['--tokens', '1000'], { mode: 'tokens', value: 1000 }], [['--default'], { mode: 'percent', value: 10 }]]) {
     const doc = json(await f.command(['budget', ...args, '--json']));
     assert.deepEqual(doc.settings.budget, rule); assert.equal(doc.settings.crossChat, false); assert.deepEqual(doc.settings.models, {});
   }
-  f.context.configure(f.project.id, { budget: { mode: 'tokens', value: 200000 }, models: { 'other/model': { mode: 'percent', value: 1 } } });
+  (await f.context.configure(f.project.id, { budget: { mode: 'tokens', value: 200000 }, models: { 'other/model': { mode: 'percent', value: 1 } } }));
   for (const [args, rule] of [[['--percent', '1'], { mode: 'percent', value: 1 }], [['--tokens', '200000'], { mode: 'tokens', value: 200000 }], [['--default'], undefined]]) {
     const doc = json(await f.command(['budget', ...args, '--model', 'custom/path/model', '--json']));
     assert.deepEqual(doc.settings.models['custom/path/model'], rule); assert.deepEqual(doc.settings.models['other/model'], { mode: 'percent', value: 1 });
     assert.deepEqual(doc.settings.budget, { mode: 'tokens', value: 200000 }); assert.equal(doc.settings.crossChat, false);
   }
   const output = ok(await f.command(['budget', '--percent', '25'])).output;
-  assert.ok(output.includes(JSON.stringify(f.context.status(f.project.id).settings)));
+  assert.ok(output.includes(JSON.stringify((await f.context.status(f.project.id)).settings)));
 });
 
 // Regression: the budget branch's exactly-one/range checks, model parser and option-scope guards must reject before configure().
@@ -280,7 +280,7 @@ for (const [name, args] of [
   ['default outside budget', ['show', '--default']], ['model outside show or budget', ['share', 'on', '--model', 'p/m']],
   ['missing percent value', ['budget', '--percent']], ['missing tokens value', ['budget', '--tokens']], ['missing model value', ['budget', '--default', '--model']]
 ]) test(`context budget usage rejects ${name}`, async (t) => {
-  const f = fixture(t), before = f.context.status(f.project.id), result = await f.command(args);
+  const f = fixture(t), before = (await f.context.status(f.project.id)), result = await f.command(args);
   assert.equal(result.code, 2, result.output); assert.match(result.errors, /Run "scranton help" for usage/);
   const message = name.startsWith('missing ') ? /argument is ambiguous/
     : name === 'no rule' || name.includes(' and ') ? /requires exactly one/
@@ -293,20 +293,20 @@ for (const [name, args] of [
     : name === 'model outside show or budget' ? /--model is only valid/
     : /only valid for context budget/;
   assert.match(result.errors, message);
-  assert.deepEqual(f.context.status(f.project.id), before); assert.equal(Object.hasOwn(Object.prototype, 'mode'), false);
+  assert.deepEqual((await f.context.status(f.project.id)), before); assert.equal(Object.hasOwn(Object.prototype, 'mode'), false);
 });
 
 // Regression: cmdContext must forward the model patch to configure(), which enforces the post-merge 32-key cap.
 test('context budget refuses a 33rd model override but permits replacement and removal', async (t) => {
   const f = fixture(t);
-  f.context.configure(f.project.id, { models: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`p/model${i}`, { mode: 'percent', value: 10 }])) });
-  const before = f.context.status(f.project.id).settings;
+  (await f.context.configure(f.project.id, { models: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`p/model${i}`, { mode: 'percent', value: 10 }])) }));
+  const before = (await f.context.status(f.project.id)).settings;
   const result = await f.command(['budget', '--percent', '20', '--model', 'p/overflow']);
-  assert.equal(result.code, 2); assert.deepEqual(f.context.status(f.project.id).settings, before);
+  assert.equal(result.code, 2); assert.deepEqual((await f.context.status(f.project.id)).settings, before);
   ok(await f.command(['budget', '--tokens', '1000', '--model', 'p/model0']));
   ok(await f.command(['budget', '--default', '--model', 'p/model1']));
   ok(await f.command(['budget', '--percent', '20', '--model', 'p/overflow']));
-  assert.equal(Object.keys(f.context.status(f.project.id).settings.models).length, 32);
+  assert.equal(Object.keys((await f.context.status(f.project.id)).settings.models).length, 32);
 });
 
 // Regression: contextBudgetLine's pct, assumed and capped suffixes; Team show must use both agents' modelSetting.value, ignoring --model.
@@ -325,7 +325,7 @@ test('context show prints exact known, assumed and capped Team budget lines from
   const env = { SCRANTON_MICHAEL_PROVIDER: 'cli-budget', SCRANTON_MICHAEL_MODEL: 'large', SCRANTON_DWIGHT_MODEL: 'small' };
   const doc = json(await f.command(['show', '--chat', f.chat.id, '--json'], [], env));
   assert.equal(doc.model.window, 1000000); assert.equal(doc.developer.model.window, 32000);
-  f.context.setNotes(f.project.id, 'ABC'.repeat(200));
+  (await f.context.setNotes(f.project.id, 'ABC'.repeat(200)));
   lines = ok(await f.command(['show', '--chat', f.chat.id])).output.split('\n');
   const used = json(await f.command(['show', '--chat', f.chat.id, '--json'])).budget.used;
   assert.ok(lines.includes(`Budget: ≈${used}/16000 tokens (${(used * 100 / 16000).toFixed(1)}% of budget, ${(used * 100 / 32000).toFixed(1)}% of the 32000-token window of cli-budget/small) [capped: window]`));

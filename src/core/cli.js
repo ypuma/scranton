@@ -3,7 +3,7 @@ import { readFileSync, statSync, openSync, closeSync, lstatSync, fstatSync, read
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, parseEnv, stripVTControlCharacters } from 'node:util';
-import { ConfigError, PACKAGE_ROOT, loadConfig, loadDotEnv } from './config.js';
+import { ConfigError, PACKAGE_ROOT, loadConfig, loadDotEnv, loadAgentsMd } from './config.js';
 import { runDoctor } from './doctor.js';
 import { DEFAULT_DOCKER_IMAGE } from './sandbox.js';
 import { createTerminalLog, styler } from './log.js';
@@ -652,7 +652,9 @@ function contextBudgetLine(label, budget, model) {
 }
 
 function contextSummary(doc) {
-  const sharing = `Sharing: ${doc.settings.crossChat ? 'on' : 'off'}; notes: ${doc.notes.chars}/${doc.notes.limit} chars`;
+  const instruction = doc.instructions;
+  const repository = instruction ? `Repository instructions: ${instruction.file ?? 'nested only'} (${instruction.bytes} bytes, ~${instruction.tokens} tokens)${instruction.truncated ? ' [truncated]' : ''}; nested: ${instruction.nestedCount ?? instruction.nested.length}${instruction.partial ? ' [nested scan partial]' : ''}` : 'No AGENTS.md';
+  const sharing = `${repository}\nSharing: ${doc.settings.crossChat ? 'on' : 'off'}; notes: ${doc.notes.chars}/${doc.notes.limit} chars`;
   if (doc.chats) return [sharing, `Settings: ${JSON.stringify(doc.settings)}`, ...doc.chats.map((chat) => `${chat.id} | ${chat.title} | ${chat.engine} | ${chat.turns} turns${chat.reset ? ' | reset' : ''}`)].join('\n') + '\n';
   const t = doc.turns;
   return [sharing, `Turns: ${t.total} total; ${t.visible} visible; ${t.detailed} detailed; ${t.condensed} condensed; ${t.omitted} omitted`,
@@ -688,7 +690,7 @@ async function cmdContext(args, values, { stdout, env, cwd }) {
     if (values.model !== undefined) model = contextModel(values.model);
   }
   const dataDir = path.resolve(cwd, values.data || env.SCRANTON_DATA), registry = createProjectRegistry({ dataDir });
-  const context = createContext({ dataDir, registry });
+  const context = createContext({ dataDir, registry, env, agentsMd: loadAgentsMd({ cwd, env, flags: toFlags(values) }) });
   let result;
   try {
     if (action === 'show' && values.chat) {
@@ -702,9 +704,9 @@ async function cmdContext(args, values, { stdout, env, cwd }) {
       const recipients = chat.engine === 'pipeline'
         ? { planner: await createModelWindows().resolve(values.model === undefined ? null : contextModel(values.model)) }
         : await teamRecipients(loadConfig({ cwd: PACKAGE_ROOT, env, flags: { data: dataDir }, validateWorkflow: false }));
-      result = context.inspect(values.project, values.chat, { memory, recipients });
-    } else if (action === 'show') result = context.status(values.project);
-    else if (action === 'budget') result = context.configure(values.project, model ? { models: { [`${model.provider}/${model.model}`]: rule } } : { budget: rule });
+      result = await context.inspect(values.project, values.chat, { memory, recipients });
+    } else if (action === 'show') result = await context.status(values.project);
+    else if (action === 'budget') result = await context.configure(values.project, model ? { models: { [`${model.provider}/${model.model}`]: rule } } : { budget: rule });
     else if (action === 'notes') {
       let text = '';
       if (values.file) {
@@ -715,9 +717,9 @@ async function cmdContext(args, values, { stdout, env, cwd }) {
         try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(file)).replace(/^\uFEFF/, ''); }
         catch (error) { if (error.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') throw new UsageError('Context notes file must be valid UTF-8'); throw error; }
       }
-      result = context.setNotes(values.project, text);
-    } else if (action === 'share') result = context.configure(values.project, { crossChat: sharing === 'on' });
-    else result = context[action](values.project, values.chat);
+      result = await context.setNotes(values.project, text);
+    } else if (action === 'share') result = await context.configure(values.project, { crossChat: sharing === 'on' });
+    else result = await context[action](values.project, values.chat);
   } catch (err) { throw new UsageError(terminalText(err.message)); }
   // Escape display-only formatting in JSON without changing the raw document's values.
   stdout.write(values.json ? JSON.stringify(result).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufe0e\ufe0f\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`) + '\n' : terminalText(contextSummary(result)));

@@ -210,7 +210,7 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       if (['/context/reset', '/context/restore'].includes(suffix) && req.method === 'POST') {
         const body = await readBody(req);
         if (Object.keys(body).length) throw fail(400, 'Expected an empty JSON object');
-        chatContext[suffix.endsWith('/reset') ? 'reset' : 'restore'](project.id, chat.id);
+        await chatContext[suffix.endsWith('/reset') ? 'reset' : 'restore'](project.id, chat.id);
         return json(res, 200, await inspectContext(project, chat));
       }
       throw fail(404, 'Not found');
@@ -304,13 +304,13 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       if (contextPath) {
         const projectId = contextPath[1], action = contextPath[2];
         registry.getProject(projectId);
-        if (action === undefined && req.method === 'GET') { json(res, 200, chatContext.status(projectId)); return true; }
+        if (action === undefined && req.method === 'GET') { json(res, 200, await chatContext.status(projectId)); return true; }
         if (!['settings', 'notes'].includes(action) || req.method !== 'POST') throw fail(404, 'Not found');
         const body = await readBody(req);
         if (action === 'settings' && (!Object.keys(body).length || Object.keys(body).some((key) => !['crossChat', 'budget', 'models'].includes(key)))) throw fail(400, 'Expected a context settings patch');
         if (action === 'notes' && (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'text'))) throw fail(400, 'Expected only text');
         if (action === 'notes' && (typeof body.text !== 'string' || body.text.length > 16000)) throw fail(400, 'text must be a string of at most 16000 characters');
-        json(res, 200, action === 'settings' ? chatContext.configure(projectId, body) : chatContext.setNotes(projectId, body.text)); return true;
+        json(res, 200, await (action === 'settings' ? chatContext.configure(projectId, body) : chatContext.setNotes(projectId, body.text))); return true;
       }
       if (dreamPath) {
         if (!registry) throw fail(409, 'single_mode');

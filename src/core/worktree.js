@@ -10,6 +10,7 @@ import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 
 const locks = new Map();
 const skipped = new Set(['.scranton-sandbox-owned', '.git', 'node_modules', '.scratch', '.pi', '.ssh', '.aws', '.azure', '.config', 'target', 'dist', 'build', 'out', '.next', 'coverage', '.enma', '.npmrc', '.netrc', '.git-credentials']);
+export const excludedSnapshotName = (name) => skipped.has(name) || credential(name);
 const credential = (name) => /^\.env(?:\.|$)/i.test(name) && name !== '.env.example' || /^(?:credentials(?:\.json)?|auth\.json|id_(?:rsa|ed25519)|.*\.(?:pem|key|p12|pfx))$/i.test(name);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel === '' || !rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel); };
 const same = (a, b) => !a && !b || Boolean(a && b && a.mode === b.mode && a.data.equals(b.data));
@@ -267,6 +268,7 @@ export class WorktreeManager {
     if (inside(this.hiveDir, this.workspace)) throw new Error('Hive must not contain the workspace');
     this.worktrees = new Map();
     this.snapshots = new Map();
+    this.instructionWarnings = [];
     this.closed = false;
     this.queue = Promise.resolve();
   }
@@ -277,7 +279,7 @@ export class WorktreeManager {
     return new Promise((resolve, reject) => {
       const child = execFile('git', ['-c', 'core.longpaths=true', '-c', 'core.hooksPath=', '-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'commit.gpgsign=false', '-c', 'core.fsmonitor=false', '-C', this.repo, `--git-dir=${gitDir}`, `--work-tree=${workTree}`, ...args], {
         env: { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_AUTHOR_NAME: 'Scranton', GIT_AUTHOR_EMAIL: 'scranton@localhost', GIT_COMMITTER_NAME: 'Scranton', GIT_COMMITTER_EMAIL: 'scranton@localhost', ...extraEnv },
-        encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, windowsHide: true
+        encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, windowsHide: true, signal: this.signal
       }, (error, stdout) => {
         if (error) reject(error); else resolve(stdout);
       });
@@ -288,7 +290,9 @@ export class WorktreeManager {
 
   assertReady() { if (!this.repo || this.closed) throw new Error('Worktree manager is not open'); }
 
-  async init() {
+  async init({ signal } = {}) {
+    signal?.throwIfAborted();
+    this.signal = signal;
     if (this.repo) throw new Error('Worktree manager already initialized');
     safePath(this.workspace);
     safePath(this.hiveDir);
@@ -326,14 +330,16 @@ export class WorktreeManager {
     this.repo = path.join(this.storage, 'shadow');
     fs.mkdirSync(this.repo);
     await this.git(['init', '--quiet']);
-    this.initial = await this.collect(this.workspace);
+    this.initial = await this.collect(this.workspace, new Map(), { initial: true });
     this.integrated = new Map(this.initial);
     this.integratedRef = await this.commit(this.initial, null);
     await this.git(['update-ref', 'refs/heads/integrated', this.integratedRef]);
+    signal?.throwIfAborted();
+    this.signal = undefined;
     return this;
   }
 
-  async collect(root, tracked = new Map()) {
+  async collect(root, tracked = new Map(), { initial = false } = {}) {
     safePath(root);
     const entries = new Map();
     const ignoreRoot = path.join(this.storage, `ignore-${randomUUID()}`);
@@ -344,6 +350,7 @@ export class WorktreeManager {
       while (parts.length > 1) { parts.pop(); trackedDirs.add(parts.join('/')); }
     }
     const walk = async (dir, prefix = '') => {
+      this.signal?.throwIfAborted();
       const ignore = path.join(dir, '.gitignore');
       if (fs.existsSync(ignore)) {
         const entry = readEntry(root, prefix + '.gitignore');
@@ -364,8 +371,23 @@ export class WorktreeManager {
         } catch (err) { if (err.code !== 1) throw err; }
       }
       for (const ent of candidates) {
+        this.signal?.throwIfAborted();
         const rel = prefix + ent.name;
         if (!tracked.has(rel) && !trackedDirs.has(rel) && ignored.has(rel + (ent.isDirectory() ? '/' : ''))) continue;
+        if (initial && ent.name === 'AGENTS.md' && ent.isDirectory()) this.instructionWarnings.push({ file: rel, reason: 'not_regular', message: `${rel}: not_regular` });
+        if (initial && ent.name === 'AGENTS.md' && !ent.isDirectory()) {
+          const file = path.join(dir, ent.name);
+          let real, stat;
+          const warn = (reason) => this.instructionWarnings.push({ file: rel, reason, message: `${rel}: ${reason}` });
+          try { real = fs.realpathSync(file); stat = fs.statSync(real); } catch { warn('read_error'); continue; }
+          if (!inside(fs.realpathSync(root), real)) { warn('escape'); continue; }
+          if (!stat.isFile() || stat.nlink > 1 || fs.lstatSync(file).isSymbolicLink()) { warn('not_regular'); continue; }
+          try {
+            const entry = readEntry(root, rel);
+            if (entry) entries.set(rel, entry);
+          } catch { warn('read_error'); }
+          continue;
+        }
         safePath(root, rel);
         if (ent.isDirectory()) await walk(path.join(dir, ent.name), rel + '/');
         else {

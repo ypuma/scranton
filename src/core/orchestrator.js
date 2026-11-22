@@ -18,6 +18,7 @@ import { startAgent, agentAppVersion } from './agent/index.js';
 import { fallbackPlan, parsePlan, planToMarkdown } from './plan.js';
 import { clip, excerpt, oneLine } from './util.js';
 import { safePath } from './worktree.js';
+import { discoverInstructions } from './instructions.js';
 
 /** Thrown to unwind the run on a human abort or Ctrl+C. */
 class RunAborted extends Error {
@@ -80,6 +81,11 @@ export class Orchestrator {
 
   /** Ctrl+C: kill the active agent and unwind; run() then emits run_finished(aborted). */
   abort(reason = 'Interrupted by the user (Ctrl+C)') {
+    this.stopRequested = true;
+    this.#cancel(reason);
+  }
+
+  #cancel(reason) {
     this.aborting ??= reason;
     this.rec.live?.close();
     this.abortController.abort();
@@ -126,22 +132,27 @@ export class Orchestrator {
       return { runId: this.runId, status: 'failed', summary: `cannot prepare workspace/hive: ${err.message}`, signaled: false };
     }
     let started = false, stopTimer;
+    const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan);
+    const auditedRoles = roles.map((id) => auditRole({ ...this.roleMap[id], tools: config.agents[id].tools }));
     try {
     try {
-      const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config, this.noPlan);
+      stopTimer = pollStop(this.hive.dir, this.runId, (reason) => this.abort(reason), (level, message) => this.log(level, message));
       this.promptSnapshot = Object.fromEntries(roles.map((id) => [id, resolvePrompt(config, id)]));
       if (this.conversation && this.promptSnapshot.michael) this.promptSnapshot.michael.text += '\n\n## Conversation mode\n\nThe "Required answer" section of each request decides between a plan ([PLAN_READY]), a direct answer ([ANSWER_READY]) and a report ([REPORT_READY]). This overrides any earlier rule to always reply with a plan.';
-      this.emit('run_started', { request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow }, roles: roles.map((id) => auditRole({ ...this.roleMap[id], tools: config.agents[id].tools })), prompts: promptAudit(config, this.promptSnapshot) });
-      started = true;
-      stopTimer = pollStop(this.hive.dir, this.runId, (reason) => this.abort(reason), (level, message) => this.log(level, message));
-      for (const w of config.warnings ?? []) this.log('warn', w);
-      this.#prepare();
-      this.runtime = await this.runtimeFactory({ hiveDir: this.hive.dir, markerDir: path.join(this.hive.dir, 'agent-step-markers'), executorId: `run:${this.runId}`, appVersion: await agentAppVersion() });
       if (config.execution?.isolation === 'worktree') {
         const { WorktreeManager } = await import('./worktree.js');
         this.worktrees = new WorktreeManager({ workspace: config.workspace, hiveDir: this.hive.dir, runId: this.runId });
-        await this.worktrees.init();
+        await this.worktrees.init({ signal: this.abortController.signal });
+        this.#checkAbort();
       }
+      this.instructions = discoverInstructions(config.workspace, { enabled: config.agentsMd !== false, snapshot: this.worktrees?.initial, snapshotWarnings: this.worktrees?.instructionWarnings, scratchDir: path.join(this.hive.dir, 'instruction-discovery'), exclude: [this.hive.dir] });
+      this.emit('run_started', { instructions: this.instructions.summary, request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow }, roles: auditedRoles, prompts: promptAudit(config, this.promptSnapshot) });
+      started = true;
+      for (const warning of this.instructions.warnings) this.log('warn', warning.message);
+      this.#checkAbort();
+      for (const w of config.warnings ?? []) this.log('warn', w);
+      this.#prepare();
+      this.runtime = await this.runtimeFactory({ hiveDir: this.hive.dir, markerDir: path.join(this.hive.dir, 'agent-step-markers'), executorId: `run:${this.runId}`, appVersion: await agentAppVersion() });
       this.chat = new ChatRouter({ hiveDir: this.hive.dir, runId: this.runId, emit: (type, fields) => this.emit(type, fields) });
       this.chat.register('michael');
       this.chatTimer = setInterval(() => void this.chat.consume().catch((err) => this.log('error', err.message)), 100);
@@ -165,7 +176,7 @@ export class Orchestrator {
         signal: this.abortController.signal,
         run: async (m, index, completed) => {
           try { return await this.#runMilestone(m, index, plan.milestones.length, completed); }
-          catch (err) { this.abort(err.message); throw err; }
+          catch (err) { this.#cancel(err.message); throw err; }
           finally { for (const role of ['dwight', ...this.workflow.gates.flat()]) this.chat.finish(`${role}-${m.id}`); }
         },
         blocked: async (m, dependencies) => {
@@ -186,9 +197,9 @@ export class Orchestrator {
       }
       }
     } catch (err) {
-      if (!started) this.emit('run_started', { roles: [], request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow } });
-      if (err instanceof RunAborted) {
-        result = { status: 'aborted', summary: err.message, signaled: err.signaled };
+      if (!started) this.emit('run_started', { instructions: null, roles: [], request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, execution: { ...config.execution, workflow: this.workflow } });
+      if (err instanceof RunAborted || this.stopRequested) {
+        result = { status: 'aborted', summary: this.aborting ?? err.message, signaled: err instanceof RunAborted ? err.signaled : true };
       } else {
         this.log('error', err.message);
         result = { status: 'failed', summary: err.message, signaled: false };
@@ -221,7 +232,7 @@ export class Orchestrator {
     if (!['scranton', 'docker', 'host'].includes(mode)) throw new Error('Unsupported execution sandbox mode');
     if (mode === 'scranton' && this.config.execution?.isolation !== 'worktree') throw new Error('Scranton sandbox requires private worktree isolation');
     for (const id of Object.keys(this.promptSnapshot)) {
-      this.prompts[id] = stagePrompt(this.config, this.hive, id, id, this.promptSnapshot[id]);
+      this.prompts[id] = stagePrompt(this.config, this.hive, id, id, { ...this.promptSnapshot[id], text: this.promptSnapshot[id].text + (this.instructions?.block ? '\n\n' + this.instructions.block : '') });
     }
   }
 
@@ -549,7 +560,7 @@ export class Orchestrator {
       instance = { id: instanceId, agent: agentId, milestoneId: milestone, sessionId: randomUUID(), worktree: worktree.dir, sandbox: this.config.execution?.sandbox?.mode ?? 'scranton' };
       this.instances.set(instanceId, instance);
     }
-    this.prompts[instanceId] = stagePrompt(this.config, this.hive, agentId, instanceId, this.promptSnapshot[agentId]);
+    this.prompts[instanceId] = stagePrompt(this.config, this.hive, agentId, instanceId, { ...this.promptSnapshot[agentId], text: this.promptSnapshot[agentId].text + (this.instructions?.block ? '\n\n' + this.instructions.block : '') });
     const purpose = report ? 'report' : this.standaloneAgent ? 'conversation' : agentId === 'michael' ? 'plan' : this.gates.includes(agentId) ? 'gate' : 'work';
     const baseKey = `${milestone ?? 'run'}/cycle-${cycle ?? 0}/${agentId}/${purpose}`;
     const attempt = (this.invocations.get(baseKey) ?? 0) + 1;

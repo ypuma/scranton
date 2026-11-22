@@ -10,7 +10,7 @@ import { createModelWindows } from './model-windows.js';
 import { validateId } from './projects.js';
 import { writeFileAtomicSync, withFsRetry } from './util.js';
 import { killTree } from './process-tree.js';
-import { PACKAGE_ROOT } from './config.js';
+import { PACKAGE_ROOT, loadAgentsMd } from './config.js';
 import { probePipeline, resolvePipelineCommand, execPipeline, spawnPipeline, pipelineChildEnv, probePipelineSandbox } from './pipeline-command.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -44,7 +44,7 @@ const readJson = (file) => JSON.parse(withFsRetry(() => fs.readFileSync(file, 'u
 const writeJson = (file, value) => writeFileAtomicSync(file, JSON.stringify(value, null, 2) + '\n');
 const optional = (file) => { try { return readJson(file); } catch (e) { if (e.code === 'ENOENT') return null; throw fail(409, 'Unreadable Pipeline metadata'); } };
 
-export function createPipelineSupervisor({ dataDir, env = process.env, auth, checkCapacity = () => {}, onStarting = () => {}, dreaming, context, modelWindows = createModelWindows() } = {}) {
+export function createPipelineSupervisor({ dataDir, env = process.env, auth, checkCapacity = () => {}, onStarting = () => {}, dreaming, context, agentsMd, cwd = PACKAGE_ROOT, flags = {}, modelWindows = createModelWindows() } = {}) {
   const children = new Map(), starting = new Set(), diagnostics = new Map(), secrets = new Set(), normalizing = new Map();
   let closing = false, sandboxProbe = null, buildEntry = null, buildStarting = false;
   const sandboxFlights = new Map();
@@ -213,7 +213,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     if (body.demoScenario === 'evidence' && body.grounding === 'observe') throw fail(400, 'grounding: The evidence demo needs enforce');
     if (body.guidance !== undefined && typeof body.guidance !== 'boolean') throw fail(400, 'guidance: Expected boolean');
     if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw fail(400, 'conversation: Expected boolean');
-    const settings = { ...(body.conversation === true ? { conversation: true } : {}), ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
+    const settings = { agentsMd: agentsMd ?? loadAgentsMd({ cwd, env, flags }), ...(body.conversation === true ? { conversation: true } : {}), ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
     const sandbox = body.sandbox ?? { mode: 'host' };
     pipelineFields(sandbox, ['mode', 'image', 'trustHost']);
     if (!['docker', 'host'].includes(sandbox.mode) || sandbox.trustHost !== undefined && typeof sandbox.trustHost !== 'boolean') throw fail(400, 'Invalid sandbox');

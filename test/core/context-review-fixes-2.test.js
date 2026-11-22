@@ -28,7 +28,7 @@ function link(t, target, file) {
   catch (error) { t.skip(`Filesystem refuses directory links: ${error.code}`); return false; }
 }
 
-test('C1.1 Team pack accepts linked ancestors above the hive', (t) => {
+test('C1.1 Team pack accepts linked ancestors above the hive', async (t) => {
   const f = fixture(t), c = f.chat('own'); f.team(c, 'old');
   if (!link(t, path.join(f.dir, 'real'), path.join(f.dir, 'alias'))) return;
   const expected = f.context.forTeam(f.projectId, c.id);
@@ -37,7 +37,7 @@ test('C1.1 Team pack accepts linked ancestors above the hive', (t) => {
   assert.equal(countContextRuns(c.hiveDir), 1);
 });
 
-test('C1.1 store canonicalises dataDir but rejects links below it', (t) => {
+test('C1.1 store canonicalises dataDir but rejects links below it', async (t) => {
   const f = fixture(t), c = f.chat('own'), store = createContextStore(f.dataDir, f.projectId);
   store.setNotes('Preferences'); store.configure({ crossChat: false });
   createContextStore(f.dataDir, f.projectId, c.id).setReset('2026-02-01');
@@ -52,7 +52,7 @@ test('C1.1 store canonicalises dataDir but rejects links below it', (t) => {
   assert.equal(other.notes().text, ''); assert.throws(() => other.setNotes('unsafe'), /context path/i);
 });
 
-test('C1.1 linked hive/run/plan directories and non-ENOENT errors are degraded', (t) => {
+test('C1.1 linked hive/run/plan directories and non-ENOENT errors are degraded', async (t) => {
   const f = fixture(t), c = f.chat('own'); f.team(c, 'good');
   const target = path.join(c.hiveDir, 'runs/good'), linked = path.join(c.hiveDir, 'runs/linked');
   if (!link(t, target, linked)) return;
@@ -68,7 +68,7 @@ test('C1.1 linked hive/run/plan directories and non-ENOENT errors are degraded',
   assert.equal(listContextRuns(c.hiveDir).degraded, true);
 });
 
-for (const engine of ['team', 'pipeline']) test(`C1.2 ${engine} reset hides unread older runs without renumbering or changing total`, (t) => {
+for (const engine of ['team', 'pipeline']) test(`C1.2 ${engine} reset hides unread older runs without renumbering or changing total`, async (t) => {
   const f = fixture(t), c = f.chat('own', engine);
   for (let i = 1; i <= 3; i++) { const file = engine === 'team' ? path.dirname(f.team(c, 'run' + i, i)) : f.pipeline(c, 'run' + i); fs.utimesSync(file, i, i); }
   const source = readTurns({ dataDir: f.dataDir, projectId: f.projectId, chat: c, maxRuns: 2, since: '2026-02-01' });
@@ -83,11 +83,11 @@ for (const mode of ['invalid', 'BOM']) test(`C1.3 CLI notes ${mode} UTF-8`, asyn
   const code = await runCli(['context', 'notes', '--data', f.dataDir, '--project', p.id, '--file', file], { cwd: f.dir, env: {}, stdout: { write() {} }, stderr: { write(s) { errors += s; } } });
   assert.equal(code, mode === 'invalid' ? 2 : 0, errors);
   if (mode === 'BOM') assert.equal(fs.readFileSync(path.join(f.dataDir, 'projects', p.id, 'context/notes.md'), 'utf8'), 'Hello');
-  const notes = createContext({ dataDir: f.dataDir, registry }).status(p.id).notes.text;
+  const notes = (await createContext({ dataDir: f.dataDir, registry }).status(p.id)).notes.text;
   assert.equal(notes, mode === 'invalid' ? '' : 'Hello');
 });
 
-test('C1.4 nonregular Team and store artifacts are rejected before open', (t) => {
+test('C1.4 nonregular Team and store artifacts are rejected before open', async (t) => {
   const f = fixture(t), c = f.chat('own'), file = path.join(c.hiveDir, 'state.json'); fs.mkdirSync(file, { recursive: true });
   const notes = path.join(f.dataDir, 'projects/project/context/notes.md'); fs.mkdirSync(notes, { recursive: true });
   const open = fs.openSync, opened = [];
@@ -96,14 +96,14 @@ test('C1.4 nonregular Team and store artifacts are rejected before open', (t) =>
   assert.deepEqual(opened, []);
 });
 
-test('C1.4 FIFO state and notes do not block context reads', { skip: process.platform === 'win32' ? 'mkfifo requires POSIX' : false }, (t) => {
+test('C1.4 FIFO state and notes do not block context reads', { skip: process.platform === 'win32' ? 'mkfifo requires POSIX' : false }, async (t) => {
   const f = fixture(t), c = f.chat('own'), state = path.join(c.hiveDir, 'state.json'), notes = path.join(f.dataDir, 'projects/project/context/notes.md');
   for (const file of [state, notes]) { fs.mkdirSync(path.dirname(file), { recursive: true }); const result = spawnSync('mkfifo', [file]); assert.equal(result.status, 0, result.stderr?.toString()); }
   const script = f.write(path.join(f.dir, 'fifo-probe.mjs'), `import { countContextRuns, listContextRuns } from ${JSON.stringify(new URL('../../src/core/thread.js', import.meta.url).href)};\nimport { createContextStore } from ${JSON.stringify(new URL('../../src/core/context/store.js', import.meta.url).href)};\ncountContextRuns(${JSON.stringify(c.hiveDir)}); if (!listContextRuns(${JSON.stringify(c.hiveDir)}).degraded) process.exit(1); createContextStore(${JSON.stringify(f.dataDir)}, 'project').notes();`);
   const result = spawnSync(process.execPath, [script], { timeout: 2000, encoding: 'utf8' }); assert.equal(result.status, 0, result.error?.message ?? result.stderr);
 });
 
-test('C1.6 one full context scan survives sibling and legacy cache pressure', (t) => {
+test('C1.6 one full context scan survives sibling and legacy cache pressure', async (t) => {
   const f = fixture(t), own = f.chat('own'), others = [];
   for (let i = 0; i < 500; i++) f.team(own, 'run' + i);
   for (let i = 0; i < 12; i++) { const c = f.chat('sibling' + i); others.push(c); for (let j = 0; j < 4; j++) f.team(c, 'run' + j); }
@@ -114,19 +114,19 @@ test('C1.6 one full context scan survives sibling and legacy cache pressure', (t
   scan(); assert.equal(journals, 0);
 });
 
-test('C1.7 Pipeline inspection propagates unreadable-artifact degradation', (t) => {
+test('C1.7 Pipeline inspection propagates unreadable-artifact degradation', async (t) => {
   const f = fixture(t), c = f.chat('pipe', 'pipeline'), root = f.pipeline(c, 'run1'); f.write(path.join(root, 'artifacts/plan.json'), '{broken');
-  const doc = f.context.inspect(f.projectId, c.id); assert.equal(doc.degraded, true); assert.equal(doc.turns.visible, 1);
+  const doc = (await f.context.inspect(f.projectId, c.id)); assert.equal(doc.degraded, true); assert.equal(doc.turns.visible, 1);
 });
 
-test('C1.7 Pipeline inspection propagates sibling degradation and fallback', (t) => {
+test('C1.7 Pipeline inspection propagates sibling degradation and fallback', async (t) => {
   const f = fixture(t), c = f.chat('pipe', 'pipeline'), sibling = f.chat('other'); f.pipeline(c, 'run1');
   f.write(path.join(sibling.hiveDir, 'runs/bad/state.json'), { runId: 'bad', agents: { explode: true } });
   const values = Object.values;
   t.mock.method(Object, 'values', (obj) => { if (obj?.explode) throw Error('broken'); return values(obj); });
-  assert.equal(f.context.inspect(f.projectId, c.id).degraded, true);
+  assert.equal((await f.context.inspect(f.projectId, c.id)).degraded, true);
   t.mock.method(f.registry, 'listChats', () => { throw Error('registry unavailable'); });
-  assert.equal(f.context.inspect(f.projectId, c.id).degraded, true);
+  assert.equal((await f.context.inspect(f.projectId, c.id)).degraded, true);
 });
 
 test('C1.8 Pipeline recent projection is readable and leaves the wire untouched', () => {
@@ -151,13 +151,13 @@ test('C1.9 shared helpers preserve both historical masking dialects and relative
   assert.deepEqual(PIPELINE_TERMINAL, ['succeeded', 'failed', 'rejected', 'cancelled']); assert.ok(Object.isFrozen(PIPELINE_TERMINAL));
 });
 
-test('C1.1 unreadable context storage is flagged in the pack and inspection', (t) => {
+test('C1.1 unreadable context storage is flagged in the pack and inspection', async (t) => {
   const f = fixture(t), c = f.chat('own'); f.team(c, 'good');
   const directory = path.join(f.dataDir, 'projects/project/context'), target = path.join(f.dir, 'external-context'); fs.mkdirSync(target);
   f.write(path.join(target, 'notes.md'), 'DO-NOT-READ');
   if (!link(t, target, directory)) return;
   const pack = f.context.forTeam(f.projectId, c.id); assert.equal(pack.meta.degraded, true); assert.doesNotMatch(pack.text, /DO-NOT-READ/);
-  assert.equal(f.context.inspect(f.projectId, c.id).degraded, true);
+  assert.equal((await f.context.inspect(f.projectId, c.id)).degraded, true);
 });
 
 test('C1.4 CLI notes rejects nonregular input before reading', async (t) => {
@@ -170,7 +170,7 @@ test('C1.4 CLI notes rejects nonregular input before reading', async (t) => {
   assert.equal(code, 2); assert.equal(reads, 0);
 });
 
-test('C1.1 corrupt Team artifacts degrade without losing readable turns', (t) => {
+test('C1.1 corrupt Team artifacts degrade without losing readable turns', async (t) => {
   const f = fixture(t), c = f.chat('own'), file = f.team(c, 'good'); fs.appendFileSync(file, '{corrupt}\n');
   const result = listContextRuns(c.hiveDir); assert.equal(result.degraded, true); assert.equal(result.runs[0].request, 'Task good');
 });

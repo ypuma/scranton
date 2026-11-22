@@ -104,6 +104,17 @@ function toList(value, label) {
   throw new ConfigError(`${label} must be a string or an array`);
 }
 
+function agentsMdSetting(flags, env, file) {
+  const value = pick(flags.agentsMd, env.SCRANTON_AGENTS_MD, file.agentsMd, true);
+  const fromEnv = blank(flags.agentsMd) && !blank(env.SCRANTON_AGENTS_MD);
+  if (fromEnv ? !['0', '1'].includes(value) : typeof value !== 'boolean') throw new ConfigError('agentsMd must be boolean (SCRANTON_AGENTS_MD: 1 or 0)');
+  return value === true || value === '1';
+}
+
+export function loadAgentsMd({ cwd = PACKAGE_ROOT, env = process.env, flags = {}, configPath } = {}) {
+  return agentsMdSetting(flags, env, readFileConfig(cwd, configPath ?? flags.config).data);
+}
+
 /**
  * Effective configuration. Precedence: flags > env > config file > defaults.
  * `fileConfig` replaces reading the file (tests); `platform`/`hasBash` make tool defaults testable.
@@ -146,6 +157,7 @@ export function loadConfig({
   if (Object.hasOwn(file, 'pi')) throw new ConfigError('Configuration key "pi" is no longer supported; remove it. Scranton uses its own runtime.');
   for (const [id, agent] of Object.entries(file.agents ?? {})) if (agent && Object.hasOwn(agent, 'extraArgs')) throw new ConfigError(`agents.${id}.extraArgs is no longer supported; remove Pi CLI arguments and configure tools/provider/model directly.`);
   if (file.execution?.maxReplans) warnings.push('execution.maxReplans is unsupported and ignored; the published DAG is immutable');
+  const agentsMd = agentsMdSetting(flags, env, file);
   const conversation = pick(flags.conversation, env.SCRANTON_CONVERSATION, file.execution?.conversation, false);
   const conversationFromEnv = blank(flags.conversation) && !blank(env.SCRANTON_CONVERSATION);
   if (conversationFromEnv ? !['1', '0'].includes(conversation) : typeof conversation !== 'boolean') throw new ConfigError('execution.conversation must be boolean (SCRANTON_CONVERSATION: 1 or 0)');
@@ -233,7 +245,7 @@ export function loadConfig({
     agents[id] = agent;
   }
 
-  return { configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
+  return { agentsMd, configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
 }
 
 export function validateGateTools(agent) {
