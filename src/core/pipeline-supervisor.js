@@ -257,13 +257,25 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     return { operator, extra, trustHost: sandbox.mode === 'host' };
   }
   async function normalize(runDir) {
-    if (children.has(runDir)) return;
+    if (children.has(runDir) || children.has(runDir + ':cancel')) return;
     const s = optional(safe(runDir, 'status.json', false));
-    if (s?.status !== 'running') return;
+    if (!s) return;
+    const cancelErrorFile = safe(runDir, 'cancel.error.json', false);
+    if (terminal.has(s.status)) { fs.rmSync(cancelErrorFile, { force: true }); return; }
+    // An owner can publish a gate after its last cancel check; finish the durable request once it exits.
+    const cancelling = fs.existsSync(safe(runDir, 'cancel.requested', false));
+    if (!cancelling && s.status !== 'running') return;
+    // Failed cancellation requires an explicit retry, including after a server restart.
+    if (cancelling && fs.existsSync(cancelErrorFile)) return;
     if (!normalizing.has(runDir)) normalizing.set(runDir, (async () => {
-      const spec = await available();
-      const r = await execPipeline(spec, ['status', '--run-dir', runDir], { env });
-      if (!runStatus(r.value)) throw fail(503, 'Could not inspect Pipeline owner');
+      try {
+        const spec = await available();
+        const r = await execPipeline(spec, [cancelling ? 'cancel' : 'status', '--run-dir', runDir], { env });
+        if (r.error || !runStatus(r.value)) throw fail(503, r.error ?? ([r.value?.failure?.code, r.value?.failure?.message].filter(Boolean).join(': ') || 'Could not inspect Pipeline owner'));
+      } catch (e) {
+        if (!cancelling) throw e;
+        writeJson(cancelErrorFile, { message: `Cancellation could not complete: ${sandboxText(String(e.message)).slice(-8192)}. Resolve the engine error, then cancel again to retry.`, failedAt: new Date().toISOString() });
+      }
     })().finally(() => normalizing.delete(runDir)));
     await normalizing.get(runDir);
   }
@@ -386,7 +398,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     let review = null;
     const artifacts = safe(runDir, 'artifacts', false);
     if (fs.existsSync(artifacts)) { const names = fs.readdirSync(artifacts).filter((n) => /^review-\d+\.json$/.test(n)).sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0])); if (names.length) review = readObject(`artifacts/${names.at(-1)}`); }
-    return scrub({ status, usage, ...steps, launchError: optional(safe(root(chat), `requests/${id}.error.json`, false)), live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan, review, stderrTail: [children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '', ...(skippedEvents ? [`Skipped ${skippedEvents} malformed or oversized Pipeline event lines`] : [])].filter(Boolean).join('\n') });
+    return scrub({ status, usage, ...steps, cancelError: terminal.has(status.status) ? null : readObject('cancel.error.json'), launchError: optional(safe(root(chat), `requests/${id}.error.json`, false)), live: children.has(runDir), events, lastSeq: events.at(-1)?.seq ?? after, plan, review, stderrTail: [children.get(runDir)?.tail ?? diagnostics.get(runDir) ?? '', ...(skippedEvents ? [`Skipped ${skippedEvents} malformed or oversized Pipeline event lines`] : [])].filter(Boolean).join('\n') });
   }
   async function action(chat, id, action, body) {
     try { Promise.resolve(dreaming?.(chat.projectId)?.cancelReflection?.()).catch(() => {}); } catch {}

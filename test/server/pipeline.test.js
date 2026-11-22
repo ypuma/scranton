@@ -95,6 +95,78 @@ test('Pipeline concurrency cap counts live invocations, not approval gates; canc
   assert.equal((await f.req(f.runRoute(other, 1) + '/cancel', {})).code, 202); await f.wait(other, 'cancelled', 1);
 });
 
+for (const gate of ['plan', 'delivery']) test(`Pipeline cancellation survives the ${gate} gate owner handoff`, { timeout: 45000 }, async (t) => {
+  const base = path.resolve('.scratch/pipeline/cancel-race/tests'); fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, 'gate-')), barrier = path.join(dir, 'barrier'), ack = path.join(dir, 'cancel.json');
+  t.after(() => fs.writeFileSync(barrier + '.release', ''));
+  const f = await setup(t, { env: { FAKE_PIPELINE_GATE_BARRIER: barrier, FAKE_PIPELINE_GATE_BARRIER_NAME: gate, FAKE_PIPELINE_CANCEL_ACK: ack } });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const until = async (predicate) => {
+    const deadline = Date.now() + 10000;
+    while (!predicate() && Date.now() < deadline) await sleep(10);
+    assert.ok(predicate(), 'Forced gate/cancel handoff did not arrive');
+  };
+  const id = await f.start();
+  if (gate === 'delivery') {
+    const plan = await f.wait(id, 'awaiting_approval');
+    assert.equal((await f.decide(id, plan.status)).code, 202);
+  }
+  await until(() => fs.existsSync(barrier + '.ready'));
+  const waiting = (await f.req(f.runRoute(id))).value;
+  assert.equal(waiting.status.status, 'awaiting_approval');
+  assert.equal(waiting.live, true);
+  assert.equal((await f.req(f.runRoute(id) + '/cancel', {})).code, 202);
+  await until(() => fs.existsSync(ack));
+  assert.deepEqual(JSON.parse(fs.readFileSync(ack)), { status: 'awaiting_approval', ownerAlive: true });
+  fs.writeFileSync(barrier + '.release', '');
+  const statusFile = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs', id, 'status.json');
+  await until(() => JSON.parse(fs.readFileSync(statusFile)).status === 'cancelled');
+  const done = await f.wait(id, 'cancelled');
+  assert.equal(done.status.pending, null);
+  assert.equal(done.launchError, null);
+  assert.equal(done.events.filter((e) => e.type === 'run_finished').length, 1);
+});
+
+test('Pipeline failed cancellation stays viewable, stops automatic retries and permits an explicit retry', async (t) => {
+  const base = path.resolve('.scratch/pipeline/cancel-error/tests'); fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, 'retry-')), invocations = path.join(dir, 'invocations.jsonl');
+  const f = await setup(t, { env: { FAKE_PIPELINE_LAUNCH_ERROR: 'cancel', FAKE_PIPELINE_INVOCATIONS: invocations, SCRANTON_TEST_SECRET: 'Unsafe shim arguments: change the command' } });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = await f.start(), gate = await f.wait(id, 'awaiting_approval');
+  const runDir = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs', id);
+  const errorFile = path.join(runDir, 'cancel.error.json');
+  const cancels = () => fs.readFileSync(invocations, 'utf8').trim().split('\n').map(JSON.parse).filter((args) => args[0] === 'cancel').length;
+  // Reconcile a durable request left by an owner that has already exited at a gate.
+  fs.writeFileSync(path.join(runDir, 'cancel.requested'), '');
+  const failed = await f.req(f.runRoute(id));
+  assert.equal(failed.code, 200);
+  assert.deepEqual(failed.value.status, gate.status);
+  assert.match(failed.value.cancelError.message, /unsafe_shim_arguments/);
+  assert.match(failed.value.cancelError.message, /\[REDACTED\]/);
+  assert.equal(fs.readFileSync(errorFile, 'utf8').includes(process.env.SCRANTON_TEST_SECRET), false);
+  assert.match(failed.value.cancelError.message, /cancel again to retry/);
+  assert.ok(Number.isFinite(Date.parse(failed.value.cancelError.failedAt)));
+  assert.deepEqual(JSON.parse(fs.readFileSync(errorFile)), failed.value.cancelError);
+  assert.equal(cancels(), 1);
+  for (let i = 0; i < 4; i++) {
+    const poll = await f.req(f.runRoute(id));
+    assert.equal(poll.code, 200);
+    assert.equal(cancels(), 1, 'Polling must not launch another cancel process');
+    assert.deepEqual(poll.value.cancelError, failed.value.cancelError);
+    assert.deepEqual(poll.value.status, gate.status);
+  }
+  assert.equal(cancels(), 1, 'Polling must not launch another cancel process');
+  process.env.FAKE_PIPELINE_LAUNCH_ERROR = '';
+  assert.equal((await f.req(f.runRoute(id) + '/cancel', {})).code, 202);
+  const done = await f.wait(id, 'cancelled');
+  assert.equal(done.cancelError, null);
+  assert.equal(done.launchError, null);
+  assert.equal(fs.existsSync(errorFile), false);
+  assert.equal(cancels(), 2);
+  assert.equal(done.status.pending, null);
+  assert.equal(done.events.filter((e) => e.type === 'run_finished').length, 1);
+});
+
 test('Pipeline credentials only reach environment; config, events and HTTP never contain the literal key', async (t) => {
   const f = await setup(t);
   const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));

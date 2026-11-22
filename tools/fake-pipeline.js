@@ -91,7 +91,7 @@ async function ground() {
   save(); await sleep(20); event('node_finished', { duration_s: 0 });
   status.node = 'package'; event('node_started'); event('node_finished', { duration_s: 0 });
 }
-function gate(name) {
+async function gate(name) {
   status.status = 'awaiting_approval'; status.phase = name === 'plan' ? 'approve_plan' : 'deliver'; status.node = name === 'plan' ? 'approve_plan' : 'approve_delivery'; status.resumable = false;
   const rel = name === 'plan' ? 'artifacts/plan.json' : 'delivery/candidate.diff';
   const content = name === 'plan' ? JSON.stringify({ summary: status.progress.plan_revision ? 'Revised demo plan' : 'Fix the demo', acceptance_criteria: [{ id: 'c1', text: 'Tests pass', verified_by: 'checks' }], assumptions: [], risks: [], steps: [{ id: 's1', title: 'Fix', description: 'Fix fixture', files: [{ path: 'demo.txt', action: 'modify' }], criteria: ['c1'], context_files: [] }] }) : '--- a/demo.txt\n+++ b/demo.txt\n@@ -1 +1 @@\n-bug\n+fixed\n';
@@ -119,6 +119,16 @@ function gate(name) {
     const acceptedViolation = fs.readFileSync(path.join(runDir, 'events.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).some((e) => e.type === 'grounding' && e.data.accepted && e.data.violations.length > 0);
     status.pending.risk_flags = [...(status.grounding.criteria.some((c) => c.state === 'met_not_demonstrated') ? ['criteria_not_demonstrated'] : []), ...(acceptedViolation ? ['grounding_violations'] : [])];
     status.pending.digest = hash(JSON.stringify({ diff: artifact, grounding: status.pending.grounding, risk_flags: status.pending.risk_flags }));
+  }
+  const barrier = process.env.FAKE_PIPELINE_GATE_BARRIER;
+  if (barrier && name === (process.env.FAKE_PIPELINE_GATE_BARRIER_NAME ?? 'plan')) {
+    // Hold the owner after its last stop check, as the real runner publishes an interrupt.
+    save(); fs.writeFileSync(barrier + '.ready', '');
+    const deadline = Date.now() + 15000;
+    while (!fs.existsSync(barrier + '.release')) {
+      if (Date.now() >= deadline) throw Error('gate_barrier_timeout');
+      await sleep(10);
+    }
   }
   event('gate_waiting', { gate: name, digest: status.pending.digest }); finish(3);
 }
@@ -185,6 +195,7 @@ async function main() {
   if (command === 'cancel') {
     fs.writeFileSync(path.join(runDir, 'cancel.requested'), '');
     if (!alive() && !['succeeded', 'failed', 'rejected', 'cancelled'].includes(status.status)) terminal('cancelled');
+    if (process.env.FAKE_PIPELINE_CANCEL_ACK) write(process.env.FAKE_PIPELINE_CANCEL_ACK, { status: status.status, ownerAlive: alive() });
     console.log(JSON.stringify(status)); process.exit(exitCode(status.status));
   }
   if (alive()) throw Error('run_active');
@@ -205,7 +216,7 @@ async function main() {
       if (!(config.limits?.max_replans ?? 1)) { status.failure = { failure_class: 'implementation', code: 'step_blocked', message: 'Fake step blocked', node: 'implement' }; terminal('failed'); }
       event('replan_requested', { code: 'step_blocked', message: 'Fake step blocked', scope: 's1' });
       status.progress.plan_revision = 1; status.progress.replans_left--;
-      event('replanned', { revision: 1 }); modelCall('planner', 'plan.replan'); gate('plan');
+      event('replanned', { revision: 1 }); modelCall('planner', 'plan.replan'); await gate('plan');
     }
     if ((config.demo_scenario === 'parallel' || process.env.FAKE_PIPELINE_PARALLEL === '1') && (config.execution?.max_parallel_steps ?? 1) > 1) {
       status.phase = 'implement'; status.node = 'run_lane';
@@ -230,9 +241,9 @@ async function main() {
     await ground();
     write(path.join(runDir, 'artifacts/review-0.json'), { verdict: 'approve', summary: 'Fake review', criteria: [], findings: [] });
     if (status.delivery_mode === 'patch') terminal('succeeded');
-    gate('delivery');
+    await gate('delivery');
   }
   if (config.demo_scenario === 'evidence') modelCall('planner', 'plan.start', ['unseen_target']);
-  modelCall('planner', config.demo_scenario === 'evidence' ? 'plan.repair' : 'plan.start'); gate('plan');
+  modelCall('planner', config.demo_scenario === 'evidence' ? 'plan.repair' : 'plan.start'); await gate('plan');
 }
 main().catch((e) => { if (owned) fs.rmSync(path.join(runDir, 'lock'), { force: true }); console.log(JSON.stringify({ status: 'error', failure: { failure_class: 'invalid_input', code: e.message, message: 'Unsafe shim arguments: change the command' } })); process.exit(2); });
