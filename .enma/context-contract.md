@@ -9,6 +9,12 @@ A chat becomes a real multi-turn conversation, and chats of the same project sha
 This contract is the single interface between the lanes. If it contradicts the code, STOP and report
 the contradiction instead of improvising. Sections 2 and 12 are normative for every lane.
 
+## Repository instructions addendum (2026-11-22)
+
+`.enma/agents-md-contract.md` governs AGENTS.md discovery and injection. Repository instructions are mandatory instruction, NOT an advisory context layer: they are never counted against or cut by this contract's context budget, pack limits, history allowances or developer-brief limits. Only the independent root cap of **32 KiB (32768 bytes)** applies; files over **1 MiB** are not read in full (only the first 32 KiB), and at most **50** sorted nested paths are listed, not inlined. All agents receive the same initial per-run snapshot, below Scranton's role/tool/sandbox/approval rules. This applies outside Registry mode too; references below to unchanged single-hive prompts or gate prompts concern advisory packs only, not AGENTS.md.
+
+Context inspect / `scranton context show` / HTTP context status add `instructions: { file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null` for the current project workspace. Show it separately from budget consumption; `nestedCount` is the total nested-file count. `tokens` estimates the full rendered block using `src/core/context/tokens.js`. Audit `bytes` and lowercase-hex `sha256` cover the inlined root text after BOM removal and the 32 KiB cut, excluding the notice; audit `nested` is the total nested-file count. This preview is not the immutable instruction snapshot of an active run. `agentsMd:false` / `SCRANTON_AGENTS_MD=0` disables discovery/injection. Run audit summaries, warnings and Pipeline status follow the binding AGENTS.md contract; no content is published in events.
+
 ## 1. Vocabulary
 
 - **Turn**: one run of a chat that is no longer running (Team or Pipeline): the user's request and what

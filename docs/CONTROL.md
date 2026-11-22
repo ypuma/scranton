@@ -420,6 +420,12 @@ Defaults: scheduling off, policy application independently off, interval 360 min
 
 A turn is a run that is no longer live, including failed or interrupted runs. The next turn's advisory pack is rebuilt deterministically from disk, without model calls, network access or Pi session reuse. Projects never share context with other projects. Single-hive behavior is unchanged; these routes do not exist there. Context operations are non-journaled and add no event types.
 
+### Repository instructions
+
+Context inspection and `scranton context show` add a separate `instructions: { file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null` summary for the current project workspace. `nestedCount` is the total count of nested files; `nested` lists at most 50 paths. `bytes` and lowercase-hex `sha256` in run audit metadata cover the inlined root text after BOM removal and the 32 KiB cut, without the notice line; audit `nested` is the total count. Context `tokens` estimates the full rendered instruction block with the same estimator as advisory context, but instruction bytes/tokens are NOT counted in `budget.used`, section totals or developer use, and no context-budget trimming applies. The Context panel shows `Repository instructions: AGENTS.md (N KB, ~T tokens)` with truncated/nested hints, or `No AGENTS.md`. This is a current preview, not the immutable instructions snapshot of an active run.
+
+Root `AGENTS.md` is read once per run from its initial workspace state, shared by every agent, with a **32 KiB (32768 bytes)** inline cap and UTF-8-safe truncation notice. Files over **1 MiB** are read only for the first 32 KiB, never in full. Nested files are listed, not inlined: at most **50** sorted relative POSIX paths, followed by `(+N more)` when needed; snapshot exclusions apply. These are mandatory instructions below role/tool/sandbox/approval rules, not advisory history. Opt-out is `agentsMd:false` or `SCRANTON_AGENTS_MD=0`. Run-specific audit metadata lives in `run_started.instructions` (no content); Pipeline also records `status.instructions`. See [EVENTS.md](EVENTS.md#repository-instructions-additive-v1).
+
 ### Routes and documents
 
 All six routes use the scoped protections of §8: loopback peer, local Host, `X-Scranton-Client: 1` (also GET), and an exact local Origin when supplied. POST requires `Content-Type: application/json` and a JSON object of at most 262144 bytes; no extra fields are accepted. Responses are the documents below, not an envelope.

@@ -55,6 +55,20 @@ When failedCycles reaches maxFailedCycles (default 3): circuit_breaker(tripped) 
 circuit_breaker(reset); "retry": circuit_breaker(reset); "skip": circuit_breaker(reset) (only if the pause came from a breaker trip) + milestone_finished(skipped);
 "abort": milestone_finished(aborted) -> run_finished(aborted).
 
+## Repository instructions (additive v1)
+
+`run_started` optionally adds `instructions`, never instruction content:
+
+- `{ file: 'AGENTS.md', bytes, sha256, truncated: boolean, nested: number }` when the root file is used. `bytes` and lowercase-hex `sha256` cover the inlined root text after BOM removal and the 32 KiB cut, excluding the truncation notice. `nested` is the total count of nested files (not just the listed paths).
+- `{ file: null, nested: n }` when only nested files exist.
+- `null` when disabled or absent. Older journals may omit the field.
+
+Instructions are read once per run from the initial workspace state (the shared shadow snapshot in Team runs), so every role sees the same instructions. The root inline cap is **32 KiB (32768 bytes)**, cut at a UTF-8 code point boundary, preferably a line break, followed by `[AGENTS.md truncated at 32 KiB; read the file for the rest]`. Files over **1 MiB** are not read in full; only the first 32 KiB are read. Nested files are listed, not inlined: sorted relative POSIX paths, at most **50**, then `(+N more)`; snapshot exclusions apply.
+
+Only regular files whose real paths remain inside the workspace qualify. UTF-8 is required, with an optional leading BOM removed. A skipped unsafe/unreadable file emits `log` at `level:'warn'` with reason `escape`, `not_regular`, `binary` (NUL), `invalid_utf8` or `read_error`. These use the existing log event, not a new event type. Disable reading/injection with `agentsMd:false` or `SCRANTON_AGENTS_MD=0` (default true).
+
+Repository instructions are mandatory system-prompt instructions below Scranton's role/tool/sandbox/approval rules, not advisory context; context budgets never count or cut them. Context inspection, `scranton context show` and HTTP context status add a separate `instructions: { file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null` summary of the current project workspace; `nestedCount` is the total nested-file count; `tokens` estimates the full rendered instruction block with the context estimator. Pipeline run status and events carry the instruction summary too; see [PIPELINE.md](PIPELINE.md). Contract version remains 1; consumers must tolerate absent/unknown fields.
+
 ## hive/state.json
 
 Snapshot of the current run, rewritten atomically (temp file + rename) after every event. Missing file = nothing has run yet (show idle).

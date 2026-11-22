@@ -10,6 +10,12 @@ Pipeline benutzt einen festen Python/LangGraph-Ablauf: Snapshot, Baseline, Plan,
 
 Tauri selbst bekommt dafür keine neue Python-IPC-Schicht: Der vorhandene Node-Appserver startet die CLI und bedient HTTP. Ein separater dauerhafter Python-Webserver, LangGraph.js-Port oder zweiter Rust-Supervisor ist nicht Teil dieser Integration.
 
+## AGENTS.md
+
+Die Engine liest Repositoryanweisungen einmal aus dem anfänglichen Workspace-Snapshot und verwendet denselben Stand für Planner, Implementer und Reviewer. Root-`AGENTS.md` wird bis **32 KiB (32768 Bytes)** eingebunden; bei Kürzung bleibt UTF-8 intakt und ein Hinweis wird angefügt. Dateien über **1 MiB** werden nicht vollständig gelesen, sondern nur die ersten 32 KiB. Verschachtelte Dateien werden nur als höchstens **50** sortierte relative POSIX-Pfade aufgeführt (weitere: `(+N more)`), nach den Snapshot-Ausschlussregeln. Nur reguläre Dateien innerhalb des Workspace und gültiges UTF-8 ohne NUL zählen; eine führende BOM wird entfernt. Unsichere oder unlesbare Dateien erzeugen Warnungen.
+
+Diese Anweisungen gelten unter den Rollen-, Tool-, Sandbox- und Freigaberegeln; sie erteilen keine Rechte und sind nicht Teil des beratenden Kontextbudgets. `agentsMd:false` bzw. `SCRANTON_AGENTS_MD=0` schaltet sie ab. Additiv zu Schema 1 enthält `status.instructions` die Zusammenfassung des separaten `instructions`-Events (`data.instructions`), das nach dem Snapshot erscheint: `{file:"AGENTS.md",bytes,sha256,truncated,nested}` bei Rootdatei, `{file:null,nested:n}` bei ausschließlich verschachtelten Dateien, sonst `null`; alte Statusdateien dürfen das Feld auslassen. `bytes` und `sha256` (kleingeschriebener Hex-Hash) beziehen sich auf den eingebundenen Roottext nach BOM-Entfernung und 32-KiB-Kürzung, ohne Hinweiszeile; `nested` ist die Gesamtzahl verschachtelter Dateien. `run_started` bleibt vor dem Graphstart mit leeren Daten unverändert, auch wenn der Snapshot fehlschlägt. Events enthalten niemals den Anweisungstext. Die aktuelle Projektvorschau steht getrennt vom Budget im Context-Panel und in `scranton context show`; sie ist kein rückwirkender Run-Snapshot. [Gemeinsame Ereignisregeln und Warnungsgründe](EVENTS.md#repository-instructions-additive-v1).
+
 ## Einen Lauf starten
 
 1. Projektordner wählen und **New run** öffnen. Bei einem neuen Chat **Pipeline** statt **Team** wählen. Die Engine-Verfügbarkeit wird mit `version` geprüft. Bei Fehler ist die Auswahl deaktiviert und zeigt den Grund; bestehende Pipeline-Chats zeigen weiterhin ihre Daten, aber keinen startbaren Lauf.

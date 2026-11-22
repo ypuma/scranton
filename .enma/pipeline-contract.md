@@ -1499,4 +1499,21 @@ its end, then `earlier` oldest first (incrementing `omitted`), then halve `notes
 The existing history policy sentence stays byte-identical and appears exactly once if either block renders.
 Implementer and reviewer prompts remain unchanged. Every §26 authority rule applies: advisory only,
 planner only, current task wins, no approvals, completed state, check success, or repository evidence;
-fresh reads, checks and approval gates remain required. No context carries executable instructions.
+fresh reads, checks and approval gates remain required. No advisory context carries executable instructions.
+
+## 28. Repository instructions (AGENTS.md, additive schema 1, 2026-11-22)
+
+Binding discovery/injection/audit rules are `.enma/agents-md-contract.md`. Read instructions once from the initial workspace snapshot and use that same snapshot for planner, implementer and reviewer calls. Append them after Scranton's own role/tool instructions; role, tool, sandbox and approval rules always win. They cannot grant tools, permissions or network access. Nested instructions take precedence over root instructions for their subtree and must be read before changes there.
+
+Root inline cap: **32 KiB (32768 bytes)**, cut on a UTF-8 code point boundary, preferably the last line break, followed by `[AGENTS.md truncated at 32 KiB; read the file for the rest]`. Files over **1 MiB** are not read in full; only the first 32 KiB are read. Nested files are listed, not inlined: at most **50** sorted relative POSIX paths, then `(+N more)`; snapshot exclusions apply. Only regular workspace-contained files qualify; remove a leading UTF-8 BOM, skip NUL/invalid UTF-8 and emit warnings with reasons `escape`, `not_regular`, `binary`, `invalid_utf8`, `read_error`. With nested files only, inject the heading/policy/list; with neither root nor nested files, inject nothing. `agentsMd:false` / `SCRANTON_AGENTS_MD=0` disables reading/injection.
+
+`run_started` keeps its original empty data and emission before graph execution, including when snapshotting fails. After snapshot discovery, a dedicated additive `instructions` event carries `data: { instructions: <summary> }`; never delay or change `run_started` for discovery.
+
+Additive optional `RunStatus.instructions` (status.json and CLI stdout, still schema 1) and event instruction summary:
+- `{ file: 'AGENTS.md', bytes, sha256, truncated: boolean, nested: number }` when root instructions are used.
+- `{ file: null, nested: n }` when only nested files exist.
+- `null` when disabled or absent; older status files may omit the field.
+
+`bytes` and lowercase-hex `sha256` cover the inlined root text after BOM removal and the 32 KiB cut, excluding the notice line. Event/status `nested` is the total count of nested files, not just the listed paths. Never publish instruction content in events. Node/UI transport the status field additively. Context inspection uses the distinct current-workspace summary `{ file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null`, not an active run's historical snapshot. `nestedCount` is the total nested-file count; `tokens` estimates the full rendered instruction block.
+
+AGENTS.md is mandatory instruction, not §26/§27 advisory history/context: do not count or cut it against context budgets, history/context allowances, or advisory section totals. Only its independent 32 KiB inline cap applies. Earlier planner-only/unchanged implementer/reviewer statements refer to advisory history/context, not this instruction block.

@@ -12,6 +12,12 @@ the model)".
 Evidence behind the decisions: `.scratch/context-budget/inventory/INVENTORY.md` (enforcement points, pinned
 tests) and `.scratch/context-budget/probe/FINDINGS.md` (what the transports carry, how windows are looked up).
 
+## Repository instructions addendum (2026-11-22)
+
+AGENTS.md is mandatory instruction, NOT advisory context. `.enma/agents-md-contract.md` governs it independently of every budget, allowance, pack limit and shedding rule below: do not charge its bytes/tokens to `budget.used`, developer use, Pipeline history/context allowances or section totals, and do not cut it to fit those budgets. Its root inline cap is **32 KiB (32768 bytes)**; files over **1 MiB** are read only for the first 32 KiB, never in full. At most **50** sorted nested paths are listed, not inlined. Discovery uses one initial per-run snapshot shared by all roles; role/tool/sandbox/approval rules still take precedence.
+
+Context inspect / CLI / HTTP context status gain the separate `instructions: { file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null` summary for the current workspace. `nestedCount` is the total nested-file count. Estimate tokens for the full rendered instruction block with §2, but show them separately from advisory budget consumption. The Context panel shows `Repository instructions: AGENTS.md (N KB, ~T tokens)` with truncated/nested hints or `No AGENTS.md`. The preview is not a historical run snapshot. Existing claims about unchanged gate/single-hive prompts apply only to advisory context; AGENTS.md reaches all agents, including Pipeline implementer/reviewer. Disable with `agentsMd:false` / `SCRANTON_AGENTS_MD=0`.
+
 ## 1. Summary
 
 - Budgets are **estimated tokens** (§2), derived for each **recipient model** from its context window (§3).
