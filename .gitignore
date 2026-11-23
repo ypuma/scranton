@@ -5,6 +5,9 @@ src-tauri/staged/
 src-tauri/binaries/
 
 .scratch/
+.local-native/
+.DS_Store
+Thumbs.db
 workspace/
 demo-workspace/
 .env

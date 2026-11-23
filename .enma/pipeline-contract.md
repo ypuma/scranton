@@ -583,8 +583,9 @@ usage). Written for EVERY terminal outcome, including failures (then with the la
 ## 8. Python quality gates and required tests
 
 Environment: venv `.scratch\pipeline\venv` (Python 3.14, created by the API spike). Before commands set
-TEMP/TMP/TMPDIR to `C:\Users\pumas\Documents\Project_Scranton\.scratch\pipeline\tmp`, PIP_CACHE_DIR to
-`...\.scratch\pipeline\pip-cache`, PYTHONPYCACHEPREFIX to `...\.scratch\pipeline\bytecode`. From cwd `engine\`:
+TEMP/TMP/TMPDIR, PIP_CACHE_DIR and PYTHONPYCACHEPREFIX to the absolute paths of
+`.scratch\pipeline\tmp`, `.scratch\pipeline\pip-cache` and `.scratch\pipeline\bytecode` respectively,
+resolved relative to the repository root. From cwd `engine\`:
 ```
 ..\.scratch\pipeline\venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider --basetemp ../.scratch/pipeline/pytest-<lane>
 ..\.scratch\pipeline\venv\Scripts\python.exe -m ruff check src tests --cache-dir ../.scratch/pipeline/ruff-<lane>

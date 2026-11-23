@@ -10,7 +10,7 @@ visualise the run. USER DIRECTION for every UI: professional, dark, strictly mon
 dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use inversion).
 
 ## Environment (verified)
-- Windows, commands run through cmd.exe. Project root: `C:\Users\pumas\Documents\Project_Scranton`.
+- Windows, commands run through cmd.exe. Project root: the repository root.
 - Node v24.22.1. npm 11.19.1 - call it as `npm.cmd` from cmd (`npm` alone is not on PATH for tools).
 - Do not infer credential availability from old notes. Never print credentials. Deterministic tests use the own scripted provider: `SCRANTON_FAKE_MODE=1` together with `SCRANTON_FAKE_SCENARIO`; a scenario alone does not enable it. Any real-model smoke test must be explicitly scoped and reported separately.
 - Docker Desktop 29.9.2 (Linux engine) is installed since 2026-11-09. Scranton's own OS sandbox is the default; Docker is an optional tool-only executor with image `scranton-tools:24-r2`. Check local images before relying on them. Do not install system software or build/pull images unless the task says so. All sandbox modes fail closed; explicit trusted-host execution is not OS isolation. Models and credentials stay on the host in Docker, with the same Automatic/default/override rules as other modes.

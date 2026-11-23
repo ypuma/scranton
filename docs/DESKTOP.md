@@ -18,16 +18,43 @@ set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 npm.cmd run app:dev
 ```
 
-`app:dev` führt die Vorbereitung automatisch aus und öffnet die native Anwendung. Zum Release-Build:
+`app:dev` führt die Vorbereitung automatisch aus und öffnet die native Anwendung. Für einen lokalen Build ohne Update-Signaturschlüssel:
 
 ```bat
 set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 npm.cmd run app:build
 ```
 
-Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Der NSIS-Installer liegt anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.6.0_x64-setup.exe`.
+Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.7.0 liegt der NSIS-Installer anschließend unter
+`src-tauri\target\release\bundle\nsis\Scranton_0.7.0_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
+
+## Desktop-Updates
+
+### Ablauf und Schnittstellen
+
+Der Rust-Teil der Tauri-App liest `https://github.com/ypuma/scranton/releases/latest/download/latest.json` über HTTPS. Die öffentlichen Releases sind ohne GitHub-Token erreichbar. Das Tauri-Updater-Plugin prüft die Minisign-Signatur mit dem in `src-tauri/tauri.conf.json` unter `plugins.updater.pubkey` hinterlegten öffentlichen Schlüssel und lehnt Downgrades ab. Diese Signatur ist unabhängig vom Windows-Codesigning und verhindert keine SmartScreen-Warnungen.
+
+Die WebView erhält keine Updater-Plugin-Rechte. Das Hauptfenster ruft stattdessen die Rust-Kommandos `update_status`, `update_check`, `update_download`, `update_set_settings` und `update_install` auf. Änderungen meldet Rust als `update-status`. Rust speichert `autoCheck` und `autoInstall` in `<app data>/updates.json`; beide sind standardmäßig an. Die automatische Suche läuft 30 Sekunden nach der Ready-Meldung des Servers und danach alle sechs Stunden (Anfrage-Timeout: 15 Sekunden). Bei eingeschaltetem `autoInstall` lädt Rust verfügbare Updates im Hintergrund; sonst startet der Download auf Anforderung. Heruntergeladene Installer liegen nach Version im Unterordner `updates/` des lokalen App-Datenverzeichnisses.
+
+- **Restart and update:** Rust fragt den Node-Server über `GET /api/app/busy` auf Loopback ab. Die Antwort `{ running, waitingForHuman }` zählt Team- und Pipeline-Läufe und offene Rückfragen über alle Chats im Registry- oder Single-Modus. Bei einem aktiven Lauf oder einer offenen Rückfrage verweigert `update_install` die Installation mit `busy` und den Zählern. Andernfalls beendet Rust den Server wie beim normalen Beenden und übergibt dann an den Installer. Die App startet nach der Installation neu.
+- **Beim nächsten Start:** Wenn `autoInstall` aktiv ist und ein Download vorliegt, prüft Rust **vor dem Start des Node-Servers** nochmals auf Updates (Timeout: 10 Sekunden). Nur wenn das Release dieselbe Version anbietet und der Installer die Signaturprüfung besteht, wird installiert. Bei Fehler oder abweichender Version startet die bisherige App normal.
+
+Der Windows-Updater startet NSIS passiv mit `/UPDATE`; der alte Uninstaller wird übersprungen und die App-Daten bleiben erhalten. **Version 0.7.0 einmal manuell installieren. Beim manuellen Installieren über eine ältere Version niemals „Delete the application data“ anhaken.**
+
+Automatische Updates werden zunächst nur für `windows-x86_64` angeboten. macOS und Linux erhalten erst dann Updates, wenn es passende signierte Builds und Manifest-Einträge gibt. Eine fehlende Plattform ist kein Fehler (`unsupported`).
+
+### Signaturschlüssel und Backup
+
+Das Schlüsselpaar einmalig mit `node scripts/updater-keygen.mjs` erzeugen. Das Skript überschreibt keinen vorhandenen Schlüssel. Der private Schlüssel liegt außerhalb des Repositorys und der App-Daten unter `%USERPROFILE%\.scranton-release\updater.key.dpapi`. Er ist mit Windows-DPAPI an das aktuelle Benutzerkonto gebunden (`CurrentUser`). Nur der öffentliche Schlüssel gehört in die Tauri-Konfiguration.
+
+`node scripts/updater-keygen.mjs --export <file>` schreibt auf ausdrückliche Anforderung eine **Klartextkopie** an den angegebenen Ort. Die Kopie außerhalb des Repositorys direkt auf einem geschützten, verschlüsselten Backup-Medium ablegen; nie committen, hochladen oder in Logs ausgeben. **Geht der private Schlüssel verloren, können bestehende Installationen keine weiteren automatischen Updates erhalten.**
+
+### Update veröffentlichen (Windows x64)
+
+1. Version für das Release setzen, Release Notes als Textdatei vorbereiten und die lokalen Prüfungen für den zu veröffentlichenden Stand ausführen.
+2. Aus dem Repositoryroot auf dem lokalen Windows-Buildhost `npm.cmd run app:release -- --notes-file <file>` ausführen (`<file>` durch den Pfad zu den Release Notes ersetzen). Das Skript lädt den privaten Schlüssel nur für den Build, aktiviert die Updater-Artefakte, prüft die erzeugte `.sig` gegen den eingecheckten öffentlichen Schlüssel und legt Installer, Signatur und `latest.json` gemeinsam im ausgegebenen Ordner ab. `npm.cmd run app:build` bleibt ohne Schlüssel nutzbar und erzeugt diese Updater-Artefakte nicht.
+3. Auf GitHub einen Release zum passenden Tag `v<version>` vorbereiten. Den NSIS-Installer, seine `.sig` und `latest.json` aus demselben Build mit unveränderten Dateinamen hochladen. Prüfen, dass `latest.json` auf diesen Installer unter `/releases/download/v<version>/` verweist. Als regulären Release veröffentlichen (**kein Prerelease**) und als **Latest** markieren, damit der öffentliche Update-Endpunkt das Manifest findet.
 
 ## Smartphone-Steuerung ohne Checkout (Windows)
 
@@ -108,10 +135,10 @@ Prüfgrenze: Konfiguration, enge Capability und Rust-Kompilierung werden automat
 - Eine zweite Instanz fokussiert das vorhandene Fenster. Das Tray-Menü bietet **Show / Hide** und **Quit**; der Tooltip „Scranton — Human needed“ basiert auf `GET /api/control` → `pendingHuman`, nicht auf dem möglicherweise veralteten Hive-Snapshot. Nur ein noch lebender Run kann ihn aktivieren.
 - Die Hülle überwacht den Sidecar auch nach der Ready-Zeile. Bei unerwartetem Exit erscheint ein nativer Fehlerdialog mit Exitstatus und bis zu 8 KiB stderr-Ende. **Restart** startet den Server neu und lädt dessen neue URL; **Quit** beendet die App. Es gibt keine automatische Neustartschleife.
 - Das Fensterkreuz beendet die App (nicht nur ins Tray minimieren). Beim Beenden sendet die Hülle `quit` über stdin; nach fünf Sekunden wird nötigenfalls der Prozessbaum mit `taskkill /T /F` beendet. Ein harter OS-Abbruch kann diese Aufräumphase verhindern; der Server beendet sich zusätzlich bei stdin-EOF.
-- `withGlobalTauri: true` stellt unter anderem `window.__TAURI__.notification` und `window.__TAURI__.window.getCurrentWindow()` bereit. Die drei aktiven Capabilities gelten ausschließlich für das Fenster `main`, nicht für lokale Seiten (`local: false`), und für `http://127.0.0.1:*` bzw. `http://localhost:*`.
+- `withGlobalTauri: true` stellt unter anderem `window.__TAURI__.notification` und `window.__TAURI__.window.getCurrentWindow()` bereit. Die Dashboard-Capabilities gelten ausschließlich für das Fenster `main` und für Loopback-Webursprünge, nicht für lokale Dateiseiten (`local: false`).
 - Im Windows-Release mit WebView2 per CDP geprüft: Auch mit dem vom Server gelieferten `default-src 'self'; script-src 'self'; ...; connect-src 'self'` bleiben die injizierten Tauri-Globals und die IPC-Aufrufe für Benachrichtigungsberechtigung und Versand funktionsfähig. Dafür ist auf diesem Windows-Build keine `connect-src`-Erweiterung nötig. Nicht freigegebene Dateisystem-IPC bleibt gesperrt. Andere Plattformen/WebViews wurden nicht geprüft.
-- Freigegeben sind ausschließlich die drei Benachrichtigungsrechte `notification:allow-is-permission-granted`, `notification:allow-request-permission`, `notification:allow-notify`, der vorhandene Ordnerdialog `dialog:allow-open` sowie die fünf Titelleistenrechte `core:window:allow-minimize`, `core:window:allow-toggle-maximize`, `core:window:allow-close`, `core:window:allow-is-maximized`, `core:window:allow-start-dragging`. Keine Default-Permissions, Shell-, Dateisystem- oder weiteren Core-Rechte für die Webseite. JS-`close()` löst `CloseRequested` aus; der vorhandene Rust-Handler fängt es ab und beendet den Sidecar geordnet.
-- Der variable Port erfordert eine Loopback-Port-Wildcard. Auch andere lokale Dienste auf diesen Hosts liegen deshalb im Ursprungsscope, erhalten aber nur die oben aufgezählten Benachrichtigungs-, Dialog- und Titelleistenrechte. Navigation erfolgt beim Start nur auf eine geprüfte `http://127.0.0.1:<port>`-URL.
+- Für Benachrichtigungen, Ordnerdialog und Titelleiste gelten die drei Benachrichtigungsrechte `notification:allow-is-permission-granted`, `notification:allow-request-permission`, `notification:allow-notify`, der vorhandene Ordnerdialog `dialog:allow-open` sowie die fünf Titelleistenrechte `core:window:allow-minimize`, `core:window:allow-toggle-maximize`, `core:window:allow-close`, `core:window:allow-is-maximized`, `core:window:allow-start-dragging`. Die separate Update-Capability für `http://127.0.0.1:*` erlaubt die fünf beschriebenen Rust-Kommandos sowie `core:event:allow-listen` und `core:event:allow-unlisten`. Keine Default-Permissions, Shell-, Dateisystem- oder Updater-Plugin-Rechte für die Webseite. JS-`close()` löst `CloseRequested` aus; der vorhandene Rust-Handler fängt es ab und beendet den Sidecar geordnet.
+- Der variable Port erfordert eine Loopback-Port-Wildcard. Auch andere lokale Dienste auf diesen Hosts liegen deshalb im Ursprungsscope der jeweiligen Capability. Navigation erfolgt beim Start nur auf eine geprüfte `http://127.0.0.1:<port>`-URL.
 - Notification-Anzeige hängt von Windows-Berechtigungen/Benachrichtigungseinstellungen ab. In der Entwicklungsumgebung kann Windows PowerShell-Identität/Icons anzeigen; für die endgültige Anwendungsidentität den installierten Build verwenden.
 
 Capability-Syntax geprüft gegen die [Tauri-v2-Capabilities-Dokumentation](https://v2.tauri.app/security/capabilities/) (Abschnitt Remote API Access) und die beim Build generierten Schemas. Die Kennung `dev.scranton.desktop` vermeidet die macOS-Warnung zum `.app`-Suffix.
@@ -166,7 +193,7 @@ Die oben beschriebene frühere WebView2-/Benachrichtigungsprüfung ist kein Nach
 
 ## Deinstallieren
 
-Deinstallieren entfernt Programmdateien, nicht Hive, Credentialstore, .env oder Workspace. Nach dem Beenden bei Bedarf gesondert sichern/entfernen. Das einmalig gelesene Pi-Profil bleibt unangetastet und kann anderen Anwendungen gehören.
+Ohne Auswahl von „Delete the application data“ entfernt die Deinstallation die Programmdateien, nicht die App-Daten. Hive, Credentialstore und `.env` bei Bedarf nach dem Beenden gesondert sichern/entfernen. Projektdateien im Workspace gehören nicht zum Installer. Das einmalig gelesene Pi-Profil bleibt unangetastet und kann anderen Anwendungen gehören.
 
 ## Native Builds und CI-Matrix
 

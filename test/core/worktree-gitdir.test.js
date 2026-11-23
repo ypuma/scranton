@@ -12,7 +12,7 @@ fs.mkdirSync(scratch, { recursive: true });
 test('deep registry hive supports planner, developer, QA, snapshot and integration', async (t) => {
   const root = fs.mkdtempSync(path.join(scratch, 'case-'));
   const workspace = path.join(root, 'workspace');
-  const data = path.join(root, 'd'.repeat('C:\\Users\\pumas\\AppData\\Roaming\\dev.scranton.desktop'.length));
+  const data = path.join(root, 'd'.repeat('C:\\Users\\user1\\AppData\\Roaming\\dev.scranton.desktop'.length));
   const hiveDir = path.join(data, 'projects', 'p'.repeat(49), 'chats', randomUUID(), 'hive');
   fs.mkdirSync(workspace, { recursive: true });
   fs.writeFileSync(path.join(workspace, 'base.txt'), 'baseline');

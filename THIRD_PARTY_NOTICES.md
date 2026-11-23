@@ -1,6 +1,42 @@
 # Third-party notices
 
+## Desktop installer license inventory
+
+In a desktop installation, open `app/licenses/index.json` under the bundled
+resources. It lists the target, component versions, and paths (relative to
+`app/`) to the included license and notice texts, with byte counts and SHA-256
+hashes. A source checkout generates the same inventory as
+`src-tauri/staged/app/licenses/index.json` when running `app:prepare`.
+
+- **Node.js:** `app/licenses/node/LICENSE` is the upstream license for the
+  exact official Node.js executable packaged as the `scranton-node` sidecar.
+  It includes notices for Node.js's bundled dependencies. Preparation checks the
+  executable against the published release before staging the text.
+- **CPython and Pipeline wheels:** `app/engine-runtime/python/` contains the
+  pinned CPython distribution and its `LICENSE.txt` (under `lib/python3.14/` on
+  standalone Unix distributions). The inventory lists every installed wheel's
+  notices in `app/engine-runtime/site-packages/*.dist-info/`. For the
+  `sqlite-vec` wheel, which omits its license texts, both upstream texts are in
+  `app/licenses/python-wheels/`. If Pipeline is deliberately omitted from a
+  build, its inventory is `null`.
+- **Tauri and other Rust crates:** the inventory lists the target-filtered
+  normal dependency closure of both the desktop executable and the sandbox
+  helper, separately. `app/licenses/rust/` contains the crate license and notice
+  texts. The inventory records the version, Cargo source, upstream repository,
+  and declared license for each crate; exact registry source releases are
+  available from crates.io. Build-only and dev-only dependency edges are not
+  followed. Where crate archives omit a text, preparation uses a reviewed,
+  hash-pinned copy from upstream (or the canonical MPL 2.0 text for `selectors`).
+- **ripgrep and fd:** `app/licenses/tools/rg/` and `app/licenses/tools/fd/`
+  contain the license texts copied from the same `tools-lock.json` release
+  archives as the executables. Their licenses are also reproduced below.
+- **Node packages:** the production packages under `app/node_modules/` retain
+  the notices supplied in their npm distributions. The package versions are
+  pinned by `app/package-lock.json`.
+
 ## Pi / @earendil-works/pi-ai 1.5.2
+
+Scranton no longer ships or executes Pi as a runtime dependency. This notice covers the catalogue data and adaptations retained below. The one-time Pi settings import is implemented by Scranton and does not invoke Pi.
 
 `src/core/llm/models.json` is a snapshot (2026-11-21) of the Anthropic, OpenAI and Google chat catalogue in pi-ai 1.5.2. `src/core/llm/account-models.json` adds projected ChatGPT/Codex and Google Vertex chat metadata from the same MIT snapshot (2026-11-22); GPT-6.2 Sol metadata is from https://developers.openai.com/api/docs/models/gpt-6.2-sol (2026-11-22). Antigravity Gemini 3.8 Flash wire variants were confirmed by the account's Cloud Code Assist model listing. The tier/cache cost algorithm in `catalogue.js` and Claude subscription identity/tool-name constants in `anthropic-messages.js` are adapted from that package. Provider protocol methodology was studied there; Scranton's fetch clients, SSE parser and stream implementation are independent and do not import Pi or provider SDKs.
 
@@ -28,6 +64,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+
+## Geist font
+
+Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font) Geist-Italic[wght].ttf: Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
+
+Source: https://github.com/vercel/geist-font
+
+License: SIL Open Font License 1.1. See [LICENSE-Geist.txt](visualizer/public/fonts/LICENSE-Geist.txt) for the full license.
 
 ## ripgrep 15.2.0
 

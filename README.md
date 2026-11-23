@@ -421,6 +421,14 @@ Alte Pi-Einstellungen werden mit klarer Fehlermeldung abgewiesen: sämtliche `pi
 
 Gates erlauben nur `read`, `grep`, `find`, `ls` und Shell (`bash` bzw. `powershell`). Keine `write`-/`edit`-Tools; Shell ist dennoch schreibfähig. Die OS-Sandbox begrenzt Prozesse, die Tool-Allowlist ersetzt diese Grenze nicht. `extraArgs` sind für alle Rollen abgewiesen.
 
+## Updates
+
+Automatische Updates gibt es derzeit nur für die Windows-x64-Desktop-App. Installiere **Version 0.7.0** einmal manuell von den [öffentlichen GitHub-Releases](https://github.com/ypuma/scranton/releases). Sie ist die erste Version, die sich selbst aktualisieren kann. **Beim manuellen Installieren über eine ältere Version niemals „Delete the application data“ anhaken.**
+
+Standardmäßig sucht Scranton rund 30 Sekunden, nachdem die App bereit ist, und danach alle sechs Stunden nach Updates. Ein verfügbares Update wird im Hintergrund heruntergeladen und beim nächsten Start installiert. Wenn der Download fertig ist, kannst du stattdessen **Neu starten und aktualisieren** (**Restart and update**) wählen. Scranton installiert nie, solange ein Team- oder Pipeline-Lauf aktiv ist oder eine Rückfrage auf deine Antwort wartet. Die Updates kommen aus den öffentlichen GitHub-Releases; Scranton prüft die Signatur vor der Installation.
+
+Unter **Settings → Updates** kannst du die automatische Suche und die automatische Installation beim nächsten Start einzeln ein- oder ausschalten. Dort kannst du auch von Hand nach Updates suchen. Wenn die automatische Installation ausgeschaltet ist, startest du den Download und die Installation selbst. Im normalen Browser werden keine Updates installiert; einen Checkout aktualisierst du mit `git pull`.
+
 ## Entwicklung, Desktop und Prüfstand
 
 ```powershell

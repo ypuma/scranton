@@ -8,7 +8,7 @@ import { createHiveSource } from '../../src/dashboard/source.js';
 import { sanitize, stripAnsi, textWidth, visibleWidth } from '../../src/dashboard/text.js';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
-const HIVE = 'C:\\Users\\pumas\\Documents\\Project_Scranton\\hive';
+const HIVE = 'C:\\Users\\user\\Documents\\Project_Scranton\\hive';
 
 async function fixture(name) {
   const source = createHiveSource(path.join(fixtures, name));
