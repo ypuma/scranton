@@ -20,7 +20,7 @@ import { getAuthService } from '../core/auth.js';
 import { isLoopbackAddress } from '../core/network.js';
 import { teamDreamingContext } from '../core/dreaming-sources.js';
 
-const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question', 'progress'];
+const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question', 'progress', 'access'];
 // Error/blocked invocations can retry; only completed instances stop accepting queued chat.
 const CHAT_RECIPIENT_STATES = new Set(['idle', 'thinking', 'working', 'waiting', 'blocked', 'error']);
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -105,10 +105,11 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     let execution = null;
     let workflow = null;
     let models = Object.fromEntries(AGENT_IDS.map((id) => [id, null]));
-    let configurationError = null, agents = [];
+    let configurationError = null, agents = [], permissions = 'ask';
     try {
       const config = configuration();
       configurationError = config.workflowWarning;
+      permissions = config.permissions;
       execution = { ...config.execution };
       if (execution.conversation !== true) delete execution.conversation;
       workflow = config.workflow;
@@ -118,7 +119,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     catch (err) { configurationError = err.message; }
     void recoverGone();
     const orphan = active ? null : orphanSnapshot(hive, recoveryError);
-    return { v: 1, enabled: true, dreamingWarning, workspace, scenarios: SCENARIOS, run: active?.info ?? null, lastExit, pendingHuman, defaults: { execution, workflow, models, agents, thinkingLevels: THINKING_LEVELS, configurationError }, instances, sessions: state?.sessions ?? {}, chatAck: state?.chatAck ?? null, recoveryRequired: Boolean(orphan), orphan };
+    return { v: 1, enabled: true, dreamingWarning, workspace, scenarios: SCENARIOS, run: active?.info ?? null, lastExit, pendingHuman, defaults: { permissions, execution, workflow, models, agents, thinkingLevels: THINKING_LEVELS, configurationError }, instances, sessions: state?.sessions ?? {}, chatAck: state?.chatAck ?? null, recoveryRequired: Boolean(orphan), orphan };
   }
 
   function stop(delay = 15000) {
@@ -162,6 +163,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     if (body.milestoneTokenBudget !== undefined && (!Number.isInteger(body.milestoneTokenBudget) || body.milestoneTokenBudget < 0 || body.milestoneTokenBudget > 20000000)) throw error(400, 'Invalid milestoneTokenBudget');
     if (body.noPlan !== undefined && typeof body.noPlan !== 'boolean') throw error(400, 'Invalid noPlan');
     if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw error(400, 'Invalid conversation');
+    if (body.permissions !== undefined && !['ask', 'auto', 'bypass'].includes(body.permissions)) throw error(400, 'Invalid permissions');
     const baseConfig = configuration();
     if (body.sandbox !== undefined && !['scranton', 'docker', 'host'].includes(body.sandbox)) throw error(400, 'Invalid sandbox');
     if (body.trustedHost !== undefined && typeof body.trustedHost !== 'boolean') throw error(400, 'Invalid trustedHost');
@@ -196,6 +198,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     else if (body.request.length <= 4000) args.push('--', body.request);
     // parseArgs accepts options after positionals, but not after the -- terminator.
     const options = ['--gates', workflow.gates.map((stage) => stage.join('+')).join(','), '--single-hive', '--hive', hive, '--workspace', ws, '--on-breaker', 'hive'];
+    if (body.permissions !== undefined) options.push('--permissions', body.permissions);
     if (body.maxCycles !== undefined) options.push('--max-cycles', String(body.maxCycles));
     if (body.maxStalledCycles !== undefined) options.push('--max-stalled', String(body.maxStalledCycles));
     if (body.milestoneTokenBudget !== undefined) options.push('--milestone-tokens', String(body.milestoneTokenBudget));
@@ -227,7 +230,7 @@ export function createControl({ hive, workspace, runner = spawn, auth = getAuthS
     }
     let recipients;
     if (!demo) {
-      const launchConfig = loadConfig({ cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_DATA: '', SCRANTON_SETTINGS_DIR: baseConfig.settingsDir }, flags: { workspace: ws, hive, gates: workflow.gates.map((s) => s.join('+')).join(','), sandbox: body.sandbox, trustedHost: body.trustedHost, sandboxImage: body.sandboxImage, sandboxNetwork: body.sandboxNetwork === 'bridge' ? 'allow' : body.sandboxNetwork, approve: body.approvals?.tools.join(','), approvalTimeout: body.approvals?.timeoutSeconds } });
+      const launchConfig = loadConfig({ cwd: PACKAGE_ROOT, env: { ...process.env, ...modelEnv, SCRANTON_DATA: '', SCRANTON_SETTINGS_DIR: baseConfig.settingsDir }, flags: { workspace: ws, hive, gates: workflow.gates.map((s) => s.join('+')).join(','), sandbox: body.sandbox, trustedHost: body.trustedHost, sandboxImage: body.sandboxImage, sandboxNetwork: body.sandboxNetwork === 'bridge' ? 'allow' : body.sandboxNetwork, permissions: body.permissions, approve: body.approvals?.tools.join(','), approvalTimeout: body.approvals?.timeoutSeconds } });
       if (prepareThread && threadContext) {
         const [planner, developer] = await Promise.all(['michael', 'dwight'].map((id) => modelWindows.resolve(launchConfig.agents[id].modelSetting.value)));
         recipients = { planner, developer };

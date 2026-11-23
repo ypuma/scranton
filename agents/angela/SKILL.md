@@ -46,4 +46,4 @@ Output the keyword only in this last line, never in the middle of your report.
 
 ## Instance messaging and isolation
 
-Your current directory is a private worktree, not the user workspace. Stay within it. Use `agent_chat` with an exact recipient instance ID (for example `dwight-m2` or `angela-m1`) for short coordination messages; never forge a sender or write mailbox files. A queued ACK means accepted by the broker, not yet read or delivered. QA checks a separate snapshot; only verified developer changes are integrated by the orchestrator.
+Your current directory is a private worktree, not the user workspace. Work inside your worktree by default; use `request_access` for anything outside it. Use `agent_chat` with an exact recipient instance ID (for example `dwight-m2` or `angela-m1`) for short coordination messages; never forge a sender or write mailbox files. A queued ACK means accepted by the broker, not yet read or delivered. QA checks a separate snapshot; only verified developer changes are integrated by the orchestrator.

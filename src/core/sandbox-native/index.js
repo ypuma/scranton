@@ -4,6 +4,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawn as hostSpawn, spawnSync } from 'node:child_process';
+import { hasCredentialName } from './protected.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const marker = '.scranton-sandbox-owned';
@@ -52,8 +53,33 @@ export function credentialLocations({ platform = process.platform, home = os.hom
   return [...new Set([path.resolve(own), ...['.ssh', '.aws', '.config/gcloud', '.pi'].map((p) => path.join(home, p)), ...(platform === 'darwin' ? [path.join(home, 'Library/Keychains')] : [])])];
 }
 
+function protection({ credentials, protectedRoots, extraRoots }) {
+  const configured = [...new Set([...credentials, ...protectedRoots.filter(r => r.category === 'credentials').map(r => r.path)])];
+  const state = [...new Set(protectedRoots.filter(r => r.category === 'scranton-state' && extraRoots.some(g => within(g.path, r.path) || within(r.path, g.path))).map(r => r.path))];
+  const approved = extraRoots.filter(g => g.protected === 'credentials' && (configured.some(dir => within(dir, g.path)) || hasCredentialName(g.path)));
+  const discovered = extraRoots.flatMap(g => g.shellMasks ?? []).map(mask => mask.path);
+  return { state, approved, credentials: [...new Set([...configured, ...discovered])] };
+}
+
 const scheme = (value) => JSON.stringify(value);
-export function seatbeltProfile({ worktree, tempDir, network = true, credentials = credentialLocations({ platform: 'darwin' }) }) {
+const subpath = dir => `(subpath ${scheme(dir)})`;
+function deniedSubpaths(roots, exceptions) {
+  return roots.flatMap(dir => {
+    if (exceptions.some(root => within(root, dir))) return [];
+    const children = exceptions.filter(root => within(dir, root));
+    return children.length ? [`(require-all ${subpath(dir)} ${children.map(root => `(require-not ${subpath(root)})`).join(' ')})`] : [subpath(dir)];
+  });
+}
+
+export function seatbeltProfile({ worktree, tempDir, network = true, credentials = credentialLocations({ platform: 'darwin' }), extraRoots = [], protectedRoots = [] }) {
+  extraRoots = extraRoots.filter(g => g.shellMasks !== null);
+  const protectedPaths = protection({ credentials, protectedRoots, extraRoots });
+  const credentialReads = deniedSubpaths(protectedPaths.credentials, protectedPaths.approved.map(g => g.path));
+  const credentialWrites = deniedSubpaths(protectedPaths.credentials, protectedPaths.approved.filter(g => g.mode === 'write').map(g => g.path));
+  // The private worktree and temp may live below the Hive's isolation directory.
+  const stateExceptions = grants => protectedPaths.state.flatMap(dir => deniedSubpaths([dir], [...[worktree, tempDir].filter(p => p !== dir), ...grants.filter(g => within(dir, g.path)).map(g => g.path)]));
+  const deniedReads = [...credentialReads, ...stateExceptions(extraRoots.filter(g => g.protected))];
+  const deniedWrites = [...credentialWrites, ...stateExceptions(protectedPaths.approved.filter(g => g.mode === 'write'))];
   return [
     '(version 1)', '(deny default)', '(allow process-exec)', '(allow process-fork)',
     '(allow signal (target same-sandbox))', '(allow process-info* (target same-sandbox))', '(allow sysctl-read)',
@@ -64,16 +90,41 @@ export function seatbeltProfile({ worktree, tempDir, network = true, credentials
     network ? '(allow network*)' : '(deny network*)',
     '(deny mach-lookup (global-name-prefix "com.apple.coreservices.") (global-name-prefix "com.apple.lsd.") (global-name-prefix "com.apple.ae") (global-name "com.apple.launchservicesd") (global-name "com.apple.launchd") (global-name "com.apple.xpc.launchd"))',
     '(deny appleevent-send)',
-    ...(credentials.length ? [`(deny file-read* ${credentials.map((dir) => `(subpath ${scheme(dir)})`).join(' ')})`] : []),
+    ...extraRoots.map(root => `(allow file-read*${root.mode === 'write' ? ' file-write*' : ''} (subpath ${scheme(root.path)}))`),
+    ...(deniedReads.length ? [`(deny file-read* ${deniedReads.join(' ')})`] : []),
+    ...(deniedWrites.length ? [`(deny file-write* ${deniedWrites.join(' ')})`] : []),
   ].join('\n');
 }
 
-export function bubblewrapArgs({ worktree, tempDir, cwd = worktree, network = true, credentials = credentialLocations({ platform: 'linux' }), env = process.env }, file, argv = []) {
+function safeStat(dir) {
+  try { return fs.lstatSync(dir, { throwIfNoEntry: false }); } catch { return undefined; }
+}
+
+export function bubblewrapArgs({ worktree, tempDir, cwd = worktree, network = true, credentials = credentialLocations({ platform: 'linux' }), env = process.env, extraRoots = [], protectedRoots = [] }, file, argv = []) {
   const runtime = env.XDG_RUNTIME_DIR;
   if (runtime && (!path.posix.isAbsolute(runtime) || path.posix.normalize(runtime) === '/')) throw new Error('XDG_RUNTIME_DIR must be an absolute non-root path');
   const hidden = [...new Set(['/run', '/run/user', ...(runtime ? [runtime] : [])])];
+  const bind = roots => roots.flatMap(root => [root.mode === 'write' ? '--bind' : '--ro-bind', root.path, root.path]);
+  extraRoots = extraRoots.filter(g => g.shellMasks !== null);
+  const protectedPaths = protection({ credentials, protectedRoots, extraRoots });
+  const { approved } = protectedPaths;
+  const stateGrants = extraRoots.filter(g => g.protected === 'scranton-state').map(g => ({ ...g, mode: 'read' }));
+  const ordinary = extraRoots.filter(g => !g.protected);
+  const byDepth = (a, b) => a.length - b.length;
+  const minimal = dirs => dirs.sort(byDepth).filter((dir, i, all) => !all.slice(0, i).some(parent => within(parent, dir)));
+  const state = minimal(protectedPaths.state.filter(dir => safeStat(dir)?.isDirectory() && !stateGrants.some(g => within(g.path, dir))));
+  const credentialDirs = [], credentialFiles = [];
+  // Shells only mask cached names to avoid rescanning per spawn; file tools still check newly created names.
+  for (const dir of minimal(protectedPaths.credentials.filter(dir => !approved.some(g => within(g.path, dir))))) {
+    const stat = safeStat(dir);
+    if (stat?.isDirectory()) credentialDirs.push(dir);
+    else if (stat?.isFile()) credentialFiles.push(dir);
+  }
+  const mountDirs = dirs => dirs.flatMap(dir => ['--tmpfs', dir]);
+  const remountDirs = dirs => dirs.flatMap(dir => ['--remount-ro', dir]);
+  const masks = [...mountDirs(credentialDirs), ...credentialFiles.flatMap(dir => ['--ro-bind', '/dev/null', dir])];
   const unset = [...new Set(['DBUS_SESSION_BUS_ADDRESS', 'DBUS_SYSTEM_BUS_ADDRESS', 'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE', 'DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY', 'SESSION_MANAGER', 'AT_SPI_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'PULSE_SERVER', 'SSH_AUTH_SOCK', 'GPG_AGENT_INFO', ...Object.keys(env).filter((key) => key.startsWith('DBUS_'))])];
-  return ['--die-with-parent', '--new-session', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--bind', worktree, worktree, '--bind', tempDir, tempDir, ...hidden.flatMap((dir) => ['--tmpfs', dir]), ...credentials.filter((dir) => fs.existsSync(dir)).flatMap((dir) => ['--tmpfs', dir, '--remount-ro', dir]), ...unset.flatMap((key) => ['--unsetenv', key]), ...(!network ? ['--unshare-net'] : []), '--chdir', cwd, '--', file, ...argv];
+  return ['--die-with-parent', '--new-session', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--ro-bind', '/', '/', ...bind(ordinary.filter(g => !within('/tmp', g.path))), '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', ...bind(ordinary.filter(g => within('/tmp', g.path) && g.path !== '/tmp')), ...mountDirs(state), ...bind(stateGrants), '--bind', worktree, worktree, '--bind', tempDir, tempDir, ...masks, ...bind(approved), ...remountDirs(credentialDirs), ...remountDirs(state), ...hidden.flatMap((dir) => ['--tmpfs', dir]), ...unset.flatMap((key) => ['--unsetenv', key]), ...(!network ? ['--unshare-net'] : []), '--chdir', cwd, '--', file, ...argv];
 }
 
 function run(file, args) {
@@ -105,7 +156,7 @@ export function hardenCredentials(dir, { backup, ...options } = {}) {
   return { restore: () => run(helperRequired(options), ['unharden', '--backup', backup]), backup };
 }
 
-export function createSandbox({ mode = 'scranton', worktree, tempDir, network = true, limits = {}, platform = process.platform, windowsMode = 'low', credentialsDir, env = process.env } = {}) {
+export function createSandbox({ mode = 'scranton', worktree, tempDir, network = true, limits = {}, platform = process.platform, windowsMode = 'low', credentialsDir, env = process.env, extraRoots = () => [], protectedRoots = [] } = {}) {
   if (mode !== 'scranton') throw new Error('Native sandbox mode must be scranton');
   if (typeof network !== 'boolean') throw new Error('network must be boolean');
   if (!['low', 'strict'].includes(windowsMode)) throw new Error('windowsMode must be low or strict');
@@ -143,7 +194,13 @@ export function createSandbox({ mode = 'scranton', worktree, tempDir, network = 
     if (!prepared || disposed) throw new Error('Sandbox must be prepared and not disposed');
     if (options.shell || options.windowsVerbatimArguments || options.uid !== undefined || options.gid !== undefined) throw new Error('Unsafe spawn option for native sandbox');
     const cwd = checkedDirectory(options.cwd ?? worktree);
-    if (!within(worktree, cwd)) throw new Error('Sandbox cwd must stay inside worktree');
+    const allGrants = typeof extraRoots === 'function' ? extraRoots() : extraRoots;
+    const grants = platform === 'win32' ? allGrants : allGrants.filter(g => {
+      if (g.shellMasks === null) return false;
+      const stat = safeStat(g.path);
+      return stat?.isDirectory() || stat?.isFile();
+    });
+    if (!within(worktree, cwd) && !grants.some(root => within(root.path, cwd))) throw new Error('Sandbox cwd must stay inside worktree');
     if (!path.isAbsolute(file)) throw new Error('Sandbox executable must be absolute');
     if (platform === 'win32' && windowsMode === 'low' && /^(bash|sh)(\.exe)?$/i.test(path.basename(file))) throw new Error(bashUnavailable);
     const childEnv = Object.fromEntries(Object.entries(options.env ?? env).filter(([key]) => !/^(TEMP|TMP|TMPDIR)$/i.test(key)));
@@ -153,8 +210,8 @@ export function createSandbox({ mode = 'scranton', worktree, tempDir, network = 
       executable = helper;
       args = ['exec', '--mode', windowsMode, '--cwd', cwd, '--network', network ? 'allow' : 'none', ...(profile ? ['--profile', profile] : []), ...Object.entries(limits).flatMap(([key, value]) => [limitNames[key], String(value)]), '--', file, ...argv];
     } else if (platform === 'darwin') {
-      executable = '/usr/bin/sandbox-exec'; args = ['-p', seatbeltProfile({ worktree, tempDir, network, credentials }), file, ...argv];
-    } else { executable = 'bwrap'; args = bubblewrapArgs({ worktree, tempDir, cwd, network, credentials, env: childEnv }, file, argv); }
+      executable = '/usr/bin/sandbox-exec'; args = ['-p', seatbeltProfile({ worktree, tempDir, network, credentials, protectedRoots, extraRoots: grants }), file, ...argv];
+    } else { executable = 'bwrap'; args = bubblewrapArgs({ worktree, tempDir, cwd, network, credentials, env: childEnv, protectedRoots, extraRoots: grants }, file, argv); }
     const child = hostSpawn(executable, args, { ...options, shell: false, cwd, env: childEnv, detached: platform !== 'win32', windowsHide: true });
     const kill = child.kill.bind(child);
     child.kill = (signal = 'SIGTERM') => { if (platform !== 'win32') { try { process.kill(-child.pid, signal); return true; } catch {} } return kill(signal); };

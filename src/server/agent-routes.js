@@ -57,14 +57,14 @@ export function createAgentRoutes({ createClient = createDurableClient } = {}) {
     const deadline = detail.deadline ?? null;
     return { workflowId: record.workflowId, runId: record.runId, instanceId: record.instanceId,
       agent: record.instanceId.replace(/-m\d+$/, ''), callId: detail.callId, tool: detail.tool, args: detail.args,
-      timeoutSeconds, deadline, step: detail.step };
+      timeoutSeconds, deadline, step: detail.step, ...(detail.tool === 'request_access' ? { protected: detail.protected ?? null, warning: detail.warning ?? null } : {}) };
   }
   return {
     async approvals(req, res, hive, scope) {
       if (!['GET', 'POST'].includes(req.method)) throw fail(404, 'Not found');
       const body = req.method === 'POST' ? await readBody(req) : null;
-      if (body && (Object.keys(body).some(key => !['workflowId', 'callId', 'approved'].includes(key)) ||
-          typeof body.workflowId !== 'string' || typeof body.callId !== 'string' || !body.callId || typeof body.approved !== 'boolean')) throw fail(400, 'Invalid approval');
+      if (body && (Object.keys(body).some(key => !['workflowId', 'callId', 'approved', 'grant'].includes(key)) ||
+          typeof body.workflowId !== 'string' || typeof body.callId !== 'string' || !body.callId || typeof body.approved !== 'boolean' || body.grant !== undefined && (!body.approved || !['read', 'write'].includes(body.grant)))) throw fail(400, 'Invalid approval');
       const client = await open(hive);
       try {
         const records = await workflows(client, hive, scope);
@@ -82,7 +82,8 @@ export function createAgentRoutes({ createClient = createDurableClient } = {}) {
         const item = record && await pending(client, record);
         if (!item || item.callId !== body.callId) throw fail(404, 'Approval is not pending');
         if (item.deadline && Date.parse(item.deadline) <= Date.now()) throw fail(409, 'Approval has expired');
-        await approveToolCall(client, item.workflowId, item, body.approved, 'human-ui');
+        if (body.grant !== undefined && (item.tool !== 'request_access' || body.grant === 'write' && item.args?.mode !== 'write')) throw fail(400, 'Invalid access grant');
+        await approveToolCall(client, item.workflowId, { ...item, grant: body.grant }, body.approved, 'human-ui');
         return json(res, 202, { ok: true });
       } finally { await client?.shutdown(); }
     },

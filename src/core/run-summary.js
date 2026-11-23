@@ -40,6 +40,9 @@ export function formatRunSummary(orchestrator, result, durationMs, scope) {
     if (trees && instance?.worktree) lines.push(`Private worktree: ${instance.worktree}`, 'Workspace was not changed; inspect or copy the private files to use this result.');
     else if (instance) lines.push(`Agent directory: ${instance.worktree}`, 'Shared isolation: the agent worked directly in the workspace.');
   }
+  if (state.outsideWrites?.length) {
+    lines.push('Outside writes (not covered by undo):', ...state.outsideWrites.map(item => `  ${item.path} (${item.instanceId})`));
+  }
   lines.push(`Duration: ${(durationMs / 1000).toFixed(1)} s`);
   if (state.usage?.calls > 0) lines.push(`Usage: ${state.usage.input} input + ${state.usage.output} output tokens; recorded cost: ${state.usage.cost}`);
   else lines.push('Usage / cost: not recorded');

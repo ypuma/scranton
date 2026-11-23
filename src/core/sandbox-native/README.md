@@ -101,3 +101,22 @@ Policy references (Apache-2.0, design reference rather than imports): [OpenAI Co
 The orchestrator creates disposable owned checkout/temp roots, hardens Scranton credentials before Windows Low launches, calls `prepare()`, supplies the sandbox to the runner, preserves cancellation and awaits `dispose()` before deleting temp trees. Config/doctor support is active; unsupported network/limits fail closed. Direct strict-mode callers must track profile names/SIDs for orphan cleanup after crashes; this module does not install a recovery service.
 
 `scripts/prepare-desktop.mjs` builds and stages `scranton-sandbox-helper-<target>.exe` in `src-tauri/binaries` for Windows, and `src-tauri/tauri.conf.json` declares the helper sidecar. The desktop launcher supplies its packaged absolute path through `SCRANTON_SANDBOX_HELPER`. macOS uses the OS binary; Linux diagnoses a missing/unusable bwrap. No automatic helper installation or host fallback occurs.
+
+## Run-wide access grants
+
+The runtime supplies `extraRoots: () => [{path, mode, protected}]`; the callback is
+read on every spawn. Seatbelt adds read-only/read-write subpaths; bubblewrap adds
+`--ro-bind`/`--bind`, retaining credential/broker masks over broad ordinary grants.
+Explicit credential grants are applied after credential masks; Seatbelt exceptions
+cover only the approved credential subpaths. These generated policies have unit coverage;
+actual macOS/Linux execution still needs native-host verification. Nonexistent
+bind sources fail closed. A granted credential subpath may require native mount
+support beneath a masked ancestor; no broad credential unmasking fallback is used.
+
+Windows Low can read ordinary outside files already, but shell writes to Medium
+paths remain denied. Grants never relabel user directories or elevate commands.
+Explicitly hardened credentials remain OS-denied even after a click. Windows
+strict/AppContainer receives no new host ACEs, so its outside command access may
+remain denied. Host-side file tools apply run grants independently of these OS
+limits. Outside file-tool writes bypass worktree integration and are not covered
+by undo; only those explicit `write`/`edit` operations produce `outside_write`.

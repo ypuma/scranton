@@ -3,6 +3,8 @@ import { errorTail } from '../redact.js';
 import { errorMessage, errorRecord } from './redaction.js';
 import path from 'node:path';
 import { runTool, toolDefinitions } from '../tools/index.js';
+import { validate } from '../tools/schema.js';
+import { containsPath, createAccess } from '../access.js';
 import { messageUsage } from '../usage.js';
 import { clip, oneLine } from '../util.js';
 import { extractKeyword, KEYWORDS } from '../keywords.js';
@@ -22,6 +24,7 @@ export function describeTool(tool, args, root) {
 
 export async function runAgentWorkflow(wf, input, deps) {
   const signal = deps.controller.signal;
+  if (!deps.access && input.accessContext) deps.access = createAccess({ ...input.accessContext, emit: deps.onAccessEvent });
   const errorEnv = deps.errorEnv ?? deps.env ?? process.env;
   const started = await wf.now();
   const sessionId = input.sessionId ?? await wf.randomUUID();
@@ -110,19 +113,27 @@ export async function runAgentWorkflow(wf, input, deps) {
       const calls = last.content.filter(b => b.type === 'toolCall');
       for (const [index, call] of calls.entries()) {
         const name = `tool:${turn}:${index}`;
-        let approved = true;
-        if (input.approvals?.tools.includes(call.name)) {
-          const timeoutSeconds = input.approvals.timeoutSeconds;
+        let approved = true, reply = null;
+        const accessRequest = call.name === 'request_access' ? await wf.runStep(() => {
+          try {
+            validate(toolDefinitions(['request_access'])[0].parameters, call.arguments);
+            return deps.access.prepare(call.arguments, { root: input.cwd, writable: input.writable, instanceId: input.instanceId, agent: input.agentId });
+          } catch (error) { return { error: error.message }; }
+        }, { name: `${name}:access` }) : null;
+        if (accessRequest?.ask || !accessRequest && (input.permissions ?? 'ask') === 'ask' && input.approvals?.tools.includes(call.name)) {
+          const timeoutSeconds = input.approvals?.timeoutSeconds ?? 600;
           const deadline = await wf.now() + timeoutSeconds * 1000;
-          await state('waiting_approval', { workflowId: wf.workflowId, step: name, tool: call.name, args: call.arguments, callId: call.id,
+          await state('waiting_approval', { workflowId: wf.workflowId, step: name, tool: call.name, args: accessRequest ? { path: accessRequest.path, mode: accessRequest.mode, reason: accessRequest.reason } : call.arguments, callId: call.id,
+            ...(accessRequest ? { protected: accessRequest.protected, warning: [accessRequest.protected && 'Protected path', accessRequest.mode === 'write' && 'Outside writes are not covered by undo'].filter(Boolean).join('. ') || null } : {}),
             timeoutSeconds, deadline: new Date(deadline).toISOString() });
           approved = false;
           for (;;) {
             const remaining = (deadline - await wf.now()) / 1000;
             if (remaining <= 0) break;
-            const reply = await wf.recv('tool_approval', { timeoutSeconds: remaining });
-            if (!reply) break;
-            if (reply.workflowId === wf.workflowId && reply.step === name && reply.callId === call.id && typeof reply.approved === 'boolean') { approved = reply.approved; break; }
+            const received = await wf.recv('tool_approval', { timeoutSeconds: remaining });
+            if (!received) break;
+            if (received.grant !== undefined && (!received.approved || !accessRequest || !['read', 'write'].includes(received.grant) || received.grant === 'write' && accessRequest.mode !== 'write')) continue;
+            if (received.workflowId === wf.workflowId && received.step === name && received.callId === call.id && typeof received.approved === 'boolean') { reply = received; approved = reply.approved; break; }
           }
         }
         await state('tool_call', { tool: call.name, callId: call.id });
@@ -130,12 +141,16 @@ export async function runAgentWorkflow(wf, input, deps) {
           signal.throwIfAborted();
           deps.onLive?.({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
           await deps.onTool?.(describeTool(call.name, call.arguments, input.cwd));
-          const output = approved ? await runTool(call.name, call.arguments, {
+          const output = call.name === 'request_access' && accessRequest?.error ? { content: accessRequest.error, isError: true } : approved || call.name === 'request_access' ? await runTool(call.name, call.arguments, {
             root: input.cwd, allow: input.allow, signal, env: deps.env,
+            extraRoots: deps.access?.roots().map(g => input.writable ? g : { ...g, mode: 'read' }), protectedRoots: deps.access?.protectedRoots, home: deps.access?.home,
+            requestAccess: () => deps.access.decide(accessRequest, reply),
+            onWrite: file => { if (!containsPath(input.cwd, file)) deps.onAccessEvent?.('outside_write', { instanceId: input.instanceId, path: file }); },
             spawn: deps.spawn ?? spawn, shells: deps.shells ?? deps.sandbox?.shells, chat: deps.chat,
           }) : { content: 'Tool approval denied or timed out', isError: true };
           return output;
         }, { name, atMostOnce: ['bash', 'powershell', 'agent_chat'].includes(call.name) });
+        if (call.name === 'request_access' && result?.details?.decision === 'granted') deps.access.observe('access_decision', result.details);
         if (result?.status === 'interrupted') result = { content: 'Command interrupted; its outcome is unknown. Do not automatically repeat it.', isError: true };
         await wf.runStep(async () => {
           deps.onLive?.({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, isError: !!result.isError, result: result.isError ? errorRecord(result, errorEnv) : result });

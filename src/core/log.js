@@ -88,6 +88,15 @@ export function createTerminalLog({ stream = process.stdout, env = process.env, 
       case 'run_finished':
         print(e, c.bold(e.status === 'success' ? c.green(`Run finished: ${e.status}`) : c.yellow(`Run finished: ${e.status}`)) + ` - ${e.summary}`);
         break;
+      case 'access_request':
+        print(e, `Access requested: ${e.instanceId} ${e.mode} ${e.path}${e.protected ? ' (protected: ' + e.protected + ')' : ''}`);
+        break;
+      case 'access_decision':
+        print(e, `Access ${e.decision}: ${e.instanceId} ${e.mode} ${e.path} (${e.by})`);
+        break;
+      case 'outside_write':
+        print(e, `Outside write: ${e.instanceId} ${e.path} (not covered by undo)`);
+        break;
       case 'log': {
         const tint = e.level === 'error' ? c.red : e.level === 'warn' ? c.yellow : c.dim;
         print(e, tint(`${e.level}: ${e.message}`));

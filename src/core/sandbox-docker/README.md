@@ -40,3 +40,11 @@ Revision r2 installs rg/fd from pinned, SHA-256-verified release archives rather
 Rebuild explicitly; an existing r1 image does not satisfy the new default tag.
 The existing base-tag/apt version policy is unchanged (not digest-reproducible).
 No automatic build, pull, installation or host fallback occurs.
+
+## Run-wide access grants
+
+`request_access` changes host-side file tools, not the running container's mounts.
+Outside roots are not added to Docker commands; commands still see only `/workspace`
+and private container paths. Use the file tools for granted host paths, or choose an
+explicitly trusted host/native backend at run start. There is no container restart
+or host-execution fallback when an outside command path is unavailable.

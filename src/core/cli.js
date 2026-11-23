@@ -34,7 +34,7 @@ import { canonicalDirectory, checkScopedPath } from './context/paths.js';
 import { sameFileIdentity } from './context/file-identity.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question', 'progress'];
+export const SCENARIOS = ['happy', 'flaky', 'breaker', 'blocked', 'changes_once', 'security_issues', 'question', 'progress', 'access'];
 const POLICIES = ['ask', 'abort', 'skip', 'hive'];
 
 export const HELP = `Project Scranton - durable multi-agent harness
@@ -91,6 +91,8 @@ Options:
   --sandbox MODE       scranton (default) | docker | host (requires --trusted-host)
   --sandbox-image IMG  Docker image (config execution.sandbox.image; default ${DEFAULT_DOCKER_IMAGE})
   --sandbox-network N  allow (default) | none (bridge is an alias for allow)
+  --grant MODE         approve: narrow an access request to read (or retain requested write)
+  --permissions MODE   ask (default) | auto | bypass; independent of sandbox mode
   --approve TOOLS      Comma-separated tools requiring human approval
   --approval-timeout S Approval deadline, integer 1..86400 seconds (default 600)
   --quiet              Suppress live agent answer text
@@ -120,6 +122,8 @@ const OPTIONS = {
   yes: { type: 'boolean' },
   no: { type: 'boolean' },
   quiet: { type: 'boolean' },
+  grant: { type: 'string' },
+  permissions: { type: 'string' },
   approve: { type: 'string' },
   'approval-timeout': { type: 'string' },
   json: { type: 'boolean' },
@@ -196,6 +200,7 @@ function toFlags(values) {
     sandbox: values.sandbox,
     sandboxImage: values['sandbox-image'],
     sandboxNetwork: values['sandbox-network'],
+    permissions: values.permissions,
     approve: values.approve,
     approvalTimeout: values['approval-timeout'],
     workspace: values.workspace,
@@ -244,6 +249,7 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
     if (values['request-file'] !== undefined && command !== 'run') throw new UsageError('--request-file is only valid for run');
     if (['run', 'force', 'list'].some((key) => values[key] !== undefined) && command !== 'undo') throw new UsageError('--run, --force and --list are only valid for undo');
     if ((values.yes !== undefined || values.no !== undefined) && command !== 'approve') throw new UsageError('--yes and --no are only valid for approve');
+    if (values.grant !== undefined && (command !== 'approve' || !values.yes || !['read', 'write'].includes(values.grant))) throw new UsageError('--grant read|write requires approve --yes');
     if (command === 'approve' || command === 'watch') return await cmdDurable(command, rest, values, { stdout, stderr, stdin, env, cwd });
     if (command === 'recover') return await cmdRecover(rest, values, { stdout, stderr, env, cwd });
     if (command === 'undo') return await cmdUndo(rest, values, { stdout, stderr, env, cwd });
@@ -425,7 +431,7 @@ async function cmdDurable(command, args, values, io) {
     if (!workflow || !workflowId.startsWith(agentRuntime.agentHiveScopePrefix(hiveDir))) throw Error('Unknown workflow in this Hive');
     if (command === 'approve') {
       const detail = await pendingApproval(client, workflowId, args[1]);
-      await agentRuntime.approveToolCall(client, workflowId, detail, Boolean(values.yes), 'human-cli');
+      await agentRuntime.approveToolCall(client, workflowId, { ...detail, grant: values.grant }, Boolean(values.yes), 'human-cli');
       io.stdout.write(`${values.yes ? 'Approved' : 'Denied'} tool call ${safeTerminal(args[1])}.\n`);
       return 0;
     }

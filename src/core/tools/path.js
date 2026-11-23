@@ -1,10 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { insideStateRoot, protectedPath } from '../access.js';
 
 const fold = (s) => ['win32', 'darwin'].includes(process.platform) ? s.toLowerCase() : s;
 const inside = (root, file) => { const rel = path.relative(fold(root), fold(file)); return !rel || rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); };
 
-export function resolveToolPath(root, input = '.', { mutation = false } = {}) {
+export function resolveToolPath(root, input = '.', { mutation = false, extraRoots, protectedRoots, home } = {}) {
+  const ctx = typeof root === 'object' && root !== null ? root : { extraRoots, protectedRoots, home };
+  root = ctx.root ?? root;
+  if (ctx.extraRoots?.length && ctx.home && typeof input === 'string' && /^~(?:[\\/]|$)/.test(input)) input = ctx.home + input.slice(1);
   if (typeof root !== 'string' || !path.isAbsolute(root)) throw new Error('Tool root must be an absolute directory');
   if (typeof input !== 'string' || /[\x00-\x1f\x7f-\x9f]/.test(input) || /^~/.test(input) || /^[\\/]{2}/.test(input) || process.platform === 'win32' && /^[a-z]:[^\\/]/i.test(input)) throw new Error(`Unsafe path: ${JSON.stringify(input)}`);
   const normalized = input.replaceAll('\\', '/');
@@ -14,7 +18,11 @@ export function resolveToolPath(root, input = '.', { mutation = false } = {}) {
   if (mutation && parts.some((part) => part.toLowerCase() === '.git')) throw new Error('Writing paths containing .git is not allowed');
   const base = path.resolve(root);
   const full = path.resolve(base, normalized);
-  if (!inside(base, full)) throw new Error(`Path escapes tool root: ${input}`);
+  if (!inside(base, full)) {
+    if (mutation && insideStateRoot(full, ctx.protectedRoots)) throw Error('Writing Scranton state is not allowed');
+    const category = protectedPath(full, ctx.protectedRoots);
+    if (!ctx.extraRoots?.some(grant => inside(grant.path, full) && (!mutation || grant.mode === 'write') && (!category || grant.protected === category))) throw new Error(`Path escapes tool root: ${input}`);
+  }
   // Reject reparse points, including ancestors of root. Only the two OS aliases are exempt.
   let current = path.parse(full).root;
   for (const part of path.relative(current, full).split(path.sep).filter(Boolean)) {

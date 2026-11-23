@@ -19,12 +19,13 @@ async function mutation(file, operation) {
 function atomic(file, content, ctx, input) {
   aborted(ctx);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  resolveToolPath(ctx.root, input, { mutation: true });
+  resolveToolPath(ctx, input, { mutation: true });
   const parent = fs.realpathSync.native(path.dirname(file));
-  resolveToolPath(ctx.root, parent, { mutation: true });
+  // Authorize the actual destination, without requiring sibling access for an exact-file grant.
+  const destination = resolveToolPath(ctx, path.join(parent, path.basename(file)), { mutation: true });
   const identity = fs.statSync(parent);
   const validateParent = () => {
-    resolveToolPath(ctx.root, input, { mutation: true });
+    resolveToolPath(ctx, input, { mutation: true });
     const real = fs.realpathSync.native(path.dirname(file));
     const stat = fs.statSync(real);
     if (real !== parent || stat.dev !== identity.dev || stat.ino !== identity.ino) throw new Error('Write parent directory changed');
@@ -38,7 +39,7 @@ function atomic(file, content, ctx, input) {
       try {
         aborted(ctx);
         validateParent();
-        fs.renameSync(temp, path.join(parent, path.basename(file))); break;
+        fs.renameSync(temp, destination); break;
       }
       catch (error) {
         if (attempt >= 12 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
@@ -52,19 +53,20 @@ function atomic(file, content, ctx, input) {
 }
 
 export async function write(args, ctx) {
-  const file = resolveToolPath(ctx.root, args.path, { mutation: true });
+  const file = resolveToolPath(ctx, args.path, { mutation: true });
   return mutation(file, () => {
-    aborted(ctx); resolveToolPath(ctx.root, args.path, { mutation: true });
+    aborted(ctx); resolveToolPath(ctx, args.path, { mutation: true });
     const before = fs.existsSync(file) ? hash(fs.readFileSync(file)) : null;
     atomic(file, args.content, ctx, args.path);
+    ctx.onWrite?.(file);
     return { content: `Successfully wrote to ${args.path}`, details: { files: [{ path: file, before, after: hash(args.content) }] } };
   });
 }
 
 export async function edit(args, ctx) {
-  const file = resolveToolPath(ctx.root, args.path, { mutation: true });
+  const file = resolveToolPath(ctx, args.path, { mutation: true });
   return mutation(file, () => {
-    aborted(ctx); resolveToolPath(ctx.root, args.path, { mutation: true });
+    aborted(ctx); resolveToolPath(ctx, args.path, { mutation: true });
     let buffer;
     try { buffer = fs.readFileSync(file); } catch (error) { throw new Error(`Could not edit file: ${args.path}. Error code: ${error.code}.`); }
     const raw = buffer.toString('utf8');
@@ -99,12 +101,13 @@ export async function edit(args, ctx) {
     const content = bom + result;
     if (content === raw) throw new Error(args.edits.length > 1 ? `No changes made to ${args.path}. The replacements produced identical content.` : `No changes made to ${args.path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`);
     atomic(file, content, ctx, args.path);
+    ctx.onWrite?.(file);
     return { content: `Successfully replaced ${args.edits.length} block(s) in ${args.path}.`, details: { files: [{ path: file, before: hash(buffer), after: hash(content) }] } };
   });
 }
 
 export async function read(args, ctx) {
-  const file = resolveToolPath(ctx.root, args.path);
+  const file = resolveToolPath(ctx, args.path);
   const buffer = await fs.promises.readFile(file, { signal: ctx.signal });
   const header = buffer.subarray(0, 8192);
   if (/\.(?:png|jpe?g|gif|webp|bmp|ico|avif|tiff?)$/i.test(file) || header.subarray(0, 3).equals(Buffer.from([255, 216, 255])) || header.subarray(0, 4).equals(Buffer.from([137, 80, 78, 71])) || /^GIF8|^RIFF.{4}WEBP/s.test(header.toString('latin1'))) throw new Error('Images are not supported by the read tool');

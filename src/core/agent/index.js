@@ -10,6 +10,7 @@ import { agentHiveScopePrefix } from './identity.js';
 export { agentHiveScopePrefix } from './identity.js';
 import { selectModel } from './model.js';
 import { errorText } from '../redact.js';
+import { canWriteOutside, createAccess } from '../access.js';
 import { runAgentWorkflow, definitionsFor } from './workflow.js';
 
 export { AUTOMATIC_MODELS, selectModel } from './model.js';
@@ -103,7 +104,8 @@ export function startAgent(options) {
     runtime = options.runtime ?? await defaultRuntime(options);
     const fresh = !registrations.has(runtime);
     registration = registerAgentWorkflow(runtime, options.dependencies);
-    const binding = { ...options, ...(spawn ? { spawn } : {}), controller, env: { ...process.env, ...options.extraEnv }, onAccountUsage: usage => { spent = usage; } };
+    const access = options.access ?? createAccess({ permissions: options.permissions ?? 'ask', home: options.home, hiveDir: options.hive?.dir ?? options.hiveDir, dataDir: options.dataDir, env: { ...process.env, ...options.extraEnv }, humanTexts: options.humanTexts ?? [options.request ?? ''], emit: options.onAccessEvent });
+    const binding = { ...options, access, ...(spawn ? { spawn } : {}), controller, env: { ...process.env, ...options.extraEnv }, onAccountUsage: usage => { spent = usage; } };
     registration.bindings.set(workflowId, binding);
     // A recovered workflow must see its callbacks before launch schedules it.
     if (fresh) registration.launchPromise = Promise.resolve().then(() => runtime.launch());
@@ -128,7 +130,8 @@ export function startAgent(options) {
     const credentials = options.credentials ?? options.dependencies?.credentials ?? (options.model || options.llm || script || options.dependencies?.llm ? null : await registration.getCredentials());
     const model = options.model ?? script?.model ?? selectModel(config, credentials);
     const input = { cwd: path.resolve(options.cwd), agentId: options.agentId ?? config.id, sessionId,
-      model, thinking: config.thinking ?? 'off', allow: config.tools ?? [], definitions: definitionsFor(config.tools ?? []),
+      model, thinking: config.thinking ?? 'off', allow: [...new Set([...(config.tools ?? []), 'request_access'])], definitions: definitionsFor([...new Set([...(config.tools ?? []), 'request_access'])]),
+      permissions: access.permissions, accessContext: access.snapshot(), writable: canWriteOutside({ ...config, kind: config.kind ?? (agentId === 'dwight' ? 'developer' : undefined) }), instanceId: options.instanceId ?? agentId,
       keywords: config.keywords, systemPrompt,
       messages, maxTurns: options.maxTurns ?? 100, timeoutMs: options.timeoutMs,
       approvals, compactTokenLimit: options.compactTokenLimit ?? process.env.SCRANTON_AUTO_COMPACT_TOKEN_LIMIT,
@@ -173,9 +176,10 @@ export function startAgent(options) {
     } };
 }
 
-export function approveToolCall(runtimeOrClient, workflowId, { step, callId }, approved, by) {
+export function approveToolCall(runtimeOrClient, workflowId, { step, callId, grant, tool, args }, approved, by) {
   if (typeof step !== 'string' || !/^tool:\d+:\d+$/.test(step) || typeof callId !== 'string' || !callId || typeof approved !== 'boolean' || typeof by !== 'string') throw new Error('Invalid tool approval');
-  return runtimeOrClient.send(workflowId, { workflowId, step, callId, approved, by }, 'tool_approval', JSON.stringify([workflowId, step, callId]));
+  if (grant !== undefined && (!approved || tool !== 'request_access' || !['read', 'write'].includes(grant) || grant === 'write' && args?.mode !== 'write')) throw new Error('Invalid access grant');
+  return runtimeOrClient.send(workflowId, { workflowId, step, callId, approved, by, ...(grant === undefined ? {} : { grant }) }, 'tool_approval', JSON.stringify([workflowId, step, callId]));
 }
 
 export async function readAgentHistory(runtimeOrClient, workflowId) {

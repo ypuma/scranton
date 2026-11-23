@@ -66,8 +66,8 @@ export async function launch(file, args, ctx, { cwd, timeout = 120, onStdout, on
 }
 
 export async function shell(name, args, ctx) {
-  if (args.cwd && path.isAbsolute(args.cwd)) throw new Error('cwd must be relative to tool root');
-  const cwd = resolveToolPath(ctx.root, args.cwd ?? '.');
+
+  const cwd = resolveToolPath(ctx, args.cwd ?? '.');
   const config = ctx.spawn && ctx.shells !== undefined ? ctx.shells[name] : resolveShell(name, ctx.env ?? process.env);
   if (!config) throw new Error(`${name} is not available in this sandbox`);
   const limits = limitsFor(ctx);

@@ -10,7 +10,7 @@ export { toolDefinitions } from './schema.js';
 export async function runTool(name, args, ctx = {}) {
   const idempotency = ['write', 'edit'].includes(name) ? 'guarded' : ['bash', 'powershell', 'agent_chat'].includes(name) ? 'at-most-once' : 'pure';
   try {
-    if (!Array.isArray(ctx.allow) || !ctx.allow.includes(name)) throw new Error(`Tool "${name}" is not allowed`);
+    if (!Array.isArray(ctx.allow) || !ctx.allow.includes(name) && name !== 'request_access') throw new Error(`Tool "${name}" is not allowed`);
     const definition = toolDefinitions([name])[0];
     if (!definition) throw new Error(`Unknown tool: ${name}`);
     if (name === 'edit' && args && typeof args === 'object' && !Array.isArray(args) && !Object.hasOwn(args, 'edits') && Object.hasOwn(args, 'oldText') && Object.hasOwn(args, 'newText')) {
@@ -22,7 +22,10 @@ export async function runTool(name, args, ctx = {}) {
     resolveToolPath(ctx.root);
     if (ctx.binaries === undefined) ctx = { ...ctx, binaries: resolveBinaries(ctx.env) };
     let result;
-    if (name === 'bash' || name === 'powershell') result = await shell(name, args, ctx);
+    if (name === 'request_access') {
+      if (typeof ctx.requestAccess !== 'function') throw Error('Access requests are unavailable');
+      result = await ctx.requestAccess(args);
+    } else if (name === 'bash' || name === 'powershell') result = await shell(name, args, ctx);
     else if (name === 'agent_chat') {
       if (!args.text.trim()) throw new Error('arguments.text must contain non-whitespace text');
       if (typeof ctx.chat !== 'function') throw new Error('Agent chat is unavailable');

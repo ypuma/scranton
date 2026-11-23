@@ -170,7 +170,7 @@ test('review: mid-run HTTP DELETE leaves running custom gate snapshot intact', a
   const es = fs.readFileSync(path.join(current.config.hiveDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(es.find((e) => e.type === 'gate_result').keyword, 'SECLINT_PASSED');
   assert.equal(es[0].roles.find((r) => r.id === 'seclint').name, 'Security Lint');
-  assert.equal(gatePrompt, savedPrompt, 'running gate must retain deleted prompt snapshot');
+  assert.equal(gatePrompt.split('\n\n## Who decides')[0], savedPrompt, 'running gate must retain deleted prompt snapshot');
   const next = await call('/api/runs', 'POST', { request: 'next run', workflow: { gates: [['seclint']] }, noPlan: true, trustedHost: true });
   assert.equal(next.status, 400); assert.match(next.body.error, /seclint/);
 });

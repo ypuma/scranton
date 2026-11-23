@@ -11,7 +11,7 @@ import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 const locks = new Map();
 const skipped = new Set(['.scranton-sandbox-owned', '.git', 'node_modules', '.scratch', '.pi', '.ssh', '.aws', '.azure', '.config', 'target', 'dist', 'build', 'out', '.next', 'coverage', '.enma', '.npmrc', '.netrc', '.git-credentials']);
 export const excludedSnapshotName = (name) => skipped.has(name) || credential(name);
-const credential = (name) => /^\.env(?:\.|$)/i.test(name) && name !== '.env.example' || /^(?:credentials(?:\.json)?|auth\.json|id_(?:rsa|ed25519)|.*\.(?:pem|key|p12|pfx))$/i.test(name);
+export const credential = (name) => /^\.env(?:\.|$)/i.test(name) && name !== '.env.example' || /^(?:credentials(?:\.json)?|auth\.json|id_(?:rsa|ed25519)|.*\.(?:pem|key|p12|pfx))$/i.test(name);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel === '' || !rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel); };
 const same = (a, b) => !a && !b || Boolean(a && b && a.mode === b.mode && a.data.equals(b.data));
 const id = (value) => { if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error('Invalid worktree identifier'); return value; };

@@ -18,8 +18,14 @@ export async function pendingApproval(client, workflowId, callId) {
   return detail;
 }
 
+const accessCanWrite = detail => detail.tool === 'request_access' && detail.args.mode === 'write' && detail.protected !== 'scranton-state';
+function showAccess(detail, stderr) {
+  if (detail.tool === 'request_access') stderr.write(safeTerminal(`Access: ${detail.args.mode} ${detail.args.path}; reason: ${detail.args.reason}${detail.protected ? '; protected: ' + detail.protected : ''}${detail.warning ? '; ' + detail.warning : ''}\n`));
+}
+
 export async function promptApproval(detail, { agent, stdin, stderr, signal }) {
-  stderr.write(safeTerminal(`Approval required: ${agent}; tool: ${detail.tool}\nArguments: ${JSON.stringify(detail.args)}\nDeadline: ${detail.deadline} (${detail.timeoutSeconds}s) [y/N] `));
+  showAccess(detail, stderr);
+  stderr.write(safeTerminal(`Approval required: ${agent}; tool: ${detail.tool}\nArguments: ${JSON.stringify(detail.args)}\nDeadline: ${detail.deadline} (${detail.timeoutSeconds}s) ${accessCanWrite(detail) ? '[y=write/r=read/N=deny]' : '[y/N]'} `));
   const rl = createInterface({ input: stdin, terminal: false });
   return new Promise(resolve => {
     let settled = false;
@@ -31,7 +37,11 @@ export async function promptApproval(detail, { agent, stdin, stderr, signal }) {
     const abort = () => finish(false, 'Denied (run ended)');
     const remaining = Date.parse(detail.deadline) - Date.now();
     const timer = setTimeout(() => finish(false, 'Denied (approval timed out)'), Number.isFinite(remaining) ? Math.max(0, Math.min(remaining, 86400 * 1000)) : 0);
-    rl.once('line', line => finish(/^y(?:es)?$/i.test(line.trim()), /^y(?:es)?$/i.test(line.trim()) ? 'Approved' : 'Denied'));
+    rl.once('line', line => {
+      const read = accessCanWrite(detail) && /^r(?:ead)?$/i.test(line.trim());
+      const yes = /^y(?:es)?$/i.test(line.trim());
+      finish(read ? 'read' : yes, read ? 'Approved read only' : yes ? 'Approved' : 'Denied');
+    });
     rl.once('close', () => finish(false, 'Denied (input closed)'));
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
@@ -87,14 +97,15 @@ export function startCliLive({ openClient, workflows, stdout, stderr, stdin, sco
         const current = await pendingApproval(client, workflowId, detail.callId);
         if (current.step !== detail.step) return;
         if (!stdin?.isTTY || !stderr.isTTY) {
-          stderr.write(safeTerminal(`Approval required: ${agent}; ${detail.tool}; arguments: ${JSON.stringify(detail.args)}; deadline: ${detail.deadline}\n`));
-          stderr.write(`scranton approve ${safeTerminal(quotePathArgument(workflowId))} ${safeTerminal(quotePathArgument(detail.callId))} --yes ${safeTerminal(scope).replace(/[\r\n\t]/g, '')}\n`);
+          showAccess(current, stderr);
+          stderr.write(safeTerminal(`Approval required: ${agent}; ${current.tool}; arguments: ${JSON.stringify(current.args)}; deadline: ${current.deadline}\n`));
+          stderr.write(`scranton approve ${safeTerminal(quotePathArgument(workflowId))} ${safeTerminal(quotePathArgument(current.callId))} --yes ${safeTerminal(scope).replace(/[\r\n\t]/g, '')}\n`);
           return;
         }
         const approved = await promptApproval(detail, { agent, stdin, stderr, signal: controller.signal });
         if (stopping) return;
         await pendingApproval(client, workflowId, detail.callId);
-        await approveToolCall(client, workflowId, detail, approved, 'human-cli');
+        await approveToolCall(client, workflowId, { ...detail, ...(approved === 'read' ? { grant: 'read' } : {}) }, Boolean(approved), 'human-cli');
       } catch (error) { if (!stopping) stderr.write(`Approval: ${safeTerminal(error.message)}\n`); }
     });
   };

@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -148,6 +149,14 @@ export async function createAgentScript(value, options) {
         ...(failed ? ['### Failure', 'Command: `node cli.js done 1`', 'Output: TypeError: Cannot read properties of undefined (reading "done")', 'Expected: item 1 is marked done and the list is printed', 'Actual: the CLI crashes on an empty todos.json', 'Suspected file: cli.js', ''] : []),
         `[${failed ? fail : pass}]`].join('\n');
     } else answer = `${role} report: ${failed ? 'Unhandled input crosses a trust boundary; validate cli.js arguments before use.' : 'All checks passed.'}\n[${scenario === 'blocked' ? 'BLOCKED' : failed ? fail : pass}]`;
+  } else if (scenario === 'access') {
+    const request = section('Overall request') || section('Request') || inbox.body;
+    const named = /(?:~[\\/]|[a-z]:[\\/]|\/)[^\s\"'`]+/i.exec(request)?.[0];
+    const target = settings.path ?? options.env.SCRANTON_FAKE_ACCESS_PATH ?? named ?? (/\bDocuments\b/i.test(request) ? path.join(options.access?.home ?? options.home ?? options.cwd, 'Documents') : options.cwd);
+    tool('request_access', { path: target, mode: settings.mode ?? 'read', reason: 'Inspect the path named in the request' });
+    tool('ls', { path: target });
+    tool('read', { path: path.join(target, settings.file ?? 'example.txt') });
+    answer = 'Inspected the requested outside path.\n[TASK_COMPLETE]';
   } else {
     tool('ls', { path: '.' });
     if (scenario === 'blocked' && milestone === 'm2' && kind !== 'feedback') answer = 'I need a human decision before I write the CLI.\n[BLOCKED]';

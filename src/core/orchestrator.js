@@ -21,6 +21,7 @@ import { startAgent, agentAppVersion } from './agent/index.js';
 import { fallbackPlan, parsePlan, planToMarkdown } from './plan.js';
 import { clip, excerpt, oneLine } from './util.js';
 import { safePath } from './worktree.js';
+import { canWriteOutside, createAccess } from './access.js';
 import { discoverInstructions } from './instructions.js';
 
 /** Thrown to unwind the run on a human abort or Ctrl+C. */
@@ -39,8 +40,9 @@ class RunAborted extends Error {
  * to inject decisions, `listener(event)` for live output, `extraEnv` for the agent invocations, stdin/stdout.
  */
 export class Orchestrator {
-  constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startAgent, sandboxFactory = createSandbox, dockerSandboxFactory = createDockerSandbox, runtimeFactory = createDurableRuntime, protectCredentials = hardenCredentials, threadContext = '', developerContext = '' }) {
+  constructor({ config, noPlan = false, onBreaker = config.onBreaker ?? 'ask', hitl = null, listener = null, extraEnv = {}, stdin = process.stdin, stdout = process.stdout, startRunner = startAgent, sandboxFactory = createSandbox, dockerSandboxFactory = createDockerSandbox, runtimeFactory = createDurableRuntime, protectCredentials = hardenCredentials, home, threadContext = '', developerContext = '' }) {
     this.config = config;
+    this.home = home;
     this.conversation = config.execution?.conversation === true;
     this.roles = structuredClone(config.roles ?? BUILTIN_ROLES);
     if (this.conversation) this.roles.find((r) => r.id === 'michael').keywords = ['PLAN_READY', 'ANSWER_READY', 'REPORT_READY', 'PROGRESS', 'STALLED'];
@@ -104,6 +106,8 @@ export class Orchestrator {
       fields = { ...fields, execution: { ...fields.execution } };
       delete fields.execution.conversation;
     }
+    if (type === 'run_started') fields = { ...fields, permissions: this.config.permissions ?? 'ask' };
+    this.access?.observe(type, fields);
     return this.rec.emit(type, fields);
   }
 
@@ -155,6 +159,7 @@ export class Orchestrator {
       this.instructions = discoverInstructions(config.workspace, { enabled: config.agentsMd !== false, snapshot: this.worktrees?.initial, snapshotWarnings: this.worktrees?.instructionWarnings, scratchDir: path.join(this.hive.dir, 'instruction-discovery'), exclude: [this.hive.dir] });
       this.emit('run_started', { instructions: this.instructions.summary, request: this.request, workspace: config.workspace, maxFailedCycles: config.maxFailedCycles, maxStalledCycles: config.maxStalledCycles ?? DEFAULT_MAX_STALLED_CYCLES, milestoneTokenBudget: config.milestoneTokenBudget ?? DEFAULT_MILESTONE_TOKEN_BUDGET, execution: { ...config.execution, workflow: this.workflow }, roles: auditedRoles, prompts: promptAudit(config, this.promptSnapshot) });
       started = true;
+      this.access = createAccess({ permissions: config.permissions ?? 'ask', home: this.home, hiveDir: this.hive.dir, dataDir: config.dataDir ?? config.settingsDir, env: { ...process.env, ...this.extraEnv }, humanTexts: [this.request], emit: (type, fields) => this.emit(type, fields) });
       for (const warning of this.instructions.warnings) this.log('warn', warning.message);
       this.#checkAbort();
       for (const w of config.warnings ?? []) this.log('warn', w);
@@ -628,6 +633,9 @@ export class Orchestrator {
     this.invocations.set(baseKey, attempt);
     const invocationKey = `${baseKey}/${attempt > 1 && purpose === 'plan' ? 'plan-retry/' : ''}attempt-${attempt}`;
     this.emit('instance_started', { ...instance, instanceId, invocationKey, worktree: this.worktrees ? instance.worktree : null });
+    const role = this.roleMap[agentId];
+    const agentConfig = { ...this.config.agents[agentId], id: agentId, kind: role.kind, keywords: progress ? ['PROGRESS', 'STALLED'] : role.keywords };
+    const writable = canWriteOutside(agentConfig);
     let sandbox, tempDir;
     try {
     if (instance.sandbox === 'scranton') {
@@ -641,7 +649,7 @@ export class Orchestrator {
         this.credentialsProtected = true;
       }
       tempDir = createOwnedDirectory(path.join(path.dirname(instance.worktree), `temp-${randomUUID()}`));
-      sandbox = this.sandboxFactory({ worktree: instance.worktree, tempDir, network: this.config.execution.sandbox.network !== 'none', env: { ...process.env, ...this.extraEnv } });
+      sandbox = this.sandboxFactory({ worktree: instance.worktree, tempDir, network: this.config.execution.sandbox.network !== 'none', protectedRoots: this.access.protectedRoots, extraRoots: () => this.access.roots().map(g => writable ? g : { ...g, mode: 'read' }), env: { ...process.env, ...this.extraEnv } });
       await sandbox.prepare();
     } else if (instance.sandbox === 'docker') {
       tempDir = createOwnedDirectory(path.join(path.dirname(instance.worktree), `temp-${randomUUID()}`));
@@ -660,11 +668,12 @@ export class Orchestrator {
         if (tools) { message(pending, false); pending = ''; }
       } : undefined,
       instanceId, sessionId: instance.sessionId, invocationKey, runtime: this.runtime, sandbox,
+      access: this.access, permissions: this.config.permissions, onAccessEvent: (type, fields) => this.emit(type, fields),
       approvals: this.config.approvals, scripted: this.extraEnv.SCRANTON_FAKE_SCENARIO ? undefined : this.config.scripted,
       message: fs.readFileSync(this.hive.inboxPath(instanceId), 'utf8'),
       onMessage: (message) => this.chat.send(instanceId, message),
       agentId,
-      agentConfig: { ...this.config.agents[agentId], id: agentId, kind: this.roleMap[agentId].kind, keywords: progress ? ['PROGRESS', 'STALLED'] : this.roleMap[agentId].keywords },
+      agentConfig,
       cwd: instance.worktree,
       hive: this.hive,
       runId: this.runId,

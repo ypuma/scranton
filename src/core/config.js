@@ -166,6 +166,8 @@ export function loadConfig({
   for (const [id, agent] of Object.entries(file.agents ?? {})) if (agent && Object.hasOwn(agent, 'extraArgs')) throw new ConfigError(`agents.${id}.extraArgs is no longer supported; remove Pi CLI arguments and configure tools/provider/model directly.`);
   if (file.execution?.maxReplans) warnings.push('execution.maxReplans is unsupported and ignored; the published DAG is immutable');
   const agentsMd = agentsMdSetting(flags, env, file);
+  const permissions = pick(flags.permissions, env.SCRANTON_PERMISSIONS, file.permissions, 'ask');
+  if (!['ask', 'auto', 'bypass'].includes(permissions)) throw new ConfigError('permissions must be ask, auto or bypass');
   const conversation = pick(flags.conversation, env.SCRANTON_CONVERSATION, file.execution?.conversation, false);
   const conversationFromEnv = blank(flags.conversation) && !blank(env.SCRANTON_CONVERSATION);
   if (conversationFromEnv ? !['1', '0'].includes(conversation) : typeof conversation !== 'boolean') throw new ConfigError('execution.conversation must be boolean (SCRANTON_CONVERSATION: 1 or 0)');
@@ -253,7 +255,7 @@ export function loadConfig({
     agents[id] = agent;
   }
 
-  return { agentsMd, configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, maxStalledCycles, milestoneTokenBudget, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
+  return { permissions, agentsMd, configPath: loaded.file, cwd, workspace, hiveDir, dataDir, maxConcurrentRuns, maxFailedCycles, maxStalledCycles, milestoneTokenBudget, agentTimeoutMinutes, execution, workflow, promptsDir, settingsDir, roles, agentWarnings: [...settings.warnings, ...(workflowWarning ? [workflowWarning] : [])], workflowWarning, approvals: approvalConfig, agents, warnings, onBreaker };
 }
 
 export function validateGateTools(agent) {

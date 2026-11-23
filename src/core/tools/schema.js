@@ -6,6 +6,7 @@ const range = { path: file, limit: integer() };
 const shell = object({ command: string({ minLength: 1 }), timeout: { type: 'number', exclusiveMinimum: 0, maximum: 1800 }, cwd: file }, ['command']);
 const replacement = object({ oldText: string(), newText: string() }, ['oldText', 'newText']);
 const definitions = [
+  ['request_access', 'Request run-wide access to an absolute outside path (or ~/path). Scranton verifies human orders and asks for approval when needed. Outside writes are not covered by undo.', object({ path: file, mode: string({ enum: ['read', 'write'] }), reason: string({ minLength: 1 }) }, ['path', 'mode', 'reason'])],
   ['read', 'Read a text file. Offset is 1-based. Images and binary files are not supported.', object({ ...range, offset: integer() }, ['path'])],
   ['write', 'Create or overwrite a file atomically. Parent directories are created.', object({ path: file, content: string() }, ['path', 'content'])],
   ['edit', 'Replace exact, unique, non-overlapping text in the original file. Batch disjoint changes in edits.', object({ path: file, edits: { type: 'array', items: replacement } }, ['path', 'edits'])],

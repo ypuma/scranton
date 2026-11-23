@@ -43,13 +43,14 @@ function walk(base, ctx, includeGlob) {
         if ((!rule.directory || entry.isDirectory()) && rule.match(local)) ignored = !rule.negated;
       }
       if (ignored && !(includeGlob && (entry.isDirectory() || includeGlob(rel))) || entry.isSymbolicLink()) continue;
-      try { resolveToolPath(ctx.root, file); } catch { continue; }
+      try { resolveToolPath(ctx, file); } catch { continue; }
       if (entry.isDirectory()) { results.push(rel + '/'); visit(file, rules); }
       else if (entry.isFile()) results.push(rel);
     }
   };
   // Inherit ignore files between the allowed root and search directory.
   let inherited = [], current = path.resolve(ctx.root);
+  if (path.relative(current, base).startsWith('..') || path.isAbsolute(path.relative(current, base))) current = base;
   for (const part of path.relative(current, base).split(path.sep).filter(Boolean)) {
     inherited = ignoreRules(current, relativePath(base, current), inherited); current = path.join(current, part);
   }
@@ -75,7 +76,7 @@ async function binaryLines(binary, args, ctx, cwd, consume, codes = [0]) {
 
 export async function grep(args, ctx) {
   if (!ctx.binaries?.rg && workerData?.tool !== 'native-grep') return fallbackSearch(args, ctx);
-  const base = resolveToolPath(ctx.root, args.path ?? '.');
+  const base = resolveToolPath(ctx, args.path ?? '.');
   const directory = fs.statSync(base).isDirectory();
   const limit = args.limit ?? 100, context = args.context ?? 0;
   const rows = [], maxLength = limitsFor(ctx).grepMaxLineLength;
@@ -108,7 +109,7 @@ export async function grep(args, ctx) {
       const event = JSON.parse(line);
       if (!['match', 'context'].includes(event.type)) return;
       let file;
-      try { file = resolveToolPath(ctx.root, path.resolve(directory ? base : path.dirname(base), decode(event.data.path))); } catch { return; }
+      try { file = resolveToolPath(ctx, path.resolve(directory ? base : path.dirname(base), decode(event.data.path))); } catch { return; }
       emit(directory ? relativePath(base, file) : path.basename(base), event.data.line_number, decode(event.data.lines), event.type === 'match');
     }, [0, 1]);
   } else {
@@ -119,7 +120,7 @@ export async function grep(args, ctx) {
     for (const name of files) {
       check(ctx);
       if (args.glob?.startsWith('!') ? glob(name) : !glob(name)) continue;
-      const file = directory ? resolveToolPath(ctx.root, path.join(base, name)) : base;
+      const file = directory ? resolveToolPath(ctx, path.join(base, name)) : base;
       const buffer = fs.readFileSync(file);
       if (buffer.subarray(0, 8192).includes(0)) continue;
       const lines = buffer.toString('utf8').split('\n');
@@ -137,7 +138,7 @@ export async function grep(args, ctx) {
 }
 
 export async function find(args, ctx) {
-  const base = resolveToolPath(ctx.root, args.path ?? '.');
+  const base = resolveToolPath(ctx, args.path ?? '.');
   const matcher = globMatcher(args.pattern, { nocase: args.pattern === args.pattern.toLowerCase() });
   let entries;
   if (ctx.binaries?.fd) {
@@ -147,7 +148,7 @@ export async function find(args, ctx) {
       if (!line) return;
       const directory = /[\\/]$/.test(line);
       let file;
-      try { file = resolveToolPath(ctx.root, path.resolve(base, line)); } catch { return; }
+      try { file = resolveToolPath(ctx, path.resolve(base, line)); } catch { return; }
       const relative = relativePath(base, file);
       if (matcher(relative)) entries.push(relative + (directory ? '/' : ''));
     });
@@ -157,10 +158,10 @@ export async function find(args, ctx) {
 }
 
 export async function ls(args, ctx) {
-  const base = resolveToolPath(ctx.root, args.path ?? '.');
+  const base = resolveToolPath(ctx, args.path ?? '.');
   const entries = fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => compare(a.name.toLowerCase(), b.name.toLowerCase()) || compare(a.name, b.name));
   const lines = entries.flatMap((entry) => {
-    try { resolveToolPath(ctx.root, path.join(base, entry.name)); } catch { return []; }
+    try { resolveToolPath(ctx, path.join(base, entry.name)); } catch { return []; }
     return entry.name + (entry.isDirectory() ? '/' : '');
   });
   return listOutput(lines, ctx, { limit: args.limit ?? 500, noun: 'entries', empty: '(empty directory)' });
@@ -171,7 +172,7 @@ function fallbackSearch(args, ctx) {
   return new Promise((resolve, reject) => {
     check(ctx);
     const worker = new Worker(new URL('./search-worker.js', import.meta.url), {
-      workerData: { tool: 'native-grep', args, ctx: { root: ctx.root, limits: ctx.limits } },
+      workerData: { tool: 'native-grep', args, ctx: { root: ctx.root, limits: ctx.limits, extraRoots: ctx.extraRoots, protectedRoots: ctx.protectedRoots, home: ctx.home } },
     });
     let settled = false;
     const finish = (error, result) => {

@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig } from '../../src/core/config.js';
 import { normalizeWorkflow } from '../../src/core/workflow.js';
-import { resolvePrompt, stagePrompt, promptAudit } from '../../src/core/prompts.js';
+import { resolvePrompt, stagePrompt, promptAudit, WHO_DECIDES } from '../../src/core/prompts.js';
 import { createSandbox as createDockerSandbox } from '../../src/core/sandbox-docker/index.js';
 import { startAgent } from '../../src/core/agent/index.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
@@ -34,7 +34,7 @@ test('prompt precedence, frontmatter stripping, delivery and audit hashes', (t) 
   fs.writeFileSync(path.join(config.promptsDir, 'oscar.md'), '---\nname: override\n---\nCustom [REVIEW_APPROVED]');
   assert.equal(resolvePrompt(config, 'oscar').text, 'Custom [REVIEW_APPROVED]');
   assert.equal(resolvePrompt(config, 'oscar').source, 'custom');
-  assert.equal(fs.readFileSync(stagePrompt(config, { dir: config.hiveDir }, 'oscar'), 'utf8'), 'Custom [REVIEW_APPROVED]\n');
+  assert.equal(fs.readFileSync(stagePrompt(config, { dir: config.hiveDir }, 'oscar'), 'utf8'), 'Custom [REVIEW_APPROVED]\n\n' + WHO_DECIDES + '\n');
   assert.match(promptAudit(config).oscar.sha256, /^[a-f0-9]{64}$/);
   config.agents.oscar.skillSource = 'config';
   assert.equal(resolvePrompt(config, 'oscar').editable, false);
@@ -160,7 +160,7 @@ test('saved custom prompt stays on host; Docker mounts only worktree and Git mas
   // Only Oscar is customized; the fixture validates his argv in a standalone invocation.
   o.standaloneAgent = 'oscar';
   assert.equal((await o.run('check prompt')).status, 'success');
-  assert.equal(events(config)[0].prompts.oscar.sha256, createHash('sha256').update(text).digest('hex'));
+  assert.equal(events(config)[0].prompts.oscar.sha256, createHash('sha256').update(text + '\n\n' + WHO_DECIDES).digest('hex'));
   assert.equal(JSON.stringify(events(config)).includes(text), false);
   const manager = new WorktreeManager({ workspace: config.workspace, hiveDir: config.hiveDir, runId: 'prompt-mount' });
   await manager.init(); t.after(() => manager.close());
@@ -179,7 +179,7 @@ test('saved custom prompt stays on host; Docker mounts only worktree and Git mas
   assert.ok(mounts.includes(`type=bind,source=${checkout.dir},target=/workspace`));
   assert.ok(mounts.some(m => m.endsWith('target=/workspace/.git,readonly')));
   for (const privatePath of [prompt, config.promptsDir, path.join(config.hiveDir, 'sessions')]) assert.equal(args.some(arg => arg.includes(privatePath)), false);
-  assert.equal(fs.readFileSync(prompt, 'utf8'), text + '\n');
+  assert.equal(fs.readFileSync(prompt, 'utf8'), text + '\n\n' + WHO_DECIDES + '\n');
   await execution.dispose();
 });
 
@@ -352,8 +352,8 @@ test('live prompt PUT affects the next run only; launches and audit use the run 
       return runner;
     } });
     assert.equal((await o.run('snapshot prompts')).status, 'success');
-    assert.deepEqual(received, [expected], 'later gate receives the run snapshot, not the live PUT');
-    assert.equal(events(config)[0].prompts.oscar.sha256, createHash('sha256').update(expected).digest('hex'), 'audit hashes delivered snapshot');
+    assert.deepEqual(received, [expected + '\n\n' + WHO_DECIDES], 'later gate receives the run snapshot, not the live PUT');
+    assert.equal(events(config)[0].prompts.oscar.sha256, createHash('sha256').update(expected + '\n\n' + WHO_DECIDES).digest('hex'), 'audit hashes delivered snapshot');
   }
 });
 

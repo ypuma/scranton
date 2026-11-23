@@ -40,6 +40,6 @@ Never touch the `hive/` directory yourself: the orchestrator delivers your answe
 
 ## Instance messaging and isolation
 
-Your current directory is a private worktree, not the user workspace. Stay within it. Use `agent_chat` with an exact recipient instance ID (for example `dwight-m2` or `angela-m1`) for short coordination messages; never forge a sender or write mailbox files. A queued ACK means accepted by the broker, not yet read or delivered. QA checks a separate snapshot; only verified developer changes are integrated by the orchestrator.
+Your current directory is a private worktree, not the user workspace. Work inside your worktree by default; use `request_access` for anything outside it. Use `agent_chat` with an exact recipient instance ID (for example `dwight-m2` or `angela-m1`) for short coordination messages; never forge a sender or write mailbox files. A queued ACK means accepted by the broker, not yet read or delivered. QA checks a separate snapshot; only verified developer changes are integrated by the orchestrator.
 
 Every milestone must use IDs m1, m2, ... and dependsOn: an array of prerequisite IDs. Omission means the previous milestone, while [] explicitly permits parallel work. Avoid cycles and overlapping edits between independent milestones.

@@ -27,6 +27,10 @@ export function initialState() {
     usage: emptyUsage(),
     usagePending: {},
     chat: [],
+    permissions: 'ask',
+    accessRequests: [],
+    accessGrants: [],
+    outsideWrites: [],
     execution: null,
     cycle: 0,
     failedCycles: 0,
@@ -51,6 +55,7 @@ export function reduce(state, event) {
         runId: event.runId,
         status: 'planning',
         request: event.request,
+        permissions: event.permissions ?? 'ask',
         execution: event.execution ?? null,
         workspace: event.workspace,
         maxFailedCycles: event.maxFailedCycles,
@@ -64,6 +69,23 @@ export function reduce(state, event) {
       delete s.progress;
       s.roles = structuredClone(event.roles ?? []);
       for (const role of s.roles) if (!s.agents[role.id]) s.agents[role.id] = structuredClone(s.agents.angela);
+      break;
+    case 'access_request':
+      s.accessRequests ??= [];
+      s.accessRequests.push({ instanceId: event.instanceId, agent: event.agent, path: event.path, mode: event.mode, reason: event.reason, protected: event.protected });
+      break;
+    case 'access_decision': {
+      const request = (s.accessRequests ?? []).findLast(r => r.instanceId === event.instanceId && r.path === event.path);
+      if (request) Object.assign(request, { decision: event.decision, by: event.by, quote: event.quote });
+      if (event.decision === 'granted') {
+        s.accessGrants ??= [];
+        s.accessGrants.push({ instanceId: event.instanceId, path: event.path, mode: event.mode, by: event.by, quote: event.quote, permissions: event.permissions, reason: request?.reason ?? '' });
+      }
+      break;
+    }
+    case 'outside_write':
+      s.outsideWrites ??= [];
+      s.outsideWrites.push({ instanceId: event.instanceId, path: event.path });
       break;
     case 'plan_ready':
       s.milestones = event.milestones.map((m) => ({ id: m.id, title: m.title, dependsOn: m.dependsOn ?? [], status: 'pending', cycle: 0, failedCycles: 0 }));
