@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 export function verifyToolArchive(bytes, pin) {
@@ -13,7 +13,7 @@ export function archiveMember(archive, member, maxBuffer = 32 * 1024 * 1024) {
   return result.stdout;
 }
 
-export async function stageTools(root, app, host, stageLicense) {
+export async function stageTools(root, app, host, stageLicense, stageWhisperLicense) {
   const lock = JSON.parse(await fs.readFile(path.join(root, 'tools-lock.json'), 'utf8'));
   const cache = path.join(root, '.scratch/packaging/tools-cache');
   const destination = path.join(app, 'tools/bin');
@@ -46,5 +46,42 @@ export async function stageTools(root, app, host, stageLicense) {
     if (smoke.status !== 0 || !smoke.stdout.includes(tool.version)) throw new Error(`Bundled ${name} version smoke failed`);
     receipt[name] = { version: tool.version, ...pin, file, binarySha256: createHash('sha256').update(binary).digest('hex'), licenses };
   }
+  if (lock.tools.whisper.targets[host.target]) receipt.whisper = await stageWhisper(app, cache, lock.tools.whisper, host.target, stageLicense, stageWhisperLicense);
   return receipt;
+}
+
+async function stageWhisper(app, cache, tool, target, stageLicense, stageWhisperLicense) {
+  const pin = tool.targets[target];
+  if (!/^https:\/\/github\.com\/ggml-org\/whisper\.cpp\/releases\/download\/b\d+\/whisper-bin-x64\.zip$/.test(pin.url)) throw new Error('Invalid Whisper archive URL');
+  const archive = path.join(cache, `whisper-${pin.sha256.slice(0, 16)}.zip`);
+  let bytes = await fs.readFile(archive).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  if (!bytes) {
+    const response = await fetch(pin.url, { signal: AbortSignal.timeout(120000) });
+    if (!response.ok) throw new Error(`Whisper download failed: HTTP ${response.status}`);
+    bytes = Buffer.from(await response.arrayBuffer());
+    verifyToolArchive(bytes, pin);
+    const temp = `${archive}.${randomUUID()}.part`;
+    try { await fs.writeFile(temp, bytes); await fs.rename(temp, archive); }
+    finally { await fs.rm(temp, { force: true }); }
+  }
+  verifyToolArchive(bytes, pin);
+  const dev = path.join(cache, `whisper-${pin.sha256.slice(0, 16)}`);
+  const destination = 'tools/bin/whisper';
+  await fs.mkdir(dev, { recursive: true });
+  await fs.mkdir(path.join(app, destination), { recursive: true });
+  const files = [];
+  for (const member of [pin.binary, ...pin.dlls]) {
+    if (!/^Release\/[\w-]+\.(?:exe|dll)$/.test(member)) throw new Error('Invalid Whisper archive member');
+    const contents = archiveMember(archive, member);
+    const name = path.posix.basename(member);
+    const file = `${destination}/${name}`;
+    await fs.writeFile(path.join(app, file), contents, { mode: 0o755 });
+    await fs.writeFile(path.join(dev, name), contents, { mode: 0o755 });
+    files.push({ member, file, sha256: createHash('sha256').update(contents).digest('hex') });
+  }
+  const file = files[0].file;
+  const smoke = spawnSync(path.join(app, file), ['--version'], { env: { SystemRoot: process.env.SystemRoot, PATH: '' }, encoding: 'utf8', timeout: 15000, windowsHide: true });
+  if (smoke.status !== 0 || `${smoke.stdout}\n${smoke.stderr}`.trim() !== `whisper.cpp version: ${tool.version}`) throw new Error('Bundled Whisper version smoke failed');
+  const licenses = [await stageWhisperLicense(cache, tool.license, stageLicense)];
+  return { version: tool.version, ...pin, file, files, licenses };
 }

@@ -6,6 +6,8 @@ import { isLoopbackAddress } from '../core/network.js';
 import { createControl, json } from './control.js';
 import { createModelWindows } from '../core/model-windows.js';
 import { authorize, createRegistryRouter } from './registry-router.js';
+import { createVoice } from '../core/voice/index.js';
+import { handleVoice } from './voice-routes.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -333,7 +335,7 @@ export function createHiveContext({ hive, control }) {
  * @param {{ hiveDir: string, publicDir: string, port?: number, host?: string }} opts
  * @returns {Promise<{ url: string, port: number, close: () => Promise<void> }>}
  */
-export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT_PORT, host = DEFAULT_HOST, control, dataDir, maxConcurrentRuns = 4, projectsRoot, legacyWorkspace } = {}) {
+export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT_PORT, host = DEFAULT_HOST, control, dataDir, maxConcurrentRuns = 4, projectsRoot, legacyWorkspace, voiceOptions } = {}) {
   if (!hiveDir && !dataDir) throw new TypeError('startVisualizerServer: hiveDir is required');
   if (!publicDir) throw new TypeError('startVisualizerServer: publicDir is required');
 
@@ -364,12 +366,17 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
   const realRoot = () => (realRootPromise ??= fsp.realpath(root));
   let closed = false;
   const checkHost = isLoopbackHost(host);
+  let voice;
   async function handleRequest(req, res) {
     if (checkHost && !hostHeaderIsLocal(req.headers.host)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Forbidden');
     }
     const controlPath = req.url.split(/[?#]/, 1)[0];
+    if (controlPath.startsWith('/api/voice/')) {
+      if (!checkHost || closed) return json(res, 403, { error: 'Forbidden' });
+      return handleVoice(req, res, controlPath, voice ??= createVoice({ dataDir, ...voiceOptions }));
+    }
     try { if (await registryRouter.handle(req, res, controlPath)) return; }
     catch (err) { return json(res, err.status ?? 500, { error: err.status ? err.message : 'Registry operation failed' }); }
     if (controlPath === '/api/agents' || /^\/api\/agents\/[^/]+(?:\/prompt)?$/.test(controlPath)) {
@@ -438,7 +445,8 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
     closing = (async () => {
       const results = await Promise.allSettled([
         Promise.resolve().then(() => registryRouter.close()),
-        Promise.resolve().then(() => single?.close())
+        Promise.resolve().then(() => single?.close()),
+        Promise.resolve().then(() => voice?.close())
       ]);
       await new Promise((resolve) => {
         server.close(() => resolve());

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { archiveMember } from './desktop-tools.mjs';
 import { crateLicenseSources, wheelLicenseSources } from './desktop-license-sources.mjs';
@@ -46,6 +46,25 @@ async function download(url, timeout = 30000) {
   const response = await fetch(url, { signal: AbortSignal.timeout(timeout) });
   if (!response.ok) throw new Error(`License source ${url}: HTTP ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
+}
+
+export async function stageWhisperLicense(cache, pin, stage) {
+  if (!/^https:\/\/raw\.githubusercontent\.com\/ggml-org\/whisper\.cpp\/b\d+\/LICENSE$/.test(pin.url) ||
+      !/^[a-f0-9]{64}$/.test(pin.sha256)) throw new Error('Invalid Whisper license pin');
+  const archive = path.join(cache, `whisper-license-${pin.sha256.slice(0, 16)}`);
+  const verify = (bytes) => {
+    if (sha256(bytes) !== pin.sha256) throw new Error('Whisper license SHA-256 mismatch');
+  };
+  let bytes = await fs.readFile(archive).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  if (!bytes) {
+    bytes = await download(pin.url);
+    verify(bytes);
+    const temp = `${archive}.${randomUUID()}.part`;
+    try { await fs.writeFile(temp, bytes); await fs.rename(temp, archive); }
+    finally { await fs.rm(temp, { force: true }); }
+  }
+  verify(bytes);
+  return { ...await stage('tools/whisper/LICENSE', bytes), source: pin.url };
 }
 
 async function stageSupplement(stage, prefix, sources) {

@@ -7,7 +7,7 @@ import { desktopPlatform, assertNativeBuild, launchManifest, validateNodeDistrib
 import { bootstrap, runtimeFiles, validateRuntimeLock, runtimeCacheKey, runtimeFingerprint, runtimeCacheValid, lockedWheels } from './desktop-runtime.mjs';
 import { extractionScript } from './desktop-extract.mjs';
 import { stageTools } from './desktop-tools.mjs';
-import { cargoMetadata, licenseStager, pipelineLicenses, rustManifests, stageCrateLicenses, stageNodeLicense } from './desktop-licenses.mjs';
+import { cargoMetadata, licenseStager, pipelineLicenses, rustManifests, stageCrateLicenses, stageNodeLicense, stageWhisperLicense } from './desktop-licenses.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tauri = path.join(root, 'src-tauri');
@@ -181,7 +181,7 @@ export async function prepareDesktop() {
   if (process.env.SCRANTON_DESKTOP_STUB) throw new Error('Desktop stub builds are not distributable; unset SCRANTON_DESKTOP_STUB.');
   const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
     'tools/pipeline-complete.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
-    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
+    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'voice-models.lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
   for (const input of inputs) {
     try { await fs.access(path.join(root, input)); }
     catch { throw new Error(`Required desktop input is missing: ${input}`); }
@@ -231,7 +231,7 @@ export async function prepareDesktop() {
   for (const manifest of rustManifests) {
     rust[manifest] = await stageCrateLicenses(cargoMetadata(cargo, root, manifest, host.target), stageLicense);
   }
-  const tools = await stageTools(root, app, host, stageLicense);
+  const tools = await stageTools(root, app, host, stageLicense, stageWhisperLicense);
   const profile = path.join(root, '.scratch', 'packaging', 'empty-profile');
   await fs.mkdir(profile, { recursive: true });
   await run(node, [path.join(app, 'scripts/runtime-smoke.mjs')], {
@@ -251,7 +251,7 @@ export async function prepareDesktop() {
     lockSha256: createHash('sha256').update(await fs.readFile(path.join(app, 'package-lock.json'))).digest('hex'),
     verification: 'Own runtime scripted completion smoke with bundled Node, empty PATH and isolated profile; no network or credentials'
   }, null, 2) + '\n');
-  console.log(`Desktop inputs prepared: ${app}\nScranton runtime, completion helpers, sandbox helper and pinned rg/fd staged; offline smoke passed.`);
+  console.log(`Desktop inputs prepared: ${app}\nScranton runtime, completion helpers, sandbox helper and pinned tools staged; offline smoke passed.`);
   } catch (error) {
     await fs.rm(path.join(app, 'engine-runtime', 'launch.json'), { force: true });
     await fs.rm(path.join(tauri, 'staged', 'pipeline-cache.json'), { force: true });

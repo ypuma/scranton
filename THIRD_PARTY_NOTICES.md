@@ -30,6 +30,12 @@ hashes. A source checkout generates the same inventory as
 - **ripgrep and fd:** `app/licenses/tools/rg/` and `app/licenses/tools/fd/`
   contain the license texts copied from the same `tools-lock.json` release
   archives as the executables. Their licenses are also reproduced below.
+- **whisper.cpp (Windows x64):** `app/tools/bin/whisper/` contains the
+  CPU CLI and its libraries from the official [v1.9.5 binary build b5454](https://github.com/ggml-org/whisper.cpp/releases/tag/b5454).
+  The MIT license (Copyright © 2023–2026 The ggml authors) is in
+  `app/licenses/tools/whisper/LICENSE`, hash-pinned from the same upstream tag.
+  Speech models are not distributed in the installer; they are fetched on request
+  from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp).
 - **Node packages:** the production packages under `app/node_modules/` retain
   the notices supplied in their npm distributions. The package versions are
   pinned by `app/package-lock.json`.
