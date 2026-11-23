@@ -132,6 +132,13 @@ async function gate(name) {
   }
   event('gate_waiting', { gate: name, digest: status.pending.digest }); finish(3);
 }
+function nativeProbe(mode) {
+  const low = mode === 'low';
+  const available = process.env[`FAKE_PIPELINE_NATIVE_${mode.toUpperCase()}_ABSENT`] !== '1';
+  return { protocol: 1, available, backend: available ? low ? 'low-integrity' : 'appcontainer' : null, windows_mode: mode,
+    check_network: available ? low ? 'allow' : 'none' : null, setup_network_allowed: available && low,
+    reason: available ? null : process.env.FAKE_PIPELINE_NATIVE_REASON ?? `Native ${mode} is not available (fake)` };
+}
 async function main() {
   if (process.env.FAKE_PIPELINE_INVOCATIONS) fs.appendFileSync(process.env.FAKE_PIPELINE_INVOCATIONS, JSON.stringify([command, ...args]) + '\n');
   if (command === 'version') { if (process.env.FAKE_PIPELINE_UNAVAILABLE === '1') process.exit(2); console.log(JSON.stringify({ version: 'fake-1', python: 'fake', langgraph: 'fake' })); return; }
@@ -140,6 +147,11 @@ async function main() {
     const image = opt('image', 'scranton-pipeline-sandbox:fake-1');
     if (args[0] === 'check') {
       if (process.env.FAKE_PIPELINE_PROBE_FILE) fs.appendFileSync(process.env.FAKE_PIPELINE_PROBE_FILE, JSON.stringify(args) + '\n');
+      if (opt('mode') === 'scranton') {
+        if (process.env.FAKE_PIPELINE_NATIVE_INVALID === '1') { console.log(JSON.stringify({ native: { platform: 'win32' } })); return; }
+        const modes = opt('windows-mode') ? [opt('windows-mode')] : ['low', 'strict'];
+        console.log(JSON.stringify({ native: { platform: 'win32', ...Object.fromEntries(modes.map((mode) => [mode, nativeProbe(mode)])) } })); return;
+      }
       await sleep(Number(process.env.FAKE_PIPELINE_PROBE_SLOW_MS ?? 0));
       const available = process.env.FAKE_PIPELINE_DOCKER_ABSENT !== '1';
       console.log(JSON.stringify({ default_image: 'scranton-pipeline-sandbox:fake-1', docker: { available, version: available ? 'fake-docker-1' : null, reason: available ? null : 'Docker daemon is not available (fake)' }, image: { name: image, present: available && (process.env.FAKE_PIPELINE_IMAGE_MISSING !== '1' || Boolean(process.env.FAKE_PIPELINE_IMAGE_FILE && fs.existsSync(process.env.FAKE_PIPELINE_IMAGE_FILE))) } })); return;
@@ -157,8 +169,8 @@ async function main() {
   if (args.includes('--comment') && args[args.indexOf('--comment') + 1]?.startsWith('-')) throw Error('invalid_comment_argument');
   if (process.env.FAKE_PIPELINE_LAUNCH_ERROR === command || command === 'run' && !fs.existsSync(opt('source'))) throw Error('unsafe_shim_arguments');
   if (['run', 'demo'].includes(command)) {
-    const scenario = opt('scenario', 'basic'), mode = opt('sandbox', 'host');
-    if (command === 'demo' && (!['basic', 'replan', 'parallel', 'evidence'].includes(scenario) || !['host', 'docker'].includes(mode))) throw Error('invalid_demo_arguments');
+    const scenario = opt('scenario', 'basic'), mode = opt('sandbox', 'scranton'), windowsMode = opt('windows-mode', 'low');
+    if (command === 'demo' && (!['basic', 'replan', 'parallel', 'evidence', 'answer'].includes(scenario) || !['host', 'docker', 'scranton'].includes(mode))) throw Error('invalid_demo_arguments');
     if (command === 'demo' && scenario === 'evidence' && opt('grounding') === 'observe') throw Error('evidence_needs_enforce');
     const id = opt('run-id', randomBytes(6).toString('hex'));
     if (!/^[a-z0-9]{8,32}$/.test(id)) throw Error('invalid_run_id');
@@ -168,13 +180,17 @@ async function main() {
     const now = new Date().toISOString();
     status = { schema: 1, run_id: id, status: 'running', phase: 'prepare', node: 'prepare_workspace', task: command === 'demo' ? 'Fix the demo' : opt('task', opt('task-file') ? fs.readFileSync(opt('task-file'), 'utf8') : ''), source_dir: opt('source', path.join(runDir, 'demo-source')), delivery_mode: opt('delivery', 'apply'), progress: { plan_revision: 0, replans_left: 1, steps_done: 0, lanes: [], step_index: 0, step_count: 1, step_title: 'Fix', attempt: 1, review_round: 0 }, pending: null, failure: null, resumable: false, usage: { calls: 0, input_tokens: 0, output_tokens: 0, estimated_cost: null }, checks: [], delivery: null, artifacts: { plan: null, diff: null, report_md: null, report_json: null }, sandbox: null, pid: process.pid, created_at: now, updated_at: now, engine_version: 'fake-1' };
     write(path.join(runDir, 'argv.json'), [command, ...args]);
-    const cfg = command === 'demo' ? { schema: 1, models: {}, demo_scenario: scenario, execution: { max_parallel_steps: scenario === 'parallel' ? 2 : 1 }, sandbox: { mode, docker: { image: opt('image', '') } } } : json(opt('config'));
+    const cfg = command === 'demo' ? { schema: 1, models: {}, demo_scenario: scenario, execution: { max_parallel_steps: scenario === 'parallel' ? 2 : 1 }, sandbox: { mode, ...(mode === 'docker' ? { docker: { image: opt('image', '') } } : mode === 'scranton' ? { windows_mode: windowsMode } : {}) } } : json(opt('config'));
     if (command === 'demo') {
       if (opt('grounding') !== undefined) cfg.grounding = { mode: opt('grounding') };
       if (opt('guidance') !== undefined) cfg.procedure = { enabled: opt('guidance') === 'true' };
     }
-    const sandboxMode = cfg.sandbox?.mode ?? 'docker';
-    status.sandbox = {
+    const sandboxMode = cfg.sandbox?.mode ?? 'scranton';
+    const native = sandboxMode === 'scranton' ? nativeProbe(cfg.sandbox?.windows_mode ?? 'low') : null;
+    status.sandbox = native ? {
+      mode: sandboxMode, image: null, isolated: true, windows_mode: native.windows_mode, backend: native.backend,
+      check_network: native.check_network, setup_network: (cfg.setup ?? []).some((command) => command.network === true)
+    } : {
       mode: sandboxMode, isolated: sandboxMode === 'docker',
       image: sandboxMode === 'host' ? null : cfg.sandbox?.docker?.image || 'scranton-pipeline-sandbox:fake-1',
       isolation: sandboxMode === 'host' ? 'No OS isolation.' : 'Docker container with read-only root and no network for checks; shares the Docker VM kernel; workspace mounted read-write; setup commands with network can reach the internet and local services (including host.docker.internal).',
@@ -204,6 +220,10 @@ async function main() {
   if (args.includes('--parent-guard')) { process.stdin.resume(); process.stdin.on('end', () => { suspended = true; }); process.stdin.on('data', (d) => { if (String(d).includes('stop')) suspended = true; }); }
   status.pid = process.pid; const pending = status.pending;
   status.status = 'running'; save(); event(command === 'resume' ? 'run_resumed' : 'run_started');
+  if (status.sandbox?.mode === 'scranton') {
+    const { mode, windows_mode, backend, check_network } = status.sandbox;
+    event('sandbox_ready', { mode, windows_mode, backend, check_network });
+  }
   await delay();
   if (pending) {
     event('gate_decided', { gate: pending.gate, decision: opt('decision'), by: 'human' });

@@ -109,7 +109,7 @@ def test_timeout_exhaustion(case):
 
 def test_demo_both_gates(tmp_path):
     root = tmp_path / "demo-runs"
-    code, status = cli("demo", "--run-root", root, "--run-id", "demo0001", "--delivery", "apply")
+    code, status = cli("demo", "--sandbox", "host", "--run-root", root, "--run-id", "demo0001", "--delivery", "apply")
     assert code == 3, status
     for gate, expected in (("plan", 3), ("delivery", 0)):
         code, status = cli("resume", "--run-dir", root / "demo0001", "--gate", gate, "--decision", "approve", "--digest", status["pending"]["digest"])

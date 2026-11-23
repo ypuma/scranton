@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("SCRANTON_PIPELINE_DOCKER_TEST") 
 def sandbox(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    result = DockerSandbox(SandboxConfig(), workspace, uuid.uuid4().hex[:12])
+    result = DockerSandbox(SandboxConfig(mode="docker"), workspace, uuid.uuid4().hex[:12])
     result.preflight()
     yield result
     result.cleanup()

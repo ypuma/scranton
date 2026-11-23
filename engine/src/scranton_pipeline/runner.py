@@ -29,7 +29,7 @@ from scranton_pipeline.instructions import enabled as instructions_enabled
 from scranton_pipeline.limits import recursion_limit
 from scranton_pipeline.models import RunStatus
 from scranton_pipeline.nodes.common import Dependencies, cleanup_provider
-from scranton_pipeline.nodes.workflow import cleanup_sandbox, json_write
+from scranton_pipeline.nodes.workflow import cleanup_sandbox, json_write, sandbox
 from scranton_pipeline.observability import EventLog, UsageLedger, read_status, write_status
 from scranton_pipeline.procedure import digest as procedure_digest
 from scranton_pipeline.procedure import load as load_procedure
@@ -102,9 +102,14 @@ def dependencies(run_dir: Path, cfg: EngineConfig, *, trust_host: bool,
     gateway = ChatModelGateway(chat, cfg, ledger, events)
     connection = sqlite3.connect(run_dir / "checkpoints.sqlite", check_same_thread=False)
     try:
-        yield Dependencies(cfg, run_dir, Path(metadata["workspace"]), gateway, ledger, events, stop, redactor,
-                           trust_host=trust_host, checkpointer=SqliteSaver(connection), procedure=procedure)
+        deps = Dependencies(cfg, run_dir, Path(metadata["workspace"]), gateway, ledger, events, stop, redactor,
+                            trust_host=trust_host, checkpointer=SqliteSaver(connection), procedure=procedure)
+        previous = read_status(run_dir) if cfg.sandbox.mode == "scranton" else None
+        deps.native_ready = bool(previous and previous.sandbox.get("isolated"))
+        yield deps
     finally:
+        if cfg.sandbox.mode == "scranton":
+            cleanup_sandbox(deps)
         connection.close()
 
 
@@ -137,7 +142,8 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
         raise invalid("invalid_request", "Task must be nonempty (<=32768 bytes), source must be a directory")
     source = source.resolve()
     run_dir = (run_root / run_id).resolve()
-    workspace = ((workspace_root / run_id) if workspace_root else run_dir / "workspace").resolve()
+    workspace_path = (workspace_root / run_id) if workspace_root else run_dir / "workspace"
+    workspace = workspace_path.resolve()
     if not demo and any(a.is_relative_to(b) or b.is_relative_to(a) for a, b in ((source, run_dir), (source, workspace))):
         raise invalid("overlapping_paths", "Source, run directory and workspace must not overlap")
     if workspace != run_dir / "workspace" and (workspace.is_relative_to(run_dir) or run_dir.is_relative_to(workspace)):
@@ -169,7 +175,7 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
         materialize(run_dir, demo_scenario)
     json_write(run_dir / "config.json", cfg.model_dump(mode="json", by_alias=True))
     json_write(run_dir / "run.json", {"run_id": run_id, "task": task, "source_dir": str(source), "delivery_mode": delivery,
-        "created_at": now(), "config_digest": config_digest(cfg), "engine_version": "0.1.0", "workspace": str(workspace), "demo": demo,
+        "created_at": now(), "config_digest": config_digest(cfg), "engine_version": "0.1.0", "workspace": str(workspace_path.absolute() if cfg.sandbox.mode == "scranton" else workspace), "demo": demo,
         **({"cross_run_history": history} if history is not None else {}),
         **({"procedure": {"enabled": True, "name": procedure.name, "digest": procedure_digest(procedure)}} if procedure is not None else {})})
     initial: PipelineState = {"run_id": run_id, "task": task, "source_dir": str(source), "delivery_mode": delivery,
@@ -178,6 +184,7 @@ def start(*, source: Path, task: str, cfg: EngineConfig, run_root: Path, run_id:
     if history is not None:
         initial["cross_run_history"] = history
     with owner(run_dir), dependencies(run_dir, cfg, trust_host=trust_host, guarded=guarded) as deps:
+        sweep_docker(cfg)
         append_trace(run_dir, {"type": "settings", "mode": cfg.grounding.mode, "weights": cfg.grounding.weights.model_dump()})
         cleanup_provider(deps)
         cleanup_sandbox(deps)
@@ -204,7 +211,13 @@ def suspension_detail(exc: Exception, deps: Dependencies) -> dict[str, Any]:
         "errno": getattr(exc, "errno", None), "winerror": getattr(exc, "winerror", None), "engine_frame": frame}
 
 
-def drive(deps: Dependencies, value: Any = None) -> RunStatus:
+def sweep_docker(cfg: EngineConfig) -> None:
+    if cfg.sandbox.mode == "docker":
+        from scranton_pipeline.tools.sandbox import sweep_expired
+        sweep_expired()
+
+
+def drive(deps: Dependencies, value: Any = None, *, execute: bool = True) -> RunStatus:
     graph = build_graph(deps)
     config = {"configurable": {"thread_id": deps.run_dir.name}, "recursion_limit": recursion_limit(deps.cfg.limits),
               "max_concurrency": max(2, deps.cfg.execution.max_parallel_steps)}
@@ -214,6 +227,25 @@ def drive(deps: Dependencies, value: Any = None) -> RunStatus:
     elif isinstance(value, dict):
         write_status(deps.run_dir, make_status(cast(PipelineState, value), deps, node="prepare_workspace"))
     try:
+        if deps.cfg.sandbox.mode == "scranton" and execute and not deps.stop.should_stop():
+            deps.native_ready = False
+            box = sandbox(deps)
+            try:
+                box.preflight()
+                if existing.get("workspace"):
+                    box.verify_ownership()
+            except EngineError as exc:
+                node = (graph.get_state(config).next or ("prepare_workspace",))[0]
+                failed_state = cast(PipelineState, {**(existing or value or {}), "failure": exc.to_failure(node), "outcome": "failed"})
+                deps.sandbox_failure(exc, code=exc.code, node=node)
+                deps.events.emit("failure", **exc.to_failure(node))
+                finalize_out_of_band(failed_state, deps)
+                failed = read_status(deps.run_dir)
+                assert failed is not None
+                return failed
+            deps.native_ready = True
+            desc = box.describe()
+            deps.events.emit("sandbox_ready", **{k: desc[k] for k in ("mode", "backend", "windows_mode", "check_network")})
         result = graph.invoke(value, config, durability="sync")
         state = graph.get_state(config).values
         if result.get("__interrupt__"):
@@ -296,12 +328,16 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                 status = complete_reply(RunStatus.model_validate_json(receipt.read_text(encoding="utf-8")), deps)
                 write_status(run_dir, status)
                 cleanup_provider(deps)
+                if cfg.sandbox.mode == "scranton":
+                    cleanup_sandbox(deps)
             return status
         if status.status in TERMINAL:
             if gate:
                 raise invalid("not_waiting", "Run is already terminal")
             with dependencies(run_dir, cfg, trust_host=trust_host or metadata.get("demo", False), models=False) as deps:
                 cleanup_provider(deps)
+                if cfg.sandbox.mode == "scranton":
+                    cleanup_sandbox(deps)
                 if cfg.conversation:
                     if status.reply is None:
                         snapshot = build_graph(deps).get_state({"configurable": {"thread_id": run_dir.name}})
@@ -336,6 +372,7 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
                 if artifact_digest != digest:
                     raise invalid("stale_digest", "Gate artifact changed")
             cleanup_provider(deps)
+            sweep_docker(cfg)
             cleanup_sandbox(deps)
             if rebound_roles:
                 deps.events.emit("warning", code="completion_command_rebound",
@@ -344,7 +381,8 @@ def resume(run_dir: Path, *, gate: str | None = None, decision: str | None = Non
             deps.events.emit("run_resumed", gate=gate if not cancelling else None,
                              decision=decision if not cancelling else None,
                              has_feedback=bool(comment) if status.pending and not cancelling else False)
-            return drive(deps, value)
+            return drive(deps, value, execute=not cancelling and (decision != "reject")
+                         and not (gate == "delivery" and metadata["delivery_mode"] == "patch"))
 
 
 def status_run(run_dir: Path) -> RunStatus:

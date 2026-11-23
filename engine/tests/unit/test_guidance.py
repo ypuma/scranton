@@ -49,7 +49,7 @@ def test_situation_pure_total(role, state, expected):
 @pytest.mark.parametrize("builder", [build_planner_prompt, build_implementer_prompt, build_reviewer_prompt])
 def test_disabled_prompt_bytes(builder, tmp_path, monkeypatch):
     from scranton_pipeline import guidance
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     state = {"task": "Fix", "feedback": {"kind": "output_invalid", "message": "repair"}}
     legacy = builder(state, cfg)
     hashes = {"build_planner_prompt": "23d2de5984421ea3a03b326e064151162f495514efa6abf9d475a6f0766b0270",
@@ -64,7 +64,7 @@ def test_disabled_prompt_bytes(builder, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("role", ["planner", "implementer", "reviewer"])
 def test_guidance_control_budget_and_shown(role, tmp_path):
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     cfg = cfg.model_copy(update={"procedure": cfg.procedure.model_copy(update={"enabled": True})})
     graph = load(None)
     guidance = text(graph, role, {}, hops=0, max_bytes=1000)
@@ -85,7 +85,7 @@ def test_guidance_control_budget_and_shown(role, tmp_path):
 
 
 def test_render_localization_caps_and_no_evidence(tmp_path):
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     cfg = cfg.model_copy(update={"procedure": cfg.procedure.model_copy(update={"enabled": True, "hops": 0, "max_bytes": 500})})
     graph = load(None)
     prompt = build_planner_prompt({"task": "Fix"}, cfg, graph=graph)
@@ -101,7 +101,7 @@ def test_render_localization_caps_and_no_evidence(tmp_path):
 
 
 def test_optional_refiner_gateway_script_and_ledger(tmp_path):
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     assert cfg.models.refiner is None and "refiner" not in cfg.model_dump()["models"]
     path = tmp_path / "refiner.json"
     path.write_text(json.dumps([{"rationale": "first"}, {"rationale": "second"}]))

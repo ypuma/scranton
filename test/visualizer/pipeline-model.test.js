@@ -9,6 +9,7 @@ import {
   pollDelay, createPoller, parseEngineInfo, modelGroups, parseModelValue, parseRunList, pickRun, runChoices, mergeEvents,
   revealBidi, runErrorField, folderName, parseDetect, parseRunDoc, launchText, parseSandbox, sandboxView, eventText, laneRows, announcement, LOUD_EVENTS, COMMAND_ID_RE, DEMO_TASK, DEMO_SCENARIOS, demoScenario, TASK_MAX_BYTES, POLL_LIVE_MS, POLL_IDLE_MS,
   evidenceView, riskFlagText, activityEvents, eventLoud, nodeLabel, phaseOfNode, parsePlan, parseReview,
+  parseNative, sandboxStates, sandboxBlock, strictSetupText, WINDOWS_MODE_HINT, sandboxPending,
 } from '../../visualizer/public/js/pipeline-model.js';
 import { REAL_GROUNDING, REAL_EVIDENCE_DEMO, REAL_ABSENCE_REFUTED } from './fixtures/engine-grounding.js';
 
@@ -179,7 +180,49 @@ test('runLine: setup with network access is said once, after the sandbox; new fi
   assert.equal(parseStatus(runStatus({ sandbox: ENGINE_SANDBOX.docker })).sandbox.image, 'scranton-pipeline-sandbox:0.1.0');
   assert.equal(parseStatus(runStatus({ sandbox: ENGINE_SANDBOX.host })).sandbox.image, null);
   assert.deepEqual(parseStatus(runStatus({ sandbox: { mode: 'docker', image: 7, setup_network: 'yes' } })).sandbox,
-    { mode: 'docker', isolated: false, isolation: null, image: null, setupNetwork: false });
+    { mode: 'docker', isolated: false, isolation: null, image: null, setupNetwork: false, backend: null, windowsMode: null, checkNetwork: null });
+});
+
+// pipeline-native-sandbox-contract section 5: what the engine reports for the Scranton sandbox
+const SCRANTON_STATUS = {
+  low: { mode: 'scranton', image: null, windows_mode: 'low', backend: 'low-integrity', isolated: true, check_network: 'allow', setup_network: true },
+  strict: { mode: 'scranton', image: null, windows_mode: 'strict', backend: 'appcontainer', isolated: true, check_network: 'none', setup_network: false },
+};
+
+// guards the scranton branch of sandboxFragment and the backend / windows_mode / check_network lines of parseRunSandbox
+test('runLine: the Scranton sandbox is described by what the engine reports, backend and network, not by the radio', () => {
+  assert.deepEqual(parseStatus(runStatus({ sandbox: SCRANTON_STATUS.strict })).sandbox,
+    { mode: 'scranton', isolated: true, isolation: null, image: null, setupNetwork: false, backend: 'appcontainer', windowsMode: 'strict', checkNetwork: 'none' });
+  assert.equal(frag(SCRANTON_STATUS.strict), 'Scranton sandbox · AppContainer · no network for checks');
+  const low = sandboxLine(SCRANTON_STATUS.low);
+  assert.deepEqual(low.parts.slice(-2), ['Scranton sandbox · Low integrity · network not blocked', 'setup had network access']);
+  assert.deepEqual(low.sandbox, { at: low.parts.length - 2, full: '', more: false }, 'no sentence, no title');
+  const said = sandboxLine({ ...SCRANTON_STATUS.strict, isolation: 'AppContainer with no capabilities.' });
+  assert.deepEqual([said.parts.at(-1), said.sandbox.full, said.sandbox.more], ['Scranton sandbox · AppContainer · no network for checks', 'AppContainer with no capabilities.', true]);
+  assert.equal(frag({ ...SCRANTON_STATUS.low, backend: 'future-thing', setup_network: false }), 'Scranton sandbox · future-thing · network not blocked', 'an unknown backend is named as sent');
+});
+
+// guards the `?? null` fallbacks of parseRunSandbox: a status from before the Scranton sandbox keeps its old line
+test('runLine: a status without the new fields keeps the old fragments; a bare Scranton status names only the sandbox', () => {
+  assert.equal(frag({ mode: 'scranton' }), 'Scranton sandbox');
+  assert.equal(frag({ mode: 'scranton', backend: 7, check_network: 'sometimes', windows_mode: 'max' }), 'Scranton sandbox', 'junk fields are dropped');
+  assert.deepEqual(['backend', 'windowsMode', 'checkNetwork'].map((k) => parseStatus(runStatus()).sandbox[k]), [null, null, null]);
+  assert.equal(frag({ mode: 'docker', isolated: true }), 'Docker (isolated, no network)');
+  assert.equal(frag({ mode: 'host', isolated: false }), 'host, no OS isolation');
+  assert.equal(frag(ENGINE_SANDBOX.docker), 'Docker container with read-only root and no network for checks');
+  assert.equal(sandboxLine({ mode: 'bwrap' }).sandbox, null, 'an unknown mode gets no fragment');
+});
+
+// guards the sandbox_ready / sandbox_failed texts and `'sandbox_failed'` in LOUD_EVENTS
+test('eventText: sandbox_ready and sandbox_failed are said in words, a failure loudly', () => {
+  const ev = (type, data) => ({ seq: 1, type, data });
+  assert.equal(eventText(ev('sandbox_ready', { mode: 'scranton', backend: 'appcontainer', windows_mode: 'strict', check_network: 'none' })),
+    'sandbox ready: Scranton sandbox · AppContainer · no network for checks');
+  assert.equal(eventText(ev('sandbox_failed', { mode: 'scranton', backend: 'appcontainer', code: 'launch', message: 'the helper is missing' })),
+    'sandbox failed: launch: the helper is missing');
+  assert.equal(eventText(ev('sandbox_failed', {})), 'sandbox failed');
+  assert.ok(LOUD_EVENTS.has('sandbox_failed'));
+  assert.ok(!LOUD_EVENTS.has('sandbox_ready'));
 });
 
 const MODELS = { planner: { provider: 'ollama', model: 'qwen' }, implementer: { provider: 'ollama', model: 'qwen' }, reviewer: { provider: 'ollama', model: 'llama' } };
@@ -306,6 +349,7 @@ test('check and setup ids use exactly the pattern of engine config.py, and a 400
   assert.equal(runErrorField('setup.0.command: unsafe_shim_arguments'), 'setup.0.command');
   assert.equal(runErrorField('setup[2]: argv must not be empty'), 'setup.2.command');
   assert.equal(runErrorField('checks.3: duplicate'), 'checks.3.id');
+  assert.equal(runErrorField('setup[1].network: strict blocks network'), 'setup.1.network', 'the strict refusal names its field');
 });
 
 // finding 2: check output tails (reverting the outputTail line in parseStatus fails this)
@@ -405,7 +449,7 @@ test('createPoller schedules by the answer and stops for good', async () => {
 
 test('parseEngineInfo: a missing route and an unavailable engine both give a reason to show', () => {
   assert.deepEqual(parseEngineInfo(null, 404), { available: false, reason: 'This server does not offer the Pipeline engine yet.', version: null, dockerImage: null,
-    sandbox: { known: false, docker: null, image: null, build: null }, providers: [] });
+    sandbox: { known: false, docker: null, image: null, build: null }, native: null, providers: [] });
   assert.equal(parseEngineInfo({ available: false, reason: 'python not found' }).reason, 'python not found');
   const info = parseEngineInfo({
     available: true, reason: null, version: '0.1.0', source: 'dev', sandbox: { dockerImage: 'scranton-sandbox:1.5.0' },
@@ -507,7 +551,130 @@ test('buildRunBody: replans and parallelSteps are sent within their bounds, neve
   assert.deepEqual(['replans', 'parallelSteps'].map((k) => buildRunBody({ ...FORM, replans: '9', parallelSteps: '0' }).body[k]), [1, 2], 'out of range: the form defaults');
   const demo = buildRunBody({ demo: true, task: '', delivery: 'apply', sandbox: 'docker', replans: '3', parallelSteps: '3' }).body;
   assert.equal('replans' in demo || 'parallelSteps' in demo, false);
-  assert.deepEqual(buildRunBody({ ...FORM, sandbox: '' }), { error: 'Choose where the checks run: Docker container or Trusted host.', field: 'sandbox' });
+  assert.deepEqual(buildRunBody({ ...FORM, sandbox: '' }), { error: 'Choose where the checks run: Scranton sandbox, Docker container or Trusted host.', field: 'sandbox' });
+});
+
+// ------------------------------------------------------------ pipeline-native-sandbox-contract: the Scranton sandbox
+
+const NATIVE_MODE = (over = {}) => ({ available: true, reason: null, backend: 'low-integrity', checkNetwork: 'allow', setupNetworkAllowed: true, ...over });
+const NATIVE = (over = {}, modes = {}) => ({
+  platform: 'win32', available: true, reason: null,
+  modes: { low: NATIVE_MODE(), strict: NATIVE_MODE({ backend: 'appcontainer', checkNetwork: 'none', setupNetworkAllowed: false }), ...modes }, ...over,
+});
+const infoWith = (native, sb = SANDBOX()) => parseEngineInfo({ available: true, sandbox: { ...sb, native } });
+
+// guards parseNative: section 6 shape, unknown modes, and that it is read apart from the Docker probe
+test('parseNative: both Windows modes are read; a mode left out is unknown, or unavailable with the overall reason', () => {
+  assert.deepEqual(infoWith(NATIVE()).native, {
+    platform: 'win32', available: true, reason: null, modes: {
+      low: { available: true, reason: null, backend: 'low-integrity', checkNetwork: 'allow', setupNetworkAllowed: true },
+      strict: { available: true, reason: null, backend: 'appcontainer', checkNetwork: 'none', setupNetworkAllowed: false },
+    },
+  });
+  assert.equal(parseEngineInfo({ available: true, sandbox: { dockerImage: 'x' } }).native, null, 'an older server: nothing known');
+  assert.equal(parseEngineInfo({ available: true, sandbox: { native: { available: 'yes' } } }).native, null);
+  assert.equal(parseEngineInfo({ available: true, sandbox: { dockerImage: 'x', native: NATIVE() } }).native.available, true, 'without the Docker probe too');
+  const mac = parseNative({ platform: 'darwin', available: false, reason: 'Scranton sandbox for Pipeline is available on Windows only in this version' });
+  assert.deepEqual(mac.modes.strict, { available: false, reason: 'Scranton sandbox for Pipeline is available on Windows only in this version', backend: null, checkNetwork: null, setupNetworkAllowed: false });
+  assert.equal(parseNative({ available: true, modes: { low: NATIVE_MODE() } }).modes.strict.available, null, 'left out while the sandbox is available: unknown');
+  assert.equal(parseNative({ available: false, modes: {} }).modes.low.reason, 'no reason given');
+  assert.equal(parseNative(NATIVE({}, { strict: NATIVE_MODE({ available: false, reason: '  runner_missing \n' }) })).modes.strict.reason, 'runner_missing');
+});
+
+// guards each branch of sandboxStates
+test('sandboxStates: availability and the reason per choice; strict is said beside its checkbox only while it is off', () => {
+  assert.deepEqual(sandboxStates(infoWith(NATIVE())), {
+    scranton: { text: 'ready, Low integrity', tone: '' }, strict: { text: '', tone: '' }, docker: { text: 'ready', tone: '' },
+  });
+  assert.equal(sandboxStates(infoWith(NATIVE()), { windowsMode: 'strict' }).scranton.text, 'ready, AppContainer');
+  const noStrict = infoWith(NATIVE({}, { strict: NATIVE_MODE({ available: false, reason: 'AppContainer profile could not be created', backend: null }) }));
+  assert.deepEqual(sandboxStates(noStrict).strict, { text: 'not available: AppContainer profile could not be created', tone: 'error' });
+  assert.deepEqual(sandboxStates(noStrict, { windowsMode: 'strict' }), {
+    scranton: { text: 'not available: AppContainer profile could not be created', tone: 'error' }, strict: { text: '', tone: '' }, docker: { text: 'ready', tone: '' },
+  });
+  assert.deepEqual(sandboxStates(parseEngineInfo({ available: true, sandbox: { dockerImage: 'x' } })), {
+    scranton: { text: '', tone: '' }, strict: { text: '', tone: '' }, docker: { text: '', tone: '' },
+  }, 'an older server says nothing');
+  const docker = (sb) => sandboxStates(infoWith(NATIVE(), sb)).docker;
+  assert.deepEqual(docker(SANDBOX({ docker: { available: false, reason: 'down' } })), { text: 'not available: Docker is not running', tone: 'error' });
+  assert.deepEqual(docker(SANDBOX({ image: { name: 'i', present: false } })), { text: 'the image is not built yet', tone: '' });
+  assert.deepEqual(docker(SANDBOX({ image: { name: 'i', present: false }, build: { state: 'running', tail: '' } })), { text: 'building the image', tone: 'busy' });
+});
+
+// review finding: a probe the server is still running is unknown, never unavailable
+test('pending: a Docker or Scranton probe still running reads as checking, blocks nothing and asks for another poll', () => {
+  const checking = SANDBOX({ dockerImage: null, docker: { available: false, version: null, reason: 'Checking Docker availability', pending: true }, image: { name: null, present: false } });
+  const info = infoWith(NATIVE(), checking);
+  assert.deepEqual(info.sandbox, { known: false, pending: true, docker: null, image: null, build: null });
+  assert.equal(sandboxPending(info), true);
+  assert.deepEqual(sandboxStates(info).docker, { text: 'checking...', tone: 'busy' });
+  assert.deepEqual(sandboxView(info.sandbox), { line: 'Checking whether Docker is running...', tone: 'busy', ready: null, build: 'hidden', tail: '' });
+  assert.equal(sandboxBlock(info, { sandbox: 'docker' }), '');
+  assert.equal(sandboxPending(infoWith(NATIVE())), false, 'known: nothing to ask again');
+
+  const native = infoWith({ platform: 'win32', available: false, reason: 'probing', pending: true, modes: {} });
+  assert.deepEqual([native.native.pending, native.native.modes.low.available, native.native.modes.strict.available], [true, null, null]);
+  assert.equal(sandboxPending(native), true);
+  assert.deepEqual(sandboxStates(native).scranton, { text: 'checking...', tone: 'busy' });
+  assert.deepEqual(sandboxStates(native).strict, { text: '', tone: '' });
+  assert.equal(sandboxBlock(native, { sandbox: 'scranton', windowsMode: 'strict' }), '');
+});
+
+// guards sandboxBlock and `if (raw(form.unavailable)) return { error: ..., field: 'sandbox' }` in sandboxOf
+test('sandboxBlock: the picked choice that cannot run says why and names the alternatives; nothing known blocks nothing', () => {
+  const mac = infoWith({ platform: 'darwin', available: false, reason: 'Scranton sandbox for Pipeline is available on Windows only in this version.' });
+  assert.equal(sandboxBlock(mac, { sandbox: 'scranton' }),
+    'The Scranton sandbox is not available here: Scranton sandbox for Pipeline is available on Windows only in this version. Pick Docker or Trusted host.');
+  const noStrict = infoWith(NATIVE({}, { strict: NATIVE_MODE({ available: false, reason: 'runner_missing' }) }));
+  assert.equal(sandboxBlock(noStrict, { sandbox: 'scranton', windowsMode: 'low' }), '', 'low still runs');
+  assert.equal(sandboxBlock(noStrict, { sandbox: 'scranton', windowsMode: 'strict' }),
+    'The Scranton sandbox with Block network (strict) is not available here: runner_missing. Turn off Block network, or pick Docker or Trusted host.');
+  assert.equal(sandboxBlock(mac, { sandbox: 'scranton', windowsMode: 'strict' }).endsWith(' Pick Docker or Trusted host.'), true, 'low is no way out there');
+  for (const sandbox of ['docker', 'host']) assert.equal(sandboxBlock(mac, { sandbox }), '', sandbox);
+  assert.equal(sandboxBlock(parseEngineInfo({ available: true, sandbox: { dockerImage: 'x' } }), { sandbox: 'scranton' }), '', 'an older server: the server decides');
+  assert.equal(sandboxBlock(null, { sandbox: 'scranton' }), '');
+
+  const down = infoWith(NATIVE(), SANDBOX({ docker: { available: false, reason: 'the Docker daemon does not answer.' } }));
+  assert.equal(sandboxBlock(down, { sandbox: 'docker' }), 'Docker is not running: the Docker daemon does not answer. Start Docker, or pick another sandbox.');
+  const missing = infoWith(NATIVE(), SANDBOX({ image: { name: 'img:1', present: false } }));
+  assert.equal(sandboxBlock(missing, { sandbox: 'docker' }), 'The sandbox image img:1 has not been built yet. Build it, name another image, or pick another sandbox.');
+  assert.equal(sandboxBlock(missing, { sandbox: 'docker', image: 'my/img:2' }), '', 'another image is the server\'s to check');
+  assert.equal(sandboxBlock(infoWith(NATIVE(), SANDBOX({ image: { name: 'img:1', present: false }, build: { state: 'running', tail: '' } })), { sandbox: 'docker' }),
+    'The sandbox image img:1 is still being built. Wait for it, or pick another sandbox.');
+
+  const text = sandboxBlock(mac, { sandbox: 'scranton' });
+  assert.deepEqual(buildRunBody({ ...FORM, sandbox: 'scranton', unavailable: text }), { error: text, field: 'sandbox' });
+  assert.deepEqual(buildRunBody({ demo: true, task: '', sandbox: 'scranton', unavailable: text }), { error: text, field: 'sandbox' }, 'the demo too');
+});
+
+// guards the scranton branch of sandboxOf: exactly { mode, windowsMode }, never image or trustHost
+test('buildRunBody: the Scranton sandbox sends its Windows mode and nothing else; every mode sends only its own fields', () => {
+  const s = (over) => buildRunBody({ ...FORM, image: 'ignored', trustHost: true, ...over }).body.sandbox;
+  assert.deepEqual(s({ sandbox: 'scranton' }), { mode: 'scranton', windowsMode: 'low' }, 'low by default');
+  assert.deepEqual(s({ sandbox: 'scranton', windowsMode: 'strict', setup: [] }), { mode: 'scranton', windowsMode: 'strict' });
+  assert.deepEqual(s({ sandbox: 'scranton', windowsMode: 'max' }), { mode: 'scranton', windowsMode: 'low' });
+  assert.deepEqual(s({ sandbox: 'docker', windowsMode: 'strict' }), { mode: 'docker', image: 'ignored' });
+  assert.deepEqual(s({ sandbox: 'host', windowsMode: 'strict' }), { mode: 'host', trustHost: true });
+  assert.deepEqual(buildRunBody({ demo: true, task: '', delivery: 'apply', sandbox: 'scranton', windowsMode: 'strict' }).body.sandbox, { mode: 'scranton', windowsMode: 'strict' });
+  assert.deepEqual(WINDOWS_MODE_HINT, {
+    low: 'Writes stay in the run workspace; network is not blocked.',
+    strict: 'Checks and setup run without network; tools must be readable by Windows app containers.',
+  });
+});
+
+// guards networkSetup / strictSetupText and the strict check in buildRunBody
+test('buildRunBody: strict refuses a setup command that needs network, naming its row; low, Docker and the demo do not', () => {
+  const setup = [{ id: '', command: '', network: true }, { id: 'npm-ci', command: 'npm ci', network: true }, { id: 'gen', command: 'node gen.js', network: false }];
+  const text = 'Block network (strict) runs setup without network, but setup command npm-ci needs it. Turn off Block network or use Docker; the needs network choice is kept.';
+  assert.equal(strictSetupText(setup), text, 'a blank row is not counted');
+  assert.deepEqual(buildRunBody({ ...FORM, sandbox: 'scranton', windowsMode: 'strict', setup }), { error: text, field: 'setup.1.network' });
+  assert.equal(strictSetupText([{ id: 'a', command: 'x', network: true }, { id: '', command: 'y', network: true }]),
+    'Block network (strict) runs setup without network, but setup commands a, 2 need it. Turn off Block network or use Docker; the needs network choice is kept.');
+  assert.equal(strictSetupText(setup.slice(2)), '');
+  assert.deepEqual(buildRunBody({ ...FORM, sandbox: 'scranton', windowsMode: 'low', setup }).body.setup,
+    [{ id: 'npm-ci', command: 'npm ci', network: true }, { id: 'gen', command: 'node gen.js', network: false }], 'low keeps the network choice');
+  assert.ok(buildRunBody({ ...FORM, sandbox: 'docker', windowsMode: 'strict', setup }).body);
+  assert.ok(buildRunBody({ demo: true, task: '', sandbox: 'scranton', windowsMode: 'strict', setup }).body, 'the demo has its own setup');
 });
 
 // guards the plan_revision / replans_left / steps_done / lanes lines of parseStatus and the revision part of parsePending

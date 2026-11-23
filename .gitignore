@@ -1,5 +1,6 @@
 node_modules/
 src-tauri/target/
+/native/sandbox-helper/target/
 src-tauri/gen/
 src-tauri/staged/
 src-tauri/binaries/

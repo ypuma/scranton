@@ -11,6 +11,7 @@ from scranton_pipeline.config import EngineConfig, ModelConfig, load_config
 from scranton_pipeline.evals.pack import Pack, Task, invalid, local, select
 from scranton_pipeline.grounding import score_trace
 from scranton_pipeline.models import CheckResult
+from scranton_pipeline.nodes.parallel import copy_workspace
 from scranton_pipeline.observability import _rows
 from scranton_pipeline.procedure import Graph, digest, load
 from scranton_pipeline.runner import resume, start, validate_trust
@@ -40,7 +41,7 @@ def base_config(pack: Pack, path: Path | None, models: str, real_calls: bool, *,
     if path is not None:
         cfg = load_config(path)
     else:
-        cfg = EngineConfig.model_validate({"models": {r: {"provider": "scripted", "model": "eval", "script_path": "unused"} for r in ("planner", "implementer", "reviewer")}, "sandbox": {"mode": "host"}, "allow_no_checks": True})
+        cfg = EngineConfig.model_validate({"models": {r: {"provider": "scripted", "model": "eval", "script_path": "unused"} for r in ("planner", "implementer", "reviewer")}, "allow_no_checks": True})
     roles = ["planner", "implementer", "reviewer", *(["refiner"] if refiner else [])]
     if models == "config":
         for role in roles:
@@ -53,7 +54,7 @@ def base_config(pack: Pack, path: Path | None, models: str, real_calls: bool, *,
 
 
 def python_command(mode: str) -> list[str]:
-    return [sys.executable if mode == "host" else "python"]
+    return ["python" if mode == "docker" else sys.executable]
 
 
 def expand_python(argv: list[str], mode: str) -> list[str]:
@@ -85,7 +86,10 @@ def acceptance(pack: Pack, task: Task, directory: Path, run_dir: Path, cfg: Engi
     if not succeeded or deadline is not None and time.monotonic() >= deadline:
         return 0.0, []
     tree = directory / "accepted-tree"
-    shutil.copytree(local(pack.root, task.fixture), tree)
+    box = build_sandbox(cfg.sandbox, workspace=tree, run_id=run_dir.name, trust_host=trust_host,
+                        name_suffix="acceptance", state_dir=run_dir / "sandbox-state", run_dir=run_dir)
+    box.preflight()
+    copy_workspace(local(pack.root, task.fixture), tree, box, exclude_state=False)
     repo = WorkspaceRepo.init(tree)
     base = repo.commit_all("Pristine acceptance fixture")
     patch = run_dir / "delivery" / "candidate.diff"
@@ -97,16 +101,17 @@ def acceptance(pack: Pack, task: Task, directory: Path, run_dir: Path, cfg: Engi
     paths = [p for _, p in repo.changed_files(base, head)]
     allowed = all(any(fnmatch.fnmatchcase(p, g) or g.startswith("**/") and fnmatch.fnmatchcase(p, g[3:]) for g in task.acceptance.paths) for p in paths)
     checks = [c.model_copy(update={"argv": expand_python(c.argv, cfg.sandbox.mode)}) for c in task.acceptance.checks]
-    box = build_sandbox(cfg.sandbox, workspace=tree, run_id=run_dir.name, trust_host=trust_host,
-                        name_suffix="acceptance", state_dir=run_dir / "sandbox-state")
-    box.preflight()
     results: list[CheckResult] = []
-    for check in checks:
-        remaining = check.timeout_s if deadline is None else deadline - time.monotonic()
-        if remaining <= 0:
-            return 0.0, [r.model_dump(mode="json") for r in results]
-        bounded = check.model_copy(update={"timeout_s": min(check.timeout_s, remaining)})
-        results.extend(run_checks([bounded], sandbox=box, log_dir=directory / "acceptance-logs", label="hidden", stop=None, fail_fast=False))
+    try:
+        for check in checks:
+            remaining = check.timeout_s if deadline is None else deadline - time.monotonic()
+            if remaining <= 0:
+                return 0.0, [r.model_dump(mode="json") for r in results]
+            bounded = check.model_copy(update={"timeout_s": min(check.timeout_s, remaining)})
+            results.extend(run_checks([bounded], sandbox=box, log_dir=directory / "acceptance-logs", label="hidden", stop=None, fail_fast=False))
+    finally:
+        if cfg.sandbox.mode == "scranton":
+            box.cleanup()
     return float(allowed and len(results) == len(checks) and all(r.status == "passed" for r in results)), [r.model_dump(mode="json") for r in results]
 
 
@@ -121,7 +126,7 @@ def expectation(task: Task, result: dict[str, Any]) -> bool:
 def evaluate_task(pack: Pack, task: Task, cfg: EngineConfig, directory: Path, *, models: str, graph: Graph | None, trust_host: bool, deadline: float | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     directory.mkdir()
     source = directory / "source"
-    shutil.copytree(local(pack.root, task.fixture), source)
+    copy_workspace(local(pack.root, task.fixture), source, None, exclude_state=False)
     WorkspaceRepo.init(source).commit_all("Evaluation fixture")
     visible = task_config(pack, task, cfg, directory, models, graph)
     if deadline is not None:
@@ -151,7 +156,7 @@ def evaluate_task(pack: Pack, task: Task, cfg: EngineConfig, directory: Path, *,
 def evaluate(pack: Pack, out: Path, *, cfg: EngineConfig, graph: Graph | None = None, tasks: str | None = None,
              split: str = "all", models: str = "scripted", trust_host: bool = False, deadline: float | None = None) -> dict[str, Any]:
     selected = select(pack, tasks, split)
-    validate_trust(cfg, trust_host or pack.builtin)
+    validate_trust(cfg, trust_host)
     out = output_dir(out, pack)
     started = time.monotonic()
     results, metadata = [], []
@@ -159,7 +164,7 @@ def evaluate(pack: Pack, out: Path, *, cfg: EngineConfig, graph: Graph | None = 
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("Evolution deadline between tasks")
         result, meta = evaluate_task(pack, task, cfg, out / task.id, models=models, graph=graph,
-                                     trust_host=trust_host or pack.builtin, deadline=deadline)
+                                     trust_host=trust_host, deadline=deadline)
         results.append(result)
         metadata.append(meta)
     scored = {"schema": 1, "pack": pack.manifest.name, "graph_digest": digest(graph) if graph else None,

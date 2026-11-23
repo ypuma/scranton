@@ -71,7 +71,7 @@ def test_memory_only_history_through_existing_cli(case):
 def test_parallel_lanes_exclude_integration_checks(tmp_path):
     from .conftest import cli
     root = tmp_path / "parallel"
-    code, status = cli("demo", "--scenario", "parallel", "--run-root", root, "--run-id", "dream001")
+    code, status = cli("demo", "--sandbox", "host", "--scenario", "parallel", "--run-root", root, "--run-id", "dream001")
     assert code == 3, status
     code, status = cli("resume", "--run-dir", root / "dream001", "--gate", "plan",
                        "--decision", "approve", "--digest", status["pending"]["digest"], "--trust-host")

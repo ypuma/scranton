@@ -271,6 +271,8 @@ class RunStatus(StrictModel):
     @field_validator("sandbox", mode="before")
     @classmethod
     def sandbox_defaults(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if value.get("mode") == "scranton":
+            return value
         return {"isolation": "Unknown (legacy status).", "image": None, **value}
 
     pid: int | None = None

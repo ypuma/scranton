@@ -127,9 +127,13 @@ export function bubblewrapArgs({ worktree, tempDir, cwd = worktree, network = tr
   return ['--die-with-parent', '--new-session', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--ro-bind', '/', '/', ...bind(ordinary.filter(g => !within('/tmp', g.path))), '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', ...bind(ordinary.filter(g => within('/tmp', g.path) && g.path !== '/tmp')), ...mountDirs(state), ...bind(stateGrants), '--bind', worktree, worktree, '--bind', tempDir, tempDir, ...masks, ...bind(approved), ...remountDirs(credentialDirs), ...remountDirs(state), ...hidden.flatMap((dir) => ['--tmpfs', dir]), ...unset.flatMap((key) => ['--unsetenv', key]), ...(!network ? ['--unshare-net'] : []), '--chdir', cwd, '--', file, ...argv];
 }
 
-function run(file, args) {
-  const result = spawnSync(file, args, { encoding: 'utf8', windowsHide: true, timeout: 30000 });
-  if (result.error || result.status !== 0) throw new Error(`Sandbox setup failed (${path.basename(file)}): ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
+function run(file, args, timeout = 30000) {
+  const result = spawnSync(file, args, { encoding: 'utf8', windowsHide: true, timeout });
+  if (result.error || result.status !== 0) {
+    const error = new Error(`Sandbox setup failed (${path.basename(file)}): ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
+    if (args[0] === 'label-low' && /^Sandbox setup failed: Refusing (?:reparse point|hard link)/.test(result.stderr ?? '')) error.code = 'SANDBOX_WORKSPACE_LINK';
+    throw error;
+  }
   return result.stdout.trim();
 }
 function helperRequired(options) {
@@ -148,15 +152,65 @@ export async function available({ platform = process.platform, ...options } = {}
   } catch (error) { return { available: false, reason: `${error.message} Use Docker or explicit trusted host; no automatic fallback.` }; }
 }
 
-export function hardenCredentials(dir, { backup, ...options } = {}) {
+export function hardenCredentials(dir, { backup, discardUnchanged = false, ...options } = {}) {
   if (process.platform !== 'win32') throw new Error('Mandatory credential labels are Windows-only');
   checkedDirectory(dir);
   if (!backup || !path.isAbsolute(backup) || within(dir, backup)) throw new Error('An absolute label backup path outside the protected directory is required');
   run(helperRequired(options), ['harden', '--path', dir, '--backup', backup]);
+  if (discardUnchanged && alreadyHardened(backup)) fs.unlinkSync(backup);
   return { restore: () => run(helperRequired(options), ['unharden', '--backup', backup]), backup };
 }
 
-export function createSandbox({ mode = 'scranton', worktree, tempDir, network = true, limits = {}, platform = process.platform, windowsMode = 'low', credentialsDir, env = process.env, extraRoots = () => [], protectedRoots = [] } = {}) {
+// The helper writes length-prefixed UTF-8 path/SDDL pairs before applying labels.
+// Keep any snapshot containing a pre-hardening label, even after a crash.
+function alreadyHardened(backup) {
+  const bytes = fs.readFileSync(backup);
+  let pos = 0;
+  function field() {
+    if (pos + 4 > bytes.length) return;
+    const end = pos + 4 + bytes.readUInt32LE(pos);
+    if (end > bytes.length) return;
+    const value = bytes.toString('utf8', pos + 4, end);
+    pos = end;
+    return value;
+  }
+  if (!bytes.length) return false;
+  while (pos < bytes.length) {
+    if (!field() || !/^S:(?:AI)?\(ML;(?:OICI)?(?:ID)?;NWNR;;;ME\)$/.test(field() ?? '')) return false;
+  }
+  return true;
+}
+
+export function credentialHardening({ backupParent, runId, protect = hardenCredentials, discardUnchanged = false }) {
+  let protection;
+  return async (env) => {
+    if (process.platform !== 'win32') return;
+    protection ??= Promise.resolve().then(() => {
+      const dir = credentialLocations({ env })[0];
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const backups = path.join(backupParent ?? path.dirname(dir), 'credential-label-backups');
+      fs.mkdirSync(backups, { recursive: true, mode: 0o700 });
+      if (!backupParent) checkedDirectory(backups);
+      return protect(dir, { backup: path.join(backups, `${runId}-${randomUUID()}.json`), env, ...(discardUnchanged ? { discardUnchanged } : {}) });
+    });
+    await protection;
+  };
+}
+
+export function recoverWindowsProfile(profile, roots, { env = process.env } = {}) {
+  if (process.platform !== 'win32' || !/^scranton_[a-f0-9]{32}$/.test(profile)) throw new Error('Invalid Windows sandbox recovery profile');
+  const helper = helperRequired({ env });
+  let incomplete = false;
+  for (const dir of roots) {
+    // Leave time for reap even if a tree walk stalls under the 30 s recover deadline.
+    try { run(helper, ['pipeline-profile-clean-tree', '--name', profile, '--path', checkedDirectory(dir)], 8000); }
+    catch { incomplete = true; }
+  }
+  run(helper, ['pipeline-profile-reap', '--name', profile], 8000);
+  return !incomplete;
+}
+
+export function createSandbox({ mode = 'scranton', worktree, tempDir, network = true, limits = {}, platform = process.platform, windowsMode = 'low', credentialsDir, env = process.env, extraRoots = () => [], protectedRoots = [], beforeProfileCreate, pipelineStatus } = {}) {
   if (mode !== 'scranton') throw new Error('Native sandbox mode must be scranton');
   if (typeof network !== 'boolean') throw new Error('network must be boolean');
   if (!['low', 'strict'].includes(windowsMode)) throw new Error('windowsMode must be low or strict');
@@ -176,14 +230,22 @@ export function createSandbox({ mode = 'scranton', worktree, tempDir, network = 
     if (credentials.some((dir) => within(worktree, dir) || within(tempDir, dir) || within(dir, worktree) || within(dir, tempDir))) throw new Error('Writable roots must not overlap credentials');
     if (platform === 'win32') {
       helper = helperRequired({ env });
+      // Reject old helper overrides before inheriting the payload streams.
+      if (pipelineStatus) run(helper, ['pipeline-check-tree', '--path', tempDir]);
       run(helper, ['label-low', '--path', worktree]); run(helper, ['label-low', '--path', tempDir]);
       if (windowsMode === 'strict') {
-        profile = `scranton_${randomUUID().replaceAll('-', '')}`;
+        const name = `scranton_${randomUUID().replaceAll('-', '')}`;
+        beforeProfileCreate?.(name);
+        profile = name;
         try {
           profileSid = run(helper, ['profile-create', '--name', profile]);
           for (const dir of [worktree, tempDir]) run(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/icacls.exe'), [dir, '/grant', `*${profileSid}:(OI)(CI)(M)`, '/T', '/Q']);
         }
-        catch (error) { disposed = true; cleanupProfile(); throw error; }
+        catch (error) {
+          disposed = true;
+          if (!beforeProfileCreate) cleanupProfile(); // Pipeline's caller disposes and reports warnings.
+          throw error;
+        }
       }
     } else if (platform === 'linux') run('bwrap', bubblewrapArgs({ worktree, tempDir, network, credentials, env }, '/bin/true'));
     else if (platform === 'darwin') run('/usr/bin/sandbox-exec', ['-p', seatbeltProfile({ worktree, tempDir, network, credentials }), '/usr/bin/true']);
@@ -208,7 +270,7 @@ export function createSandbox({ mode = 'scranton', worktree, tempDir, network = 
     let executable, args;
     if (platform === 'win32') {
       executable = helper;
-      args = ['exec', '--mode', windowsMode, '--cwd', cwd, '--network', network ? 'allow' : 'none', ...(profile ? ['--profile', profile] : []), ...Object.entries(limits).flatMap(([key, value]) => [limitNames[key], String(value)]), '--', file, ...argv];
+      args = ['exec', '--mode', windowsMode, '--cwd', cwd, '--network', network ? 'allow' : 'none', ...(profile ? ['--profile', profile] : []), ...(pipelineStatus ? ['--pipeline-status', pipelineStatus, '--pipeline-env', Object.keys(childEnv).join('\n')] : []), ...Object.entries(limits).flatMap(([key, value]) => [limitNames[key], String(value)]), '--', file, ...argv];
     } else if (platform === 'darwin') {
       executable = '/usr/bin/sandbox-exec'; args = ['-p', seatbeltProfile({ worktree, tempDir, network, credentials, protectedRoots, extraRoots: grants }), file, ...argv];
     } else { executable = 'bwrap'; args = bubblewrapArgs({ worktree, tempDir, cwd, network, credentials, env: childEnv, protectedRoots, extraRoots: grants }, file, argv); }
@@ -226,11 +288,16 @@ export function createSandbox({ mode = 'scranton', worktree, tempDir, network = 
     await Promise.all([...children].map((child) => new Promise((resolve) => {
       child.once('close', resolve); child.kill('SIGKILL');
     })));
-    cleanupProfile();
+    return cleanupProfile();
   }
   function cleanupProfile() {
     const errors = [];
     if (profile) {
+      if (beforeProfileCreate) {
+        const complete = recoverWindowsProfile(profile, [worktree, tempDir], { env });
+        profile = undefined;
+        return complete;
+      }
       if (profileSid) for (const dir of [worktree, tempDir]) { try { run(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/icacls.exe'), [dir, '/remove:g', `*${profileSid}`, '/T', '/Q']); } catch (error) { errors.push(error); } }
       try { run(helper, ['profile-delete', '--name', profile]); profile = undefined; } catch (error) { errors.push(error); }
     }

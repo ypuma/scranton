@@ -43,7 +43,7 @@ def grounded(tmp_path):
     (workspace / "calculator.py").write_text("def add(a, b):\n    return a - b\n")
     run = tmp_path / "run"
     run.mkdir()
-    cfg = config(run)
+    cfg = config(run, sandbox="host")
     deps = Dependencies(cfg, run, workspace, None, UsageLedger(run / "usage.jsonl"),
         EventLog(run / "events.jsonl", "ground001", Redactor()), StopSignal(run / "cancel"), Redactor(), trust_host=True)
     state = {"task": "Fix addition", "plan": Plan.model_validate(PLAN["plan"]).model_dump(mode="json"),

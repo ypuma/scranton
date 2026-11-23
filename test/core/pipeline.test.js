@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { resolvePipelineCommand, pipelineChildEnv, probePipeline } from '../../src/core/pipeline-command.js';
 import { tokenizePipelineCommand } from '../../src/core/pipeline-supervisor.js';
 
@@ -12,6 +13,21 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+const dockerCalls = (file) => fs.existsSync(file)
+  ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter((args) => !args.includes('--mode'))
+  : [];
+
+async function waitForSandbox(supervisor, ready) {
+  const deadline = performance.now() + 15000;
+  do {
+    const { sandbox } = await supervisor.capability();
+    if (ready(sandbox)) return sandbox;
+    await sleep(20);
+  } while (performance.now() < deadline);
+  assert.fail('Timed out waiting for Pipeline sandbox capability');
+}
+
 test('Pipeline command precedence, fallback and named parsing errors', (t) => {
   const root = fixture(t), dev = path.join(root, '.scratch/pipeline/venv/Scripts/python.exe'), bundled = path.join(root, 'engine-runtime/python/python.exe');
   assert.throws(() => resolvePipelineCommand({ root, env: {} }), /No bundled/);
@@ -77,40 +93,37 @@ test('Pipeline sandbox capability caches probes briefly and build invalidates th
   const env = { ...process.env, SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(root, 'workspaces'), FAKE_PIPELINE_PROBE_FILE: calls, FAKE_PIPELINE_IMAGE_MISSING: '1', FAKE_PIPELINE_IMAGE_FILE: image };
   const auth = { listAccounts: async () => [], listModels: async () => ({ providers: [] }) };
   const supervisor = createPipelineSupervisor({ dataDir: root, env, auth }); t.after(() => supervisor.close());
-  assert.equal((await supervisor.capability()).sandbox.image.present, false);
+  t.mock.timers.enable({ apis: ['Date'] });
+  assert.equal((await waitForSandbox(supervisor, (s) => !s.docker.pending)).image.present, false);
   await supervisor.capability();
-  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').length, 1);
+  assert.deepEqual(dockerCalls(calls), [['check']]);
   await supervisor.buildSandbox({});
-  const { setTimeout: sleep } = await import('node:timers/promises');
-  let value;
-  for (let i = 0; i < 100; i++) { value = await supervisor.capability(); if (value.sandbox.build.state === 'succeeded') break; await sleep(20); }
-  assert.equal(value.sandbox.build.state, 'succeeded'); assert.equal(value.sandbox.image.present, true);
-  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').length, 3);
-  assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse), Array(3).fill(['check']));
+  const sandbox = await waitForSandbox(supervisor, (s) => s.build.state === 'succeeded' && !s.docker.pending);
+  assert.equal(sandbox.image.present, true);
+  assert.deepEqual(dockerCalls(calls), Array(3).fill(['check']));
 });
 
 test('Pipeline sandbox slow first probe is single-flight and TTL starts at settlement; stale refresh never blocks', async (t) => {
   const { createPipelineSupervisor } = await import('../../src/core/pipeline-supervisor.js');
-  const { setTimeout: sleep } = await import('node:timers/promises');
   const root = fixture(t), calls = path.join(root, 'probes');
   const env = { ...process.env, SCRANTON_PIPELINE_COMMAND: JSON.stringify([process.execPath, path.resolve('tools/fake-pipeline.js')]), SCRANTON_PIPELINE_WORKSPACE_ROOT: path.join(root, 'workspaces'), FAKE_PIPELINE_PROBE_FILE: calls, FAKE_PIPELINE_PROBE_SLOW_MS: '3400' };
   const supervisor = createPipelineSupervisor({ dataDir: root, env, auth: { listAccounts: async () => [], listModels: async () => ({ providers: [] }) } });
   t.after(() => supervisor.close());
-  const count = () => fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').length : 0;
-  const first = supervisor.capability();
-  await sleep(3100);
-  await Promise.all([first, supervisor.capability(), supervisor.capability()]);
-  assert.equal(count(), 1);
-  await supervisor.capability(); assert.equal(count(), 1);
-  await sleep(3050);
+  t.mock.timers.enable({ apis: ['Date'] });
+  const count = () => dockerCalls(calls).length;
+  const first = await supervisor.capability();
+  assert.equal(first.sandbox.native.available, true);
+  assert.equal(first.sandbox.docker.pending, true, 'slow Docker probe must not delay native capability');
+  t.mock.timers.tick(3100);
+  await Promise.all([supervisor.capability(), supervisor.capability()]);
+  assert.equal((await waitForSandbox(supervisor, (s) => !s.docker.pending)).docker.available, true);
+  await supervisor.capability();
+  assert.equal(count(), 1, 'the cache TTL starts when the first probe settles');
+  t.mock.timers.tick(3050);
   env.FAKE_PIPELINE_DOCKER_ABSENT = '1';
-  const stale = await Promise.race([supervisor.capability(), sleep(1000).then(() => null)]);
-  assert.equal(stale?.sandbox.docker.available, true, 'cached capability must return while refresh is running');
-  await sleep(3100);
-  assert.equal((await supervisor.capability()).sandbox.docker.available, true);
-  assert.equal(count(), 2);
-  await sleep(600);
-  assert.equal((await supervisor.capability()).sandbox.docker.available, false);
+  const stale = await supervisor.capability();
+  assert.equal(stale.sandbox.docker.available, true, 'cached capability must return while refresh is running');
+  await waitForSandbox(supervisor, (s) => !s.docker.available);
   assert.equal(count(), 2);
 });
 
@@ -141,8 +154,10 @@ test('Pipeline fake normal runs report exact sandbox config, image defaults and 
     const result = await execPipeline(spec, ['run', '--source', source, '--task', 'Sandbox fixture', '--config', config, '--run-root', runs, '--run-id', `sandbox${i}`]);
     assert.equal(result.code, 3);
     const status = JSON.parse(fs.readFileSync(path.join(runs, `sandbox${i}`, 'status.json')));
-    const mode = cfg.sandbox?.mode ?? 'docker';
-    assert.deepEqual(status.sandbox, {
+    const mode = cfg.sandbox?.mode ?? 'scranton';
+    assert.deepEqual(status.sandbox, mode === 'scranton' ? {
+      mode, isolated: true, image: null, windows_mode: 'low', backend: 'low-integrity', check_network: 'allow', setup_network: false
+    } : {
       mode, isolated: mode === 'docker',
       image: mode === 'host' ? null : cfg.sandbox?.docker?.image || 'scranton-pipeline-sandbox:fake-1',
       isolation: mode === 'host' ? 'No OS isolation.' : 'Docker container with read-only root and no network for checks; shares the Docker VM kernel; workspace mounted read-write; setup commands with network can reach the internet and local services (including host.docker.internal).',

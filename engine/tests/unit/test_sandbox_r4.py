@@ -74,7 +74,7 @@ def test_docker_cli_env_is_scrubbed(tmp_path, monkeypatch):
         monkeypatch.setenv(key, "must-not-reach-docker")
     monkeypatch.setenv("PATH", "kept-path")
     calls = []
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", lambda argv, **kw: calls.append(kw) or result())
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", lambda argv, **kw: calls.append(kw) or result())
     box._invoke(["docker", "info"], 2)
     assert calls[0]["env"]["PATH"] == "kept-path"
     assert "must-not-reach-docker" not in calls[0]["env"].values()
@@ -84,7 +84,7 @@ def test_mount_deadline_and_setup_state(tmp_path, monkeypatch):
     # Guards: nested :ro mount by default; only writable_state removes it; deadline uses timeout + grace.
     monkeypatch.setattr(module.time, "time", lambda: 1234.25)
     calls = []
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", lambda argv, **kw: calls.append(list(argv)) or result())
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", lambda argv, **kw: calls.append(list(argv)) or result())
     for writable in (False, True):
         box.run(["python"], timeout_s=7, log_path=tmp_path / "log", writable_state=writable)
     runs = [c for c in calls if c[1] == "run"]
@@ -106,7 +106,7 @@ def test_mount_deadline_and_setup_state(tmp_path, monkeypatch):
 ])
 def test_docker_failure_classification(tmp_path, code, tail, error):
     # Guard: exit125 infrastructure; 126/127 require Docker's anchored daemon error prefix.
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", lambda argv, **kw: result(code, tail))
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", lambda argv, **kw: result(code, tail))
     if error:
         with pytest.raises(EngineError) as raised:
             box.run(["missing"], timeout_s=1, log_path=tmp_path / "log")
@@ -120,7 +120,7 @@ def test_checks_keep_docker_infrastructure_out_of_repairs(tmp_path):
     # Guard: run_checks re-raises docker_failed, but records executable_not_found as error.
     cfg = config(tmp_path)
     for code, expected in ((125, "docker_failed"), (127, "executable_not_found")):
-        box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", lambda argv, code=code, **kw: result(code,
+        box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", lambda argv, code=code, **kw: result(code,
             "docker: Error response from daemon: executable file not found"))
         if expected == "docker_failed":
             with pytest.raises(EngineError, match="docker:") as error:
@@ -146,27 +146,27 @@ def test_expired_sweep_and_own_cleanup(tmp_path, monkeypatch):
     assert calls[0][0:6] == ["docker", "ps", "-a", "--filter", "label=scranton.pipeline.run", "--format"]
     assert calls[1:] == [["docker", "rm", "-f", "abcdef123451"]]
     calls.clear()
-    box = DockerSandbox(SandboxConfig(), tmp_path, "12345678", lambda argv, **kw: calls.append(list(argv)) or result(tail="abcdef123456"))
+    box = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "12345678", lambda argv, **kw: calls.append(list(argv)) or result(tail="abcdef123456"))
     box.cleanup()
     assert calls == [["docker", "ps", "-a", "-q", "--filter", "label=scranton.pipeline.run=12345678"],
                      ["docker", "rm", "-f", "abcdef123456"]]
 
 
 @pytest.mark.parametrize("args", [["run"], ["resume"], ["demo"], ["sandbox", "check"]])
-def test_cli_start_sweeps_before_dispatch(tmp_path, monkeypatch, capsys, args):
-    # Guard: main dispatch calls sweep_expired for every start/resume/demo/check, even host mode.
+def test_cli_only_sweeps_for_docker_probe(tmp_path, monkeypatch, capsys, args):
+    # Execution sweeps are scoped to the selected mode under the run lock.
     calls = []
     monkeypatch.setattr(module, "sweep_expired", lambda: calls.append("sweep"))
     monkeypatch.setattr(module, "check_image", lambda image: {})
     monkeypatch.setattr(cli, "start", lambda **kw: {})
     monkeypatch.setattr(cli, "resume", lambda *a, **kw: {})
-    monkeypatch.setattr(cli, "load_config", lambda p: config(tmp_path))
+    monkeypatch.setattr(cli, "load_config", lambda p: config(tmp_path, sandbox="host"))
     from scranton_pipeline.demo import fixture
     monkeypatch.setattr(fixture, "run_demo", lambda *a, **kw: {})
     flags = {"run": ["--source", str(tmp_path), "--task", "fix", "--config", "unused", "--run-root", str(tmp_path)],
-             "resume": ["--run-dir", str(tmp_path)], "demo": ["--run-root", str(tmp_path)], "sandbox": []}
+             "resume": ["--run-dir", str(tmp_path)], "demo": ["--sandbox", "host", "--run-root", str(tmp_path)], "sandbox": []}
     assert cli.main([*args, *flags[args[0]]]) == 0
-    assert calls == ["sweep"]
+    assert calls == (["sweep"] if args[0] == "sandbox" else [])
     assert json.loads(capsys.readouterr().out) == {}
 
 

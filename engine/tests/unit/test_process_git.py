@@ -137,7 +137,7 @@ def test_docker_exact_argv_and_cleanup_without_engine(tmp_path, monkeypatch):
         calls.append((list(argv), kwargs))
         return ProcResult(0, False, False, 0, "", 0, kwargs.get("log_path"))
 
-    cfg = SandboxConfig()
+    cfg = SandboxConfig(mode="docker")
     sandbox = DockerSandbox(cfg, tmp_path, "abcdefgh1234", runner=runner)
     sandbox.preflight()
     assert calls[0][0] == ["docker", "info", "--format", "{{.ServerVersion}}"]
@@ -184,7 +184,7 @@ def test_docker_failure_is_closed_and_timeout_kills_container(tmp_path):
         calls.append(list(argv))
         return ProcResult(1, False, False, 0, "unavailable", 11, None)
 
-    sandbox = DockerSandbox(SandboxConfig(), tmp_path, "abcdefgh", runner=unavailable)
+    sandbox = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "abcdefgh", runner=unavailable)
     with pytest.raises(EngineError) as raised:
         sandbox.preflight()
     assert raised.value.code == "docker_unavailable"
@@ -194,7 +194,7 @@ def test_docker_failure_is_closed_and_timeout_kills_container(tmp_path):
         calls.append(list(argv))
         return ProcResult(None, True, False, 0, "", 0, None)
 
-    sandbox = DockerSandbox(SandboxConfig(), tmp_path, "abcdefgh", runner=timeout)
+    sandbox = DockerSandbox(SandboxConfig(mode="docker"), tmp_path, "abcdefgh", runner=timeout)
     assert sandbox.run(["check"], timeout_s=1, log_path=tmp_path / "log").timed_out
     name = calls[0][calls[0].index("--name") + 1]
     assert calls[1:] == [["docker", "rm", "-f", name],

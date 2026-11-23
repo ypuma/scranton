@@ -39,7 +39,7 @@ def test_command_uses_non_root_host_identity(monkeypatch, tmp_path, platform, ui
             monkeypatch.delattr(module.os, name, raising=False)
         else:
             monkeypatch.setattr(module.os, name, lambda value=value: value, raising=False)
-    box = module.DockerSandbox(SandboxConfig(), workspace, "12345678", runner, state_dir=state)
+    box = module.DockerSandbox(SandboxConfig(mode="docker"), workspace, "12345678", runner, state_dir=state)
     box.run(["python", "check.py"], timeout_s=1, log_path=tmp_path / "log",
             writable_state=writable_state)
     command = calls[0]
@@ -63,7 +63,7 @@ def test_invalid_identity_fails_before_docker_or_state_creation(monkeypatch, tmp
     monkeypatch.setattr(module.os, "getgid", lambda: gid, raising=False)
     calls = []
     state = tmp_path / "state"
-    box = module.DockerSandbox(SandboxConfig(), tmp_path / "workspace", "12345678",
+    box = module.DockerSandbox(SandboxConfig(mode="docker"), tmp_path / "workspace", "12345678",
                                lambda *args, **kwargs: calls.append(args), state_dir=state)
     with pytest.raises(EngineError) as raised:
         box.run(["true"], timeout_s=1, log_path=tmp_path / "log")

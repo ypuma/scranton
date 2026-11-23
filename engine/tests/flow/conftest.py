@@ -24,7 +24,7 @@ def case(tmp_path):
         path = tmp_path / f"{role}.json"
         path.write_text(json.dumps([turn]))
         scripts[role] = str(path)
-    cfg = config(tmp_path).model_dump(mode="json", by_alias=True)
+    cfg = config(tmp_path, sandbox="host").model_dump(mode="json", by_alias=True)
     for role, path in scripts.items():
         cfg["models"][role]["script_path"] = path
     cfg["grounding"] = {"mode": "observe"}

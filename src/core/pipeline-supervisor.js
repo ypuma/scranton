@@ -11,7 +11,7 @@ import { validateId } from './projects.js';
 import { writeFileAtomicSync, withFsRetry } from './util.js';
 import { killTree } from './process-tree.js';
 import { PACKAGE_ROOT, loadAgentsMd } from './config.js';
-import { probePipeline, resolvePipelineCommand, execPipeline, spawnPipeline, pipelineChildEnv, probePipelineSandbox } from './pipeline-command.js';
+import { probePipeline, resolvePipelineCommand, execPipeline, spawnPipeline, pipelineChildEnv, probePipelineSandbox, probePipelineNative, unavailablePipelineNative } from './pipeline-command.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const terminal = new Set(['succeeded', 'failed', 'rejected', 'cancelled']);
@@ -47,7 +47,8 @@ const optional = (file) => { try { return readJson(file); } catch (e) { if (e.co
 export function createPipelineSupervisor({ dataDir, env = process.env, auth, checkCapacity = () => {}, onStarting = () => {}, dreaming, context, agentsMd, cwd = PACKAGE_ROOT, flags = {}, modelWindows = createModelWindows() } = {}) {
   const children = new Map(), starting = new Set(), diagnostics = new Map(), secrets = new Set(), normalizing = new Map();
   let closing = false, sandboxProbe = null, buildEntry = null, buildStarting = false;
-  const sandboxFlights = new Map();
+  const sandboxFlights = new Map(), probeStop = new AbortController();
+  let nativeProbe = null, nativeFlight = null;
   const build = { state: 'idle', startedAt: null, finishedAt: null, tail: '' };
   const workspaceRoot = path.resolve(env.SCRANTON_PIPELINE_WORKSPACE_ROOT || (process.platform === 'win32' && env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'Scranton', 'pipeline') : path.join(dataDir, 'pipeline-workspaces')));
   const scrub = (value) => {
@@ -136,16 +137,39 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     if (sandboxFlights.has(key)) return !image && !fresh && sandboxProbe ? sandboxProbe.value : sandboxFlights.get(key);
     const pending = (async () => {
       let spec; try { spec = await available(); } catch { return { default_image: null, docker: { available: false, version: null, reason: 'Pipeline engine is not available' }, image: { name: image ?? null, present: false } }; }
-      const result = await probePipelineSandbox(spec, { env, image });
+      const result = await probePipelineSandbox(spec, { env, image, signal: probeStop.signal });
       result.docker.reason = result.docker.reason ? sandboxText(result.docker.reason) : result.docker.available ? null : 'Docker is not available';
       return result;
     })().then((value) => { if (!image) sandboxProbe = { at: Date.now(), value }; return value; }).finally(() => sandboxFlights.delete(key));
     sandboxFlights.set(key, pending);
     return !image && !fresh && sandboxProbe ? sandboxProbe.value : pending;
   }
+  async function nativeStatus(spec, windowsMode) {
+    const native = await probePipelineNative(spec, { env, windowsMode, signal: probeStop.signal });
+    for (const p of [native, ...Object.values(native.modes)]) if (p.reason) p.reason = sandboxText(p.reason);
+    return native;
+  }
+  function nativeCapability(spec) {
+    if (nativeProbe && Date.now() - nativeProbe.at < 3000) return nativeProbe.value;
+    return nativeFlight ??= nativeStatus(spec).then((value) => {
+      nativeProbe = { at: Date.now(), value };
+      return value;
+    }).finally(() => { nativeFlight = null; });
+  }
   async function capability() {
-    const engine = await probePipeline({ env }), sandbox = await sandboxStatus();
-    return { ...engine, sandbox: { dockerImage: sandbox.default_image, docker: sandbox.docker, image: sandbox.image, build: { ...build, tail: buildTail() } }, models: (await modelCatalog()).map(({ baseUrl, ...m }) => m) };
+    const engine = await probePipeline({ env });
+    // Docker may take up to 45 s. Refresh it without holding up the native response.
+    if (engine.available && !closing) void sandboxStatus();
+    const [native, catalog] = await Promise.all([
+      engine.available ? nativeCapability(resolvePipelineCommand({ env })) : unavailablePipelineNative('Pipeline engine is not available'),
+      modelCatalog(),
+    ]);
+    const sandbox = sandboxProbe?.value ?? {
+      default_image: null,
+      docker: { available: false, version: null, reason: engine.available ? 'Checking Docker availability' : 'Pipeline engine is not available', ...(engine.available ? { pending: true } : {}) },
+      image: { name: null, present: false },
+    };
+    return { ...engine, sandbox: { native, dockerImage: sandbox.default_image, docker: sandbox.docker, image: sandbox.image, build: { ...build, tail: buildTail() } }, models: catalog.map(({ baseUrl, ...m }) => m) };
   }
   async function buildSandbox(body) {
     pipelineFields(body, []);
@@ -202,7 +226,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     }
     return { models, extra };
   }
-  async function config(body) {
+  async function config(spec, body) {
     pipelineFields(body, ['task', 'demo', 'demoScenario', 'delivery', 'sandbox', 'checks', 'setup', 'models', 'approvals', 'review', 'replans', 'parallelSteps', 'grounding', 'guidance', 'conversation']);
     if (typeof body.task !== 'string' || !body.task.trim() || Buffer.byteLength(body.task) > 32768 || body.task.includes('\0')) throw fail(400, 'Task needs 1 to 32768 bytes');
     if (body.demo !== undefined && typeof body.demo !== 'boolean') throw fail(400, 'Invalid demo');
@@ -214,11 +238,26 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     if (body.guidance !== undefined && typeof body.guidance !== 'boolean') throw fail(400, 'guidance: Expected boolean');
     if (body.conversation !== undefined && typeof body.conversation !== 'boolean') throw fail(400, 'conversation: Expected boolean');
     const settings = { agentsMd: agentsMd ?? loadAgentsMd({ cwd, env, flags }), ...(body.conversation === true ? { conversation: true } : {}), ...(body.grounding === undefined ? {} : { grounding: { mode: body.grounding } }), ...(body.guidance === undefined ? {} : { procedure: { enabled: body.guidance } }) };
-    const sandbox = body.sandbox ?? { mode: 'host' };
-    pipelineFields(sandbox, ['mode', 'image', 'trustHost']);
-    if (!['docker', 'host'].includes(sandbox.mode) || sandbox.trustHost !== undefined && typeof sandbox.trustHost !== 'boolean') throw fail(400, 'Invalid sandbox');
-    if (!body.demo && body.sandbox != null && sandbox.mode === 'host' && sandbox.trustHost !== true) throw fail(409, 'Host mode requires trustHost:true');
-    if (sandbox.image !== undefined && (typeof sandbox.image !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(sandbox.image))) throw fail(400, 'Invalid sandbox image');
+    const sandbox = body.sandbox === undefined ? { mode: 'scranton' } : body.sandbox;
+    pipelineFields(sandbox, ['mode', 'image', 'trustHost', 'windowsMode']);
+    if (!['scranton', 'docker', 'host'].includes(sandbox.mode)) throw fail(400, 'Invalid sandbox mode');
+    if (sandbox.trustHost !== undefined && (sandbox.mode !== 'host' || typeof sandbox.trustHost !== 'boolean')) throw fail(400, 'Invalid sandbox.trustHost (host only)');
+    if (sandbox.image !== undefined && (sandbox.mode !== 'docker' || typeof sandbox.image !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(sandbox.image))) throw fail(400, 'Invalid sandbox image (docker only)');
+    if (sandbox.windowsMode !== undefined && (sandbox.mode !== 'scranton' || !['low', 'strict'].includes(sandbox.windowsMode))) throw fail(400, 'Invalid sandbox.windowsMode (scranton only; expected low or strict)');
+    const windowsMode = sandbox.windowsMode ?? 'low', trustHost = sandbox.trustHost === true;
+    if (!body.demo && sandbox.mode === 'host' && !trustHost) throw fail(409, 'Host mode requires trustHost:true');
+    function validateSetupNetwork(setup) {
+      if (sandbox.mode !== 'scranton' || windowsMode !== 'strict' || !Array.isArray(setup)) return;
+      const row = setup.findIndex((v) => v?.network === true);
+      if (row >= 0) throw fail(400, `setup[${row}].network: Scranton sandbox strict mode does not allow network access`);
+    }
+    async function nativeMode({ demoDefault = false } = {}) {
+      if (sandbox.mode !== 'scranton') return sandbox.mode;
+      const { modes } = await nativeStatus(spec, windowsMode);
+      if (modes[windowsMode].available) return 'scranton';
+      if (demoDefault) return 'host';
+      throw fail(409, `Scranton sandbox (${windowsMode}) is not available: ${modes[windowsMode].reason}`);
+    }
     async function dockerImage() {
       if (sandbox.mode !== 'docker') return undefined;
       const probe = await sandboxStatus({ image: sandbox.image, fresh: true });
@@ -227,7 +266,11 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
       if (!probe.image.present) throw fail(409, `Docker image is missing: ${image}. Build the sandbox image first`);
       return image;
     }
-    if (body.demo) return { extra: {}, operator: null, settings, trustHost: sandbox.mode === 'host', demoScenario: body.demoScenario ?? 'basic', sandbox: sandbox.mode, image: await dockerImage() };
+    if (body.demo) {
+      validateSetupNetwork(body.setup);
+      const mode = await nativeMode({ demoDefault: body.sandbox === undefined });
+      return { extra: {}, operator: null, settings, trustHost, demoScenario: body.demoScenario ?? 'basic', sandbox: mode, windowsMode: mode === 'scranton' ? windowsMode : undefined, image: await dockerImage() };
+    }
     const commands = (values, setup) => {
       if (!Array.isArray(values) || values.length > (setup ? 4 : 12)) throw fail(400, `${setup ? 'setup' : 'checks'}: Expected an array of at most ${setup ? 4 : 12} commands`);
       const ids = new Set();
@@ -248,13 +291,15 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
       });
     };
     const checks = commands(body.checks ?? [], false), setup = commands(body.setup ?? [], true);
+    validateSetupNetwork(setup);
     if (body.approvals !== undefined) { pipelineFields(body.approvals, ['plan']); if (!['always', 'auto_low_risk'].includes(body.approvals.plan)) throw fail(400, 'Invalid approval policy'); }
     if (body.review !== undefined && typeof body.review !== 'boolean') throw fail(400, 'Invalid review');
     const { models, extra } = await credentials(body.models);
+    await nativeMode();
     const image = await dockerImage();
-    const operator = { schema: 1, ...settings, models, limits: { max_replans: body.replans ?? 1 }, execution: { max_parallel_steps: body.parallelSteps ?? 1 }, sandbox: { mode: sandbox.mode, ...(sandbox.mode === 'docker' ? { docker: { image } } : {}) }, checks, setup, ...(checks.length ? {} : { allow_no_checks: true }), approvals: body.approvals ?? { plan: 'always' }, review: { enabled: body.review ?? true } };
+    const operator = { schema: 1, ...settings, models, limits: { max_replans: body.replans ?? 1 }, execution: { max_parallel_steps: body.parallelSteps ?? 1 }, sandbox: { mode: sandbox.mode, ...(sandbox.mode === 'docker' ? { docker: { image } } : sandbox.mode === 'scranton' ? { windows_mode: windowsMode } : {}) }, checks, setup, ...(checks.length ? {} : { allow_no_checks: true }), approvals: body.approvals ?? { plan: 'always' }, review: { enabled: body.review ?? true } };
     if (scrub(JSON.stringify(operator)) !== JSON.stringify(operator)) throw fail(400, 'Configuration must not contain credentials');
-    return { operator, extra, trustHost: sandbox.mode === 'host' };
+    return { operator, extra, trustHost };
   }
   async function normalize(runDir) {
     if (children.has(runDir) || children.has(runDir + ':cancel')) return;
@@ -309,7 +354,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     if (busy(chat)) throw fail(409, 'Chat has a non-terminal Pipeline run');
     starting.add(key);
     try {
-      const spec = await available(), cfg = await config(body);
+      const spec = await available(), cfg = await config(spec, body);
       let projectMemory = [], dreamingWarning = null;
       if (!body.demo && dreaming && cfg.operator) {
         const ceiling = cfg.operator.limits.max_step_attempts ?? 3;
@@ -333,7 +378,7 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
       if (cfg.operator) writeJson(request, cfg.operator);
       writeJson(request + '.launch.json', { models: body.demo ? null : body.models, trustHost: cfg.trustHost, demo: Boolean(body.demo), workspaceRoot, task: body.task, createdAt: new Date().toISOString() });
       const args = [body.demo ? 'demo' : 'run', '--run-root', runRoot, '--run-id', runId, '--workspace-root', workspaceRoot, '--delivery', body.delivery ?? 'apply'];
-      if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); if (cfg.settings.conversation) args.push('--conversation'); }
+      if (body.demo) { args.push('--scenario', cfg.demoScenario, '--sandbox', cfg.sandbox); if (cfg.image) args.push('--image', cfg.image); if (cfg.windowsMode) args.push('--windows-mode', cfg.windowsMode); if (cfg.settings.grounding) args.push('--grounding', cfg.settings.grounding.mode); if (cfg.settings.procedure) args.push('--guidance', String(cfg.settings.procedure.enabled)); if (cfg.settings.conversation) args.push('--conversation'); }
       if (!body.demo) { const taskFile = request + '.task.txt'; writeFileAtomicSync(taskFile, body.task); args.push('--source', project.workspace, '--task-file', taskFile, '--config', request); if (cfg.trustHost) args.push('--trust-host'); }
       if (!body.demo) {
         const history = context ? context.forPipeline(chat.projectId, chat.id, { redact: sandboxText, projectMemory, recipients: { planner } })
@@ -449,7 +494,12 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     for (const s of statuses(chat)) {
       const meta = optional(safe(root(chat), `requests/${s.run_id}.json.launch.json`, false));
       if (meta?.workspaceRoot && path.resolve(meta.workspaceRoot) === workspaceRoot) {
-        if (fs.existsSync(workspaceRoot)) { const target = safe(workspaceRoot, s.run_id, false); withFsRetry(() => fs.rmSync(target, { recursive: true, force: true })); }
+        if (fs.existsSync(workspaceRoot)) {
+          const target = safe(workspaceRoot, s.run_id, false);
+          const allocation = safe(workspaceRoot, `.scranton-sandbox-allocation-${s.run_id}.json`, false);
+          withFsRetry(() => fs.rmSync(target, { recursive: true, force: true }));
+          withFsRetry(() => fs.rmSync(allocation, { force: true }));
+        }
       }
     }
     withFsRetry(() => fs.rmSync(root(chat), { recursive: true, force: true }));
@@ -458,6 +508,8 @@ export function createPipelineSupervisor({ dataDir, env = process.env, auth, che
     async detect(project, body) { pipelineFields(body, []); const spec = await available(); const r = await execPipeline(spec, ['detect', '--source', project.workspace], { env }); if (r.code !== 0 || !r.value) throw fail(503, 'Pipeline detection failed'); return { git: r.value.git, languages: r.value.languages, ...Object.fromEntries(['checks', 'setup'].map((name) => [name, (r.value[name] ?? []).map(({ argv, ...v }) => ({ ...v, command: formatPipelineCommand(argv) }))])) }; },
     async close() {
       closing = true;
+      probeStop.abort();
+      await Promise.allSettled([...sandboxFlights.values(), nativeFlight]);
       if (credentialService) await (await credentialService).close();
       const buildClosing = buildEntry;
       if (buildClosing) await killTree(buildClosing.child);

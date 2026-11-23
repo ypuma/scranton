@@ -33,13 +33,13 @@ py -3.14 -m venv "%ROOT%\.scratch\pipeline\venv"
 
 ## Demo: echter CLI-Ablauf ohne echten Modellaufruf
 
-Vom Root:
+Vom Root (hier ausdrücklich Host für die mitgelieferte Fixture, damit das Beispiel keinen nativen Runner voraussetzt):
 
 ```cmd
-"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\lane-docs\runs2" --run-id de44237f3966 --delivery apply
+"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\lane-docs\runs2" --run-id de44237f3966 --delivery apply --sandbox host
 ```
 
-`demo` unterstützt `--scenario basic|replan|parallel|evidence` (Default `basic`), `--sandbox host|docker` (Default `host`) und optional `--image NAME`, außerdem `--grounding enforce|observe` (Default `enforce`) und `--guidance true|false` (Default `false`). `basic` korrigiert einen Fehler; `replan` blockiert zunächst und verlangt danach die Freigabe eines revidierten Plans; `parallel` bearbeitet zwei unabhängige Dateien mit zwei Lanes. Jedes wartende Gate wird mit dem jeweils aktuellen Digest fortgesetzt. Docker verwendet dieselbe Fixture ohne echte Provider, benötigt aber das lokale Image.
+`demo` unterstützt `--scenario basic|replan|parallel|evidence` (Default `basic`), `--sandbox scranton|docker|host` (Default `scranton`), `--windows-mode low|strict` nur für Scranton und `--image NAME` nur für Docker, außerdem `--grounding enforce|observe` (Default `enforce`) und `--guidance true|false` (Default `false`). `basic` korrigiert einen Fehler; `replan` blockiert zunächst und verlangt danach die Freigabe eines revidierten Plans; `parallel` bearbeitet zwei unabhängige Dateien mit zwei Lanes. Jedes wartende Gate wird mit dem jeweils aktuellen Digest fortgesetzt. Docker verwendet dieselbe Fixture ohne echte Provider, benötigt aber das lokale Image. Nur die mitgelieferte Demo ist von der Host-Vertrauensbestätigung ausgenommen.
 
 Das Beispiel erzeugt `de44237f3966/demo-source` mit einer fehlerhaften Addition und eigenen scripted Antworten. **Exit 3 ist am Plan-Gate erwartet**, kein Installationsfehler. Für Wiederholungen eine neue ID verwenden; bestehende Runverzeichnisse werden nicht überschrieben. `demo` impliziert Hostvertrauen ausschließlich für diese mitgelieferte Fixture, nicht für den Projektordner. Ein eingegebener Desktop-Demotext ersetzt ihre feste Aufgabe nicht.
 
@@ -60,7 +60,7 @@ Exit 0; erst jetzt steht `a + b` im Demo-Quellordner. Diese Digests stammen vom 
 ### Evidence-Demo: abgewiesen, repariert, trotzdem erfolgreich
 
 ```cmd
-"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\evidence-docs" --scenario evidence --delivery apply
+"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\evidence-docs" --scenario evidence --delivery apply --sandbox host
 ```
 
 Das Szenario benötigt `enforce`: `--grounding observe` endet vor Runanlage mit Exit 2 (`invalid_demo_grounding`), die HTTP-API mit `demoScenario:"evidence"` und `grounding:"observe"` antwortet 400. Es verwendet scripted Antworten, keine echten Modelle:
@@ -214,7 +214,8 @@ Das ist eine **Anleitung für einen bewusst gestarteten echten Providerlauf**, k
 | `base_url` | Lokal `http://127.0.0.1:1234/v1`; ohne Angabe `https://api.openai.com/v1`; HTTPS erforderlich außer Loopback, keine Credentials/Query/Fragmente |
 | `api_key_env` | **Name** der Umgebungsvariablen `OPENAI_API_KEY` bzw. `LOCAL_MODEL_API_KEY`, nicht ihr Wert |
 | `structured_output` | `json_schema` im OpenAI-Beispiel; `json_text` lokal mit Schema im Prompt und JSON-Extraktion; alternativ `function_calling` |
-| `sandbox.mode` | `docker` oder bewusst freigegebener `host` |
+| `sandbox.mode` | `scranton` (Standard), `docker` oder bewusst freigegebener `host` |
+| `sandbox.windows_mode` | Nur Scranton: `low` (Standard) oder `strict` |
 | `sandbox.docker.image` | Optional; ohne Angabe bzw. bei `null` `scranton-pipeline-sandbox:<engine version>` (aktuell `0.1.0`); anderes lokales Image erlaubt, kein stilles Pull/Build |
 | `sandbox.docker.tmpfs_mb` | `/tmp`-tmpfs in MiB, Default 512, Bereich 64..4096 |
 | `limits.max_replans` | Neuplanungen für Restarbeit, Default 1, Bereich 0..3; 0 = aus; jede Revision braucht Freigabe |
@@ -228,7 +229,7 @@ Das ist eine **Anleitung für einen bewusst gestarteten echten Providerlauf**, k
 
 Die vorhandene Docker-Beispieldatei setzt noch ausdrücklich `scranton-sandbox:1.5.0`; vor Nutzung des neuen Pipelineimages `sandbox.docker.image` auf `scranton-pipeline-sandbox:0.1.0` ändern oder das Feld entfernen. Ein explizites altes Image wird nicht automatisch ersetzt.
 
-Nicht gesetzte Werte stammen aus `config.py`: Sandbox `host` (keine OS-Isolation; direkte CLI-Läufe und Resume benötigen weiterhin `--trust-host`), Review an; Check `required:true`, `scope:"step"`, Netzwerk aus; Modelltemperatur 0, maximal 8192 Outputtokens, 180 Sekunden Deadline. Docker: 2 CPUs, 2048 MB, 256 PIDs, 512 MiB tmpfs. Das Standardimage enthält Python/pip/venv/pytest, Node.js/npm und Git; die Basisimages sind per Digest gepinnt. CLI-Liefermodus standardmäßig `patch`, Desktop standardmäßig `apply`. Kein verstecktes Setup oder automatische Installation von Projektabhängigkeiten. `detect` liefert neben `checks` auch `setup` als Vorschläge, nur aus Manifesten im Wurzelverzeichnis (ein `pyproject.toml` unter `engine/` oder `Cargo.toml` unter `src-tauri/` schlägt nichts vor): z. B. `npm ci` mit `network:true` bei `package-lock.json`, sofern npm auf dem Host auffindbar ist. Die Desktopform bietet dafür editierbare Setupzeilen; der Betreiber entscheidet über ihre Übernahme.
+Nicht gesetzte Werte stammen aus `config.py`: Sandbox `scranton` mit `windows_mode:"low"` (kein stiller Wechsel bei fehlendem Runner; `host` bietet keine OS-Isolation und benötigt `--trust-host` bei echten CLI-Läufen und Resume), Review an; Check `required:true`, `scope:"step"`, ohne Netzopt-in (ob Netz tatsächlich gesperrt ist, entscheidet die Sandbox); Modelltemperatur 0, maximal 8192 Outputtokens, 180 Sekunden Deadline. Docker: 2 CPUs, 2048 MB, 256 PIDs, 512 MiB tmpfs. Das Standardimage enthält Python/pip/venv/pytest, Node.js/npm und Git; die Basisimages sind per Digest gepinnt. CLI-Liefermodus standardmäßig `patch`, Desktop standardmäßig `apply`. Kein verstecktes Setup oder automatische Installation von Projektabhängigkeiten. `detect` liefert neben `checks` auch `setup` als Vorschläge, nur aus Manifesten im Wurzelverzeichnis (ein `pyproject.toml` unter `engine/` oder `Cargo.toml` unter `src-tauri/` schlägt nichts vor): z. B. `npm ci` mit `network:true` bei `package-lock.json`, sofern npm auf dem Host auffindbar ist. Die Desktopform bietet dafür editierbare Setupzeilen; der Betreiber entscheidet über ihre Übernahme.
 
 Weitere Operatorfelder: `setup` (bis 4 argv-Rezepte mit `id`, `timeout_s`, `network`), `checks` (bis 12, Kategorien `syntax|lint|typecheck|test|security|other`; `scope:final` erst beim letzten Schritt, bei abgeschlossener Waveintegration und Reviewrevisionen, Baseline führt alle aus), `allow_no_checks:true` für bewusst leere Checklisten. `review.enabled` schaltet Modellreview aus. `policy.protected_paths`/`write_protected_paths` ergänzen Defaults, `scope:strict` verbietet undeclarierte Dateien; Standard `plan_plus_flagged` erlaubt `max_undeclared_files:2`. `sandbox.env_passthrough` ergänzt die Allowlist, hebt das Credentialverbot nicht auf. `pricing` ordnet Modell-IDs `input_per_mtok`/`output_per_mtok` zu; Kosten sind Schätzungen, bei fehlendem Preis null. `limits` überschreibt begrenzte Defaults; vollständige Feld-/Grenzenliste ist `config.py:Limits`, Wirkung und Verdrahtungsgrenzen siehe Architektur.
 
@@ -278,11 +279,12 @@ Bei aktivierter Guidance muss der Graph das [Graphschema und die Validierungsreg
 | `cancel --run-dir ...` | Sentinel setzen; ohne aktiven Owner selbst ohne Modelle zum Abbruchabschluss fortsetzen |
 | `detect --source ...` | `{git,languages,checks,setup}` mit festen, auf dem Host auffindbaren Rezepten; Vorschläge werden nicht automatisch ausgeführt und beweisen keine Toolverfügbarkeit im Dockerimage |
 | `graph --format mermaid` | Aus kompiliertem Graphen erzeugte Mermaid-Ausgabe |
-| `demo --run-root ... [--scenario basic\|replan\|parallel\|evidence] [--sandbox host\|docker] [--image NAME] [--grounding enforce\|observe] [--guidance true\|false]` | Eigene Fixture/scripted Modelle; optional `--workspace-root`, `--run-id`, `--delivery patch\|apply`, `--parent-guard`; Defaults `basic`/`host`/`enforce`/`false`, normale Gates |
+| `demo --run-root ... [--scenario basic\|replan\|parallel\|evidence] [--sandbox scranton\|docker\|host] [--windows-mode low\|strict] [--image NAME] [--grounding enforce\|observe] [--guidance true\|false]` | Eigene Fixture/scripted Modelle; optional `--workspace-root`, `--run-id`, `--delivery patch\|apply`, `--parent-guard`; Defaults `basic`/`scranton`/`enforce`/`false`, normale Gates |
 | `score --run-dir DIR` | Groundingscore aus dem Trace neu berechnen, eine JSON-Zeile; Exit 0, ungültige Eingabe 2 |
 | `eval --pack DIR\|core [--config FILE] [--graph FILE\|default\|skeleton] [--tasks a,b] [--split train\|val\|all] [--models scripted\|config] [--out DIR] [--real-calls] [--trust-host]` | Judge-freie Regression; Defaults `all`, `scripted`, `eval-output`, ohne Graph Guidance aus; Exit 0 bei passenden Erwartungen, 4 bei Abweichung, 2 bei ungültiger Eingabe |
 | `evolve --pack DIR\|core --graph FILE\|default\|skeleton --out DIR [--rounds K] [--max-seconds N] [--config FILE] [--models scripted\|config] [--real-calls] [--trust-host]` | Offline-Guidanceverfeinerung; Defaults 3 Runden (1..20), 3600 Sekunden (positiv/endlich), `scripted`; Exit 0 auch bei verworfenen Kandidaten, 2 bei ungültiger Eingabe |
 | `sandbox check [--image NAME]` | JSON `{docker:{available,version,reason},image:{name,present},default_image}`; auch fehlendes Docker/Image ist ein beantworteter Probe, Exit 0 |
+| `sandbox check --mode scranton [--windows-mode low\|strict]` | JSON `{native:{platform,low:<probe>,strict:<probe>}}`; ohne `--windows-mode` beide Windows-Modi prüfen |
 | `sandbox build [--image NAME]` | Paketierten Dockerfile bauen; nur `scranton-pipeline-sandbox:<tag>`; Buildlogs stderr, eine JSON-Zeile `{built,image,reason}` stdout; Exit 0 oder 5 |
 | `version` | Engine-/Python-/LangGraph-Version als JSON |
 
@@ -329,7 +331,13 @@ Tracezeilen und `grounding`-/`procedure`-Events verwenden `plan:r<revision>` fü
 
 `RunStatus.progress` ergänzt `plan_revision` (0 = ursprünglicher Plan), `replans_left`, `steps_done` und `lanes:[{step_id,title,state,attempt}]`. Die Laneliste ist außerhalb einer Wave leer; sichtbare Zustände sind `running`, `passed`, `failed`, `merged` (bei Abbruch auch `cancelled`). Das Plan-Gate ergänzt `pending.revision` und `pending.replan_reason`; `replan` ist ein zwingendes Risikoflag. Berichte enthalten `plan_revisions` und `waves`. Neue Events: `replan_requested {code,message,scope}`, `replanned {revision}`, `wave_started {wave,steps}`, `lane_started {lane}`, `lane_finished {lane,status}`, `wave_merged {wave,merged,failed}`; Lanezuordnung steht in `data.lane`. Routegründe ergänzen `replan_requested`, `replanned`, `parallel_wave`, `wave_merged`, `integration_failed`.
 
-`sandbox` im Status enthält `mode`, `isolated`, `image`, `isolation`, `setup_network`. Dockerchecks laufen ohne Netz, als UID 10001, mit read-only Root und begrenztem tmpfs/Ressourcen. Der Workspace bleibt schreibbar. Der Installationszustand liegt einmal pro Lauf im von der Engine angelegten `<run-dir>/sandbox-state` außerhalb des Workspace; nur dieses Verzeichnis wird nach `/workspace/.pipeline` gemountet: read-write für Setup, read-only für Checks und alle Lanes, die denselben Laufzustand verwenden. Der Mountpunkt im schreibbaren Workspace bleibt geschützt, git-ausgeschlossen und aus Snapshot, Diff, Modellkontext und Modelledits ausgeschlossen. Userinstallationen nutzen `.pipeline/python` bzw. `.pipeline/npm`; ignorierte Setupausgaben bleiben zwischen Versuchen bestehen. Setup mit `network:true` darf über Bridge Internet und Hostdienste (`host.docker.internal`, auch die lokale Control-API) erreichen. Ein Control-API-Token ist ein offener Folgepunkt. Docker teilt den VM-Kernel, Hostmodus bietet keine OS-Isolation; Redaktion bleibt Best effort. Details: [Architektur](docs/ARCHITECTURE.md#docker-sandbox).
+Die **Scranton-Sandbox** ist für Pipeline in dieser Version nur unter Windows verfügbar. `low` verwendet ein eingeschränktes Token mit niedriger Integritätsstufe: der eigene Arbeitsordner und der private Tempordner sind beschreibbar, normale Dateien mittlerer Integrität bleiben lesbar, und auch Checks haben Netz. `strict` verwendet einen AppContainer ohne Capabilities; gelesen werden kann nur, was für AppContainer zugänglich ist. Checks und Setup haben kein Netz. `setup[i].network:true` ist dort ein Konfigurationsfehler vor der Ausführung. Für Setup mit Netz und netzlose Checks stattdessen Docker wählen. Scranton mountet kein `/workspace/.pipeline`; Setupausgaben bleiben im Arbeitsordner.
+
+Die Desktopintegration bindet den Runner automatisch. Für direkte CLI-Aufrufe mit `scranton` setze `SCRANTON_PIPELINE_NATIVE_COMMAND` auf ein JSON-Array mit den absoluten Pfaden zu Node und `tools/pipeline-sandbox.js` (z. B. `["C:/path/to/node.exe","C:/path/to/scranton/tools/pipeline-sandbox.js"]`). Der Runner benötigt Scrantons passenden Windows-Helfer. Fehlt die Bindung oder schlägt der Probe fehl, ist die Sandbox nicht verfügbar; es gibt keinen Fallback.
+
+Bei Scranton enthält `status.sandbox` `mode`, `isolated`, `image` (`null`), `windows_mode`, `backend`, `check_network` und `setup_network`. `sandbox_ready` meldet den geprüften Modus; `sandbox_failed` ist ein Infrastrukturfehler, auch bei optionalen Checks. [Offene Punkte](docs/ARCHITECTURE.md#native-scranton-sandbox) sind in der Architektur aufgeführt.
+
+Im Dockermodus enthält `status.sandbox` `mode`, `isolated`, `image`, `isolation`, `setup_network`. Dockerchecks laufen ohne Netz, als UID 10001, mit read-only Root und begrenztem tmpfs/Ressourcen. Der Workspace bleibt schreibbar. Der Installationszustand liegt einmal pro Lauf im von der Engine angelegten `<run-dir>/sandbox-state` außerhalb des Workspace; nur dieses Verzeichnis wird nach `/workspace/.pipeline` gemountet: read-write für Setup, read-only für Checks und alle Lanes, die denselben Laufzustand verwenden. Der Mountpunkt im schreibbaren Workspace bleibt geschützt, git-ausgeschlossen und aus Snapshot, Diff, Modellkontext und Modelledits ausgeschlossen. Userinstallationen nutzen `.pipeline/python` bzw. `.pipeline/npm`; ignorierte Setupausgaben bleiben zwischen Versuchen bestehen. Setup mit `network:true` darf über Bridge Internet und Hostdienste (`host.docker.internal`, auch die lokale Control-API) erreichen. Ein Control-API-Token ist ein offener Folgepunkt. Docker teilt den VM-Kernel, Hostmodus bietet keine OS-Isolation; Redaktion bleibt Best effort. Details: [Architektur](docs/ARCHITECTURE.md#docker-sandbox).
 
 Docker Desktop mit Linux-Engine zuerst selbst starten. Dann in derselben cmd-Sitzung:
 
@@ -424,7 +432,7 @@ Die Host-Bridge `tools/pipeline-complete.js --provider P --model M [--thinking T
 `EngineConfig.conversation` ist ein striktes Boolean am Konfigurationsroot, Default **false**. Aktivierung: `{"conversation":true,...}` in der Operator-Konfiguration oder `run --conversation` zusätzlich zu den bisherigen Argumenten. Die CLI-Option aktiviert denselben Schalter; `resume` verwendet ausschließlich die gepinnte Konfigurationskopie. Ohne Aktivierung bleiben Plannerprompt/-schema, Events, Statusfelder und Dateimenge unverändert; `answer` ist dann kein gültiger Plannerturn. Auch die Core-Evals bleiben standardmäßig im bisherigen Modus.
 
 ```cmd
-"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\chat\demo" --scenario answer --conversation
+"%ROOT%\.scratch\pipeline\venv\Scripts\python.exe" -m scranton_pipeline demo --run-root "%ROOT%\.scratch\pipeline\chat\demo" --scenario answer --conversation --sandbox host
 ```
 
 `answer` liest `calculator.py` und beantwortet die Frage nach `add(a,b)`, ohne Plan-/Liefer-Gate oder Edits (Exit 0, `succeeded`, `delivery:null`). Ohne `--conversation` wird dieses neue Szenario vor Runanlage mit Exit 2 (`conversation_required`) verweigert. Auch `basic|replan|parallel|evidence` lassen sich mit `--conversation` starten; ihre normalen Freigaben bleiben bestehen.
@@ -443,7 +451,7 @@ Direkte Antworten sind nur in der initialen Planungsrunde möglich: Planrevision
 
 Native Buildziele sind macOS arm64 und x64 sowie Linux **glibc** arm64 und x64, zusätzlich zu Windows x64. Dies ist kein Nachweis ausgeführter macOS-/Linux-Releases; native CI und separater installierter Lifecycle müssen die jeweiligen Artefakte noch bestätigen. Keine musl-/Universal-/Cross-Builds. [Native Desktopmatrix, Abhängigkeiten und Artefakte](../docs/DESKTOP.md#native-builds-und-ci-matrix).
 
-Die eigenständige Entwicklerinstallation verlangt weiterhin selbst bereitgestelltes Python und Git. Beispiel auf einem nativen POSIX-Host mit Python 3.14, vom Repositoryroot (eine vorhandene venv nicht während anderer Läufe ersetzen):
+Die eigenständige Entwicklerinstallation verlangt weiterhin selbst bereitgestelltes Python und Git. Auf macOS/Linux ist `scranton` für Pipeline noch nicht verfügbar; die mitgelieferte Demo unten wählt ausdrücklich Host. Beispiel auf einem nativen POSIX-Host mit Python 3.14, vom Repositoryroot (eine vorhandene venv nicht während anderer Läufe ersetzen):
 
 ```sh
 mkdir -p .scratch/pipeline/tmp .scratch/pipeline/pip-cache
@@ -453,7 +461,7 @@ export PYTHONPYCACHEPREFIX="$PWD/.scratch/pipeline/bytecode"
 python3.14 -m venv .scratch/pipeline/venv
 .scratch/pipeline/venv/bin/python -m pip install -e 'engine[dev]'
 .scratch/pipeline/venv/bin/python -m scranton_pipeline version
-.scratch/pipeline/venv/bin/python -m scranton_pipeline demo --run-root "$PWD/.scratch/pipeline/posix-demo" --delivery patch
+.scratch/pipeline/venv/bin/python -m scranton_pipeline demo --run-root "$PWD/.scratch/pipeline/posix-demo" --delivery patch --sandbox host
 ```
 
 Am Plan-Gate ist **Exit 3 erwartet**. Den aktuellen Digest lesen und `resume` wie in den Windows-Beispielen mit demselben nativen Interpreter aufrufen; keine fremden Beispieldigests übernehmen. Tests seriell vom Ordner `engine`:

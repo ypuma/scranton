@@ -23,7 +23,7 @@ def deps_at(tmp_path):
     run.mkdir()
     workspace = run / "workspace"
     workspace.mkdir()
-    return Dependencies(config(tmp_path), run, workspace, None, UsageLedger(run / "usage.jsonl"),
+    return Dependencies(config(tmp_path, sandbox="host"), run, workspace, None, UsageLedger(run / "usage.jsonl"),
         EventLog(run / "events.jsonl", "test0001", Redactor()), StopSignal(run / "cancel"), Redactor(), trust_host=True)
 
 
@@ -49,7 +49,8 @@ def test_lane_inherits_deadline_and_does_not_sum_durations(tmp_path, monkeypatch
 def test_cleanup_retries_and_warns_without_raising(tmp_path, monkeypatch):
     deps = deps_at(tmp_path)
     attempts = []
-    def locked(path):
+    def locked(path, *, owned=False):
+        assert not owned
         attempts.append(path)
         raise PermissionError("locked")
     monkeypatch.setattr(parallel, "remove_lane", locked)

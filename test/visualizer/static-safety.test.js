@@ -62,9 +62,10 @@ test('the message composer and run form keep their bounds and labels', () => {
   assert.match(html, /<input type="radio" name="sandbox" value="scranton" id="f-sandbox-scranton" checked>/, 'the Scranton sandbox is the default');
   assert.match(html, /<input type="radio" name="sandbox" value="docker" id="f-sandbox-docker">/, 'Docker is not preselected');
   assert.match(html, /<input type="radio" name="sandbox" value="host" id="f-sandbox-host">/, 'the trusted host is not preselected');
-  // the Pipeline checks keep their own choice
-  assert.match(html, /<input type="radio" name="[a-z-]+" value="host" id="pf-host" checked>/, 'pf-host: the trusted host is the default');
+  // the Pipeline checks keep their own choice, Scranton's own sandbox first (pipeline-native-sandbox-contract section 7)
+  assert.match(html, /<input type="radio" name="[a-z-]+" value="scranton" id="pf-scranton" checked>/, 'pf-scranton: the Scranton sandbox is the default');
   assert.match(html, /<input type="radio" name="[a-z-]+" value="docker" id="pf-docker">/, 'pf-docker: Docker is not preselected');
+  assert.match(html, /<input type="radio" name="[a-z-]+" value="host" id="pf-host">/, 'pf-host: the trusted host is not preselected');
   assert.match(html, /<input id="f-approve-timeout" name="approvalTimeout" class="mono narrow" type="text" inputmode="numeric" maxlength="5" value="600"/);
   assert.match(html, /<section class="approvals" id="approvals" hidden aria-labelledby="approvals-title">/, 'the approval cards start hidden');
   // the acknowledgement of the default host is shown, and never given in the page: a chat that already ran on the

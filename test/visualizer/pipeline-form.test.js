@@ -54,7 +54,7 @@ function harness({
     url: () => '/api/control', pipelineForm: createPipelineForm({ timers }),
   });
   const sent = [];
-  // ack: the human ticks the trusted host acknowledgement, as a run on the default host needs
+  // ack: the human ticks the trusted host acknowledgement; only a run on the host reads it
   const open = async ({ ack = true } = {}) => {
     panel.setMode('live');
     await tick();
@@ -68,11 +68,10 @@ function harness({
     for (const role of ['planner', 'implementer', 'reviewer']) $(`pf-model-${role}`).value = MODEL;
     if (ack) $('pf-trust').checked = true;
   };
-  // the human picks Docker or Trusted host
+  // the human picks 'scranton', 'docker' or 'host'; like real radio buttons, the others go off
   const pick = async (mode) => {
-    $('pf-docker').checked = mode === 'docker';
-    $('pf-host').checked = mode === 'host';
-    await $(mode === 'docker' ? 'pf-docker' : 'pf-host').fire('change');
+    for (const m of ['scranton', 'docker', 'host']) $(`pf-${m}`).checked = m === mode;
+    await $(`pf-${mode}`).fire('change');
   };
   // a setup or check row: its inputs as the row builds them
   const row = (list, i) => {
@@ -199,6 +198,8 @@ const sandbox = (over = {}) => ({
 });
 const withSandbox = (sb) => ({ ...INFO, sandbox: sb });
 const missing = (build = {}) => sandbox({ image: { name: IMAGE, present: false }, build: { state: 'idle', tail: '', ...build } });
+// [Scranton sandbox, Docker, Trusted host]
+const radios = (h) => ['pf-scranton', 'pf-docker', 'pf-host'].map((id) => h.$(id).checked);
 
 function fakeTimers() {
   const t = { delays: [], pending: new Map(), seq: 0 };
@@ -213,55 +214,135 @@ function fakeTimers() {
   return t;
 }
 
-// guards the host preselection in open() and that renderSandbox no longer preselects Docker from the probe
-test('sandbox: Docker running with the image present is said in one quiet line, yet the Trusted host is preselected without its acknowledgement', async (t) => {
+// guards the Scranton preselection in open(), that the Docker line and controls belong to Docker, and that
+// renderSandbox never preselects Docker from the probe
+test('sandbox: the Scranton sandbox is preselected; a ready Docker is said at its choice, its line and image only once picked', async (t) => {
   const h = harness({ info: withSandbox(sandbox()) });
   done(t, h);
   await h.open({ ack: false });
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true]);
-  assert.equal(h.$('pf-trust').checked, false, 'the acknowledgement is never given for the human');
-  assert.equal(h.$('pf-trust-row').hidden, false, 'the no-OS-isolation acknowledgement is on screen');
+  assert.deepEqual(radios(h), [true, false, false]);
+  assert.equal(h.$('pf-trust-row').hidden, true, 'no host acknowledgement for a sandbox');
+  assert.equal(h.$('pf-docker-state').textContent, 'ready');
+  assert.deepEqual([h.$('pf-sandbox-status').textContent, h.$('pf-build').hidden, h.$('pf-image-row').hidden, h.$('pf-image').disabled], ['', true, true, true]);
+  await h.pick('docker');
   assert.equal(h.$('pf-sandbox-status').textContent, `Docker 29.9.2 is running; the image ${IMAGE} is present.`);
+  assert.deepEqual([h.$('pf-image-row').hidden, h.$('pf-image').disabled, h.$('pf-native-row').hidden], [false, false, true], 'Block network belongs to the Scranton sandbox');
   assert.equal(h.$('pf-build').hidden, true);
   assert.equal(h.$('pf-build-log').hidden, true);
-  await h.submit();
-  assert.deepEqual(h.sent, [], 'the host is not used without the acknowledgement');
-  assert.equal(h.$('run-error').textContent, 'Confirm that the checks may run on this computer without OS isolation, or use Docker.');
-  await h.pick('docker');
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'docker' });
 });
 
-// guards `e.trust.checked = false;` in open() and that a Docker that is down changes nothing about the choice
-test('sandbox: Docker not running says why and offers no build; the Trusted host stays preselected and still waits for its acknowledgement', async (t) => {
+// guards the docker branch of sandboxBlock in build() and `if (field === 'sandbox') return radios().find(...)` in fieldInput
+test('sandbox: Docker not running says why, offers no build, and blocks a Docker start without moving the choice', async (t) => {
   const h = harness({ info: withSandbox(sandbox({ docker: { available: false, version: null, reason: 'the Docker daemon does not answer' } })) });
   done(t, h);
   await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker-state').textContent, h.$('pf-docker-state').dataset.tone], ['not available: Docker is not running', 'error']);
+  await h.pick('docker');
   assert.equal(h.$('pf-sandbox-status').textContent, 'Docker is not running: the Docker daemon does not answer');
   assert.equal(h.$('pf-sandbox-status').dataset.tone, 'error');
   assert.equal(h.$('pf-build').hidden, true, 'there is nothing to build with');
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true]);
+  await h.submit();
+  assert.deepEqual(h.sent, []);
+  assert.equal(h.$('run-error').textContent, 'Docker is not running: the Docker daemon does not answer. Start Docker, or pick another sandbox.');
+  assert.equal(document.activeElement, h.$('pf-docker'));
+  assert.equal(h.$('pf-docker').getAttribute('aria-invalid'), 'true');
+  assert.deepEqual(radios(h), [false, true, false], 'still Docker');
+  await h.pick('host');
+  assert.equal(h.$('pf-docker').getAttribute('aria-invalid'), null, 'a new choice clears it');
+  assert.equal(h.$('pf-trust-row').hidden, false, 'Trusted host stays available with its acknowledgement');
   await h.submit();
   assert.deepEqual(h.sent, []);
   assert.equal(h.$('run-error').textContent, 'Confirm that the checks may run on this computer without OS isolation, or use Docker.');
   assert.equal(document.activeElement, h.$('pf-trust'));
-  assert.equal(h.$('pf-trust-row').hidden, false, 'Trusted host stays available with its acknowledgement');
   h.$('pf-trust').checked = true;
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'host', trustHost: true });
 });
 
-// guards the build click handler, schedulePoll and that a finished build does not preselect Docker
-test('sandbox: a missing image is named and built from the form; the tail is shown on demand while it runs, and the Trusted host stays chosen', async (t) => {
+// the first GET /api/pipeline after the server starts: the Docker probe is still running (pipeline-supervisor.js capability)
+const CHECKING = sandbox({ dockerImage: null, docker: { available: false, version: null, reason: 'Checking Docker availability', pending: true }, image: { name: null, present: false } });
+const DOWN = sandbox({ docker: { available: false, version: null, reason: 'the Docker daemon does not answer' } });
+
+// review finding (pending Docker read as down). Guards `if (docker?.pending === true) return { known: false, pending: true, ...` in
+// parseSandbox and the sandboxPending branch of schedulePoll
+test('sandbox: a Docker probe still pending says checking and blocks nothing; known unavailable, it blocks Start without moving the choice', async (t) => {
+  const timers = fakeTimers();
+  const h = harness({ timers, info: (n) => withSandbox(n === 0 ? CHECKING : DOWN) });
+  done(t, h);
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-docker-state').textContent, h.$('pf-docker-state').dataset.tone], ['checking...', 'busy']);
+  await h.pick('docker');
+  assert.deepEqual([h.$('pf-sandbox-status').textContent, h.$('pf-sandbox-status').dataset.tone], ['Checking whether Docker is running...', 'busy']);
+  assert.equal(h.$('pf-build').hidden, true);
+  assert.deepEqual([timers.pending.size, timers.delays.at(-1)], [1, 1000], 'asks again about once a second');
+  await timers.fire();
+  assert.deepEqual([h.$('pf-docker-state').textContent, h.$('pf-docker-state').dataset.tone], ['not available: Docker is not running', 'error']);
+  assert.equal(h.$('pf-sandbox-status').textContent, 'Docker is not running: the Docker daemon does not answer');
+  await h.submit();
+  assert.deepEqual(h.sent, [], 'known unavailable: blocked');
+  assert.equal(h.$('run-error').textContent, 'Docker is not running: the Docker daemon does not answer. Start Docker, or pick another sandbox.');
+  assert.deepEqual(radios(h), [false, true, false], 'still Docker');
+
+  const p = harness({ timers: fakeTimers(), info: withSandbox(CHECKING) });
+  done(t, p);
+  await p.open({ ack: false });
+  await p.pick('docker');
+  await p.submit();
+  assert.deepEqual(p.sent[0]?.sandbox, { mode: 'docker' }, 'pending: Start goes to the server, whose 409 decides');
+});
+
+// guards the SANDBOX_CHECK_POLLS bound and the dialog close listener that clears pollTimer
+test('sandbox: the pending re-poll stops once the probe is known, when the drawer closes, and after its bound', async (t) => {
+  const timers = fakeTimers();
+  const h = harness({ timers, info: (n) => withNative(n < 3 ? { ...NATIVE(), pending: true } : NATIVE(), n < 3 ? CHECKING : sandbox()) });
+  done(t, h);
+  await h.open({ ack: false });
+  assert.deepEqual([h.$('pf-scranton-state').textContent, h.$('pf-docker-state').textContent], ['checking...', 'checking...']);
+  await h.submit();
+  assert.deepEqual(h.sent[0]?.sandbox, { mode: 'scranton', windowsMode: 'low' }, 'a pending Scranton sandbox blocks nothing either');
+  await h.open({ ack: false });
+  await timers.fire();
+  assert.equal(timers.pending.size, 1, 'still pending: asked again');
+  await timers.fire();
+  assert.deepEqual([h.$('pf-scranton-state').textContent, h.$('pf-docker-state').textContent], ['ready, Low integrity', 'ready']);
+  assert.equal(timers.pending.size, 0, 'known: no more polls');
+  assert.deepEqual(radios(h), [true, false, false], 'and the choice never moved');
+
+  const closing = fakeTimers();
+  let loads = 0;
+  const c = harness({ timers: closing, info: () => { loads += 1; return withSandbox(CHECKING); } });
+  done(t, c);
+  await c.open({ ack: false });
+  assert.equal(closing.pending.size, 1);
+  c.$('run-dialog').close();
+  assert.equal(closing.pending.size, 0, 'closing the drawer stops it');
+  await tick();
+  assert.equal(loads, 1, 'and nothing is asked after that');
+
+  const capped = fakeTimers();
+  loads = 0;
+  const b = harness({ timers: capped, info: () => { loads += 1; return withSandbox(CHECKING); } });
+  done(t, b);
+  await b.open({ ack: false });
+  for (let i = 0; i < 100 && capped.pending.size; i += 1) await capped.fire();
+  assert.equal(loads, 61, 'one load and at most 60 polls for a probe that never answers');
+  assert.equal(b.$('pf-docker-state').textContent, 'checking...');
+});
+
+// guards the build click handler, schedulePoll and that a finished build does not move the choice
+test('sandbox: a missing image is named and built from the form; the tail is shown on demand while it runs, and Docker stays chosen', async (t) => {
   const timers = fakeTimers();
   const states = [missing(), missing({ state: 'running', tail: 'Step 2/9 : RUN apt-get update' }), missing({ state: 'running', tail: 'Step 5/9 : RUN pip install pytest' }),
     sandbox({ build: { state: 'succeeded', tail: 'Successfully tagged' } })];
   const h = harness({ timers, info: (n) => withSandbox(states[Math.min(n, states.length - 1)]) });
   done(t, h);
   await h.open();
+  assert.equal(h.$('pf-docker-state').textContent, 'the image is not built yet');
+  await h.pick('docker');
   assert.equal(h.$('pf-sandbox-status').textContent, `The sandbox image ${IMAGE} has not been built yet.`);
   assert.equal(h.$('pf-build').hidden, false);
-  assert.equal(h.$('pf-docker').checked, false);
   assert.equal(timers.pending.size, 0, 'no poll while nothing builds');
 
   await h.$('pf-build').fire('click');
@@ -272,13 +353,14 @@ test('sandbox: a missing image is named and built from the form; the tail is sho
 
   await timers.fire();
   assert.equal(h.$('pf-sandbox-status').textContent, `Building the sandbox image ${IMAGE}...`);
+  assert.equal(h.$('pf-docker-state').textContent, 'building the image');
   assert.equal(h.$('pf-build-log').hidden, false);
   assert.equal(h.$('pf-build-log').open, false, 'the output is there on demand, closed');
   assert.equal(h.$('pf-build-tail').textContent, 'Step 2/9 : RUN apt-get update');
   await timers.fire();
   assert.equal(h.$('pf-build-tail').textContent, 'Step 5/9 : RUN pip install pytest');
   await timers.fire();
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true], 'built: the probe does not move the choice');
+  assert.deepEqual(radios(h), [false, true, false], 'built: the probe does not move the choice');
   assert.equal(h.$('pf-build').hidden, true);
   assert.equal(h.$('pf-build-log').hidden, true);
   assert.equal(timers.pending.size, 0, 'polling stopped');
@@ -291,23 +373,26 @@ test('sandbox: a build that finishes keeps an explicit Trusted host pick and its
   const h = harness({ timers, info: (n) => withSandbox(states[Math.min(n, states.length - 1)]) });
   done(t, h);
   await h.open({ ack: false });
+  await h.pick('docker');
+  await h.$('pf-build').fire('click');
   await h.pick('host');
   h.$('pf-trust').checked = true;
-  await h.$('pf-build').fire('click');
+  assert.deepEqual([h.$('pf-build').hidden, h.$('pf-build-log').hidden, h.$('pf-image-row').hidden], [true, true, true], 'the build is a Docker control');
   await timers.fire();
   await timers.fire();
-  assert.equal(h.$('pf-sandbox-status').textContent, `Docker 29.9.2 is running; the image ${IMAGE} is present.`, 'the build finished');
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, true]);
+  assert.equal(h.$('pf-docker-state').textContent, 'ready', 'the build finished');
+  assert.equal(h.$('pf-sandbox-status').textContent, '', 'the Docker line is not shown for the host');
+  assert.deepEqual([...radios(h), h.$('pf-trust').checked], [false, false, true, true]);
   await h.submit();
   assert.deepEqual(h.sent[0].sandbox, { mode: 'host', trustHost: true });
 
   // a new drawer session keeps the host, never the old acknowledgement, and the ready Docker is not preselected
   await h.open({ ack: false });
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false]);
+  assert.deepEqual([...radios(h), h.$('pf-trust').checked], [false, false, true, false]);
 });
 
-// guards `if (e.docker.checked) sandboxPick = 'docker';`, `e.docker.checked = sandboxPick === 'docker';` in open() and
-// that renderSandbox leaves the radio buttons alone on every probe
+// guards `if (e.docker.checked) sandboxPick = 'docker';`, the pick in open() and that renderSandbox leaves the radio
+// buttons alone on every probe
 test('sandbox: an explicit Docker pick survives every probe of a build, a failed one included, and the next drawer session', async (t) => {
   const timers = fakeTimers();
   const states = [missing(), missing({ state: 'running', tail: 'Step 1/9' }), missing({ state: 'failed', tail: 'pull access denied' })];
@@ -320,68 +405,76 @@ test('sandbox: an explicit Docker pick survives every probe of a build, a failed
   await timers.fire();
   await timers.fire();
   assert.equal(h.$('pf-sandbox-status').textContent, `The sandbox image ${IMAGE} could not be built. Its output is below.`);
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [true, false], 'the probes keep Docker');
+  assert.deepEqual(radios(h), [false, true, false], 'the probes keep Docker');
 
   await h.open({ ack: false });
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [true, false], 'the next session keeps the pick');
+  assert.deepEqual(radios(h), [false, true, false], 'the next session keeps the pick');
   await h.submit();
-  assert.deepEqual(h.sent[0].sandbox, { mode: 'docker' });
+  assert.deepEqual(h.sent, [], 'the default image is missing');
+  assert.equal(h.$('run-error').textContent, `The sandbox image ${IMAGE} has not been built yet. Build it, name another image, or pick another sandbox.`);
+  assert.deepEqual(radios(h), [false, true, false], 'and the choice stays');
+  h.$('pf-image').value = 'my/img:2';
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'docker', image: 'my/img:2' }, 'another image is the server\'s to check');
 
   await h.open({ ack: false });
   await h.pick('host');
   await h.open({ ack: false });
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false], 'and so is a host pick, without its acknowledgement');
+  assert.deepEqual([...radios(h), h.$('pf-trust').checked], [false, false, true, false], 'and so is a host pick, without its acknowledgement');
 });
 
 // review F5 finding 2: the demo on the host needs no acknowledgement; turning the demo on or off never moves the choice
-test('sandbox: a demo starts on the preselected Trusted host without an acknowledgement; a run still waits for it', async (t) => {
+test('sandbox: a demo starts in the preselected Scranton sandbox; on the host it needs no acknowledgement, a run still does', async (t) => {
   const down = sandbox({ docker: { available: false, version: null, reason: 'the Docker daemon does not answer' } });
   const h = harness({ info: withSandbox(down) });
   done(t, h);
   await h.open({ ack: false });
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true], 'a run: the host');
-  assert.equal(h.$('pf-trust-row').hidden, false, 'with its acknowledgement');
   await demoOn(h);
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked], [false, true], 'a demo: the host');
+  assert.deepEqual(radios(h), [true, false, false], 'a demo: the Scranton sandbox');
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'scranton', windowsMode: 'low' });
+
+  await h.open({ ack: false });
+  await demoOn(h, false);
+  await h.pick('host');
+  assert.equal(h.$('pf-trust-row').hidden, false, 'a run on the host: with its acknowledgement');
+  await demoOn(h);
+  assert.deepEqual(radios(h), [false, false, true], 'a demo: still the host');
   assert.equal(h.$('pf-trust-demo').hidden, false, 'with the line saying no acknowledgement is needed');
   await h.submit();
-  assert.deepEqual(h.sent[0].sandbox, { mode: 'host' });
+  assert.deepEqual(h.sent[1].sandbox, { mode: 'host' });
 
   await h.open({ ack: false });
   await demoOn(h);
   await demoOn(h, false);
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false], 'back to a run: the host, unacknowledged');
+  assert.deepEqual([...radios(h), h.$('pf-trust').checked], [false, false, true, false], 'back to a run: the host, unacknowledged');
   await h.submit();
-  assert.equal(h.sent.length, 1, 'the run is refused without the acknowledgement');
+  assert.equal(h.sent.length, 2, 'the run is refused without the acknowledgement');
 
-  const ready = harness({ info: withSandbox(sandbox()) });
-  done(t, ready);
-  await ready.open();
-  await demoOn(ready);
-  assert.deepEqual([ready.$('pf-docker').checked, ready.$('pf-host').checked], [false, true], 'a demo with Docker ready: still the host');
-
-  const picked = harness({ info: withSandbox(down) });
+  const picked = harness({ info: withSandbox(sandbox()) });
   done(t, picked);
   await picked.open();
   await picked.pick('docker');
   await demoOn(picked);
-  assert.deepEqual([picked.$('pf-docker').checked, picked.$('pf-host').checked], [true, false], 'an explicit pick stays');
+  assert.deepEqual(radios(picked), [false, true, false], 'an explicit pick stays');
 });
 
-// guards the `state === 'failed'` branch of sandboxView and that a failed build does not preselect Docker
-test('sandbox: a failed build keeps its tail, offers the build again, and Docker stays unchosen', async (t) => {
+// guards the `state === 'failed'` branch of sandboxView and that a build started elsewhere moves nothing
+test('sandbox: a failed build keeps its tail and offers the build again; a build started elsewhere leaves the Scranton sandbox chosen', async (t) => {
   const timers = fakeTimers();
   const states = [missing({ state: 'running', tail: 'Step 1/9' }), missing({ state: 'failed', tail: 'pull access denied for debian' })];
   const h = harness({ timers, info: (n) => withSandbox(states[Math.min(n, 1)]) });
   done(t, h);
   await h.open();
   assert.equal(h.$('pf-build').disabled, true, 'a build started elsewhere is running');
+  assert.equal(h.$('pf-docker-state').textContent, 'building the image');
   await timers.fire();
+  assert.deepEqual(radios(h), [true, false, false], 'the probe moved nothing');
+  await h.pick('docker');
   assert.equal(h.$('pf-sandbox-status').textContent, `The sandbox image ${IMAGE} could not be built. Its output is below.`);
   assert.equal(h.$('pf-build-tail').textContent, 'pull access denied for debian');
   assert.equal(h.$('pf-build-log').hidden, false);
   assert.deepEqual([h.$('pf-build').hidden, h.$('pf-build').disabled], [false, false]);
-  assert.equal(h.$('pf-docker').checked, false);
 });
 
 // guards `buildError = r.status === 404 ? ... : r.error` in the build click handler
@@ -389,20 +482,24 @@ test('sandbox: a refused build request is said in the sandbox line', async (t) =
   const h = harness({ info: withSandbox(missing()), build: { status: 503, data: { error: 'Docker is not available' } } });
   done(t, h);
   await h.open();
+  await h.pick('docker');
   await h.$('pf-build').fire('click');
   assert.equal(h.$('pf-sandbox-status').textContent, 'The sandbox image could not be built: Docker is not available');
   assert.equal(h.$('pf-build').disabled, false);
 });
 
-// guards `if (!docker || typeof docker.available !== 'boolean') return { known: false, ...` for the form
-test('sandbox: an older server that only names the image gets the Trusted host default, with no line and no build button', async (t) => {
+// guards `if (!docker || typeof docker.available !== 'boolean') return { known: false, ...` and parseNative's null for
+// the form: the old-server fallback
+test('sandbox: an older server that reports neither Docker nor the Scranton sandbox gets the Scranton default, no lines, no block', async (t) => {
   const h = harness();
   done(t, h);
   await h.open({ ack: false });
-  assert.deepEqual([h.$('pf-docker').checked, h.$('pf-host').checked, h.$('pf-trust').checked], [false, true, false]);
-  assert.equal(h.$('pf-sandbox-status').textContent, '');
+  assert.deepEqual([...radios(h), h.$('pf-strict').checked, h.$('pf-trust').checked], [true, false, false, false, false]);
+  for (const id of ['pf-sandbox-status', 'pf-scranton-state', 'pf-strict-state', 'pf-docker-state']) assert.equal(h.$(id).textContent, '', id);
   assert.equal(h.$('pf-build').hidden, true);
   assert.equal(h.$('pf-image').placeholder, 'scranton-sandbox:1.5.0');
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'scranton', windowsMode: 'low' }, 'the server decides');
 });
 
 // guards `|| pipelineForm.sandboxRefused?.(r)` in control-panel.js submitPipeline
@@ -422,16 +519,201 @@ test('sandbox: the server refusing a run for a missing image is said at the sand
   assert.equal(document.activeElement, h.$('pf-image'));
   await h.$('pf-image').fire('input');
   assert.equal(h.$('pf-sandbox-status').textContent, `Docker 29.9.2 is running; the image ${IMAGE} is present.`, 'editing the image goes back to the probe');
-  // review F5 finding 4: guards `e.image.removeAttribute('aria-invalid');` in clearRefused
+  // review F5 finding 4: guards `x.removeAttribute('aria-invalid');` in clearRefused
   assert.equal(h.$('pf-image').getAttribute('aria-invalid'), null, 'and the image is no longer marked invalid');
   assert.equal(h.$('pf-image').getAttribute('aria-describedby'), null);
 
   await h.submit();
   assert.equal(h.$('pf-image').getAttribute('aria-invalid'), 'true', 'refused again');
-  h.$('pf-host').checked = true;
-  h.$('pf-docker').checked = false;
-  await h.$('pf-host').fire('change');
+  await h.pick('host');
   assert.equal(h.$('pf-image').getAttribute('aria-invalid'), null, 'changing the sandbox clears it too');
+});
+
+// ------------------------------------------------------------ pipeline-native-sandbox-contract section 7
+
+const NATIVE_MODE = (over = {}) => ({ available: true, reason: null, backend: 'low-integrity', checkNetwork: 'allow', setupNetworkAllowed: true, ...over });
+const NATIVE = (modes = {}, over = {}) => ({
+  platform: 'win32', available: true, reason: null,
+  modes: { low: NATIVE_MODE(), strict: NATIVE_MODE({ backend: 'appcontainer', checkNetwork: 'none', setupNetworkAllowed: false }), ...modes }, ...over,
+});
+const withNative = (native, sb = sandbox()) => ({ ...INFO, sandbox: { ...sb, native } });
+const MAC_REASON = 'Scranton sandbox for Pipeline is available on Windows only in this version';
+const MAC = { platform: 'darwin', available: false, reason: MAC_REASON, modes: { low: NATIVE_MODE({ available: false, reason: MAC_REASON, backend: null }), strict: NATIVE_MODE({ available: false, reason: MAC_REASON, backend: null }) } };
+const strictOn = async (h, on = true) => {
+  h.$('pf-strict').checked = on;
+  await h.$('pf-strict').fire('change');
+};
+const LOW_HINT = 'Writes stay in the run workspace; network is not blocked.';
+const STRICT_HINT = 'Checks and setup run without network; tools must be readable by Windows app containers.';
+
+// guards the open() defaults, `e.nativeRow.hidden = !e.scranton.checked;`, the hint line of sync() and index.html
+test('Scranton sandbox: first and default, with Block network off, its low hint and its availability', async (t) => {
+  const h = harness({ info: withNative(NATIVE()) });
+  done(t, h);
+  await h.open({ ack: false });
+  assert.deepEqual([...radios(h), h.$('pf-strict').checked], [true, false, false, false]);
+  assert.equal(h.$('pf-native-row').hidden, false);
+  assert.equal(h.$('pf-strict-hint').textContent, LOW_HINT);
+  assert.equal(h.$('pf-scranton-state').textContent, 'ready, Low integrity');
+  assert.deepEqual([h.$('pf-image-row').hidden, h.$('pf-trust-row').hidden, h.$('pf-build').hidden], [true, true, true]);
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'scranton', windowsMode: 'low' });
+  const html = readFileSync(new URL('../../visualizer/public/index.html', import.meta.url), 'utf8');
+  const group = html.slice(html.indexOf('aria-label="Where the checks run"'), html.indexOf('<div class="pf-sandbox-state">'));
+  assert.deepEqual([...group.matchAll(/name="pf-sandbox" value="([a-z]+)"/g)].map((m) => m[1]), ['scranton', 'docker', 'host'], 'Scranton first');
+  assert.match(group, /<input type="radio" name="pf-sandbox" value="scranton" id="pf-scranton" checked><span>Scranton sandbox /);
+  assert.match(group, /<input type="checkbox" id="pf-strict" aria-describedby="pf-strict-hint"><span>Block network \(strict\) /);
+  assert.ok(group.includes(`<span class="hint" id="pf-strict-hint">${LOW_HINT}</span>`));
+});
+
+// guards the strict listener (strictPick), windowsMode() in build() and WINDOWS_MODE_HINT in sync()
+test('Scranton sandbox: Block network (strict) switches the hint and the body, and is kept for the next drawer session', async (t) => {
+  const h = harness({ info: withNative(NATIVE()), detect: { ...DETECT, setup: [] } });
+  done(t, h);
+  await h.open();
+  await strictOn(h);
+  assert.equal(h.$('pf-strict-hint').textContent, STRICT_HINT);
+  assert.equal(h.$('pf-scranton-state').textContent, 'ready, AppContainer', 'the line is about the chosen Windows mode');
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'scranton', windowsMode: 'strict' });
+  await h.open();
+  assert.equal(h.$('pf-strict').checked, true, 'kept');
+  await strictOn(h, false);
+  assert.equal(h.$('pf-strict-hint').textContent, LOW_HINT);
+  await h.submit();
+  assert.deepEqual(h.sent[1].sandbox, { mode: 'scranton', windowsMode: 'low' });
+  await h.open();
+  await strictOn(h);
+  await h.pick('docker');
+  assert.equal(h.$('pf-native-row').hidden, true);
+  await h.submit();
+  assert.deepEqual(h.sent[2].sandbox, { mode: 'docker' }, 'strict is a Scranton sandbox setting only');
+  await h.open();
+  await h.pick('host');
+  h.$('pf-trust').checked = true;
+  await h.submit();
+  assert.deepEqual(h.sent[3].sandbox, { mode: 'host', trustHost: true });
+});
+
+// guards the scranton branch of sandboxBlock in build() and that nothing moves the radio to another sandbox
+test('Scranton sandbox: unavailable says why at its choice and blocks Start; the radio is never moved for the human', async (t) => {
+  const h = harness({ info: withNative(MAC) });
+  done(t, h);
+  await h.open({ ack: false });
+  assert.deepEqual(radios(h), [true, false, false], 'still preselected');
+  assert.deepEqual([h.$('pf-scranton-state').textContent, h.$('pf-scranton-state').dataset.tone], [`not available: ${MAC_REASON}`, 'error']);
+  assert.equal(h.$('pf-docker-state').textContent, 'ready', 'the alternatives say what they can do');
+  await h.submit();
+  assert.deepEqual(h.sent, [], 'Start is blocked');
+  assert.equal(h.$('run-error').textContent, `The Scranton sandbox is not available here: ${MAC_REASON}. Pick Docker or Trusted host.`);
+  assert.equal(document.activeElement, h.$('pf-scranton'));
+  assert.equal(h.$('pf-scranton').getAttribute('aria-invalid'), 'true');
+  assert.deepEqual(radios(h), [true, false, false]);
+  await demoOn(h);
+  await h.submit();
+  assert.deepEqual(h.sent, [], 'the demo too');
+  await h.pick('docker');
+  assert.equal(h.$('pf-scranton').getAttribute('aria-invalid'), null);
+  await h.submit();
+  assert.deepEqual(h.sent[0].sandbox, { mode: 'docker' }, 'an alternative is one click away');
+
+  const noStrict = harness({ info: withNative(NATIVE({ strict: NATIVE_MODE({ available: false, reason: 'runner_missing', backend: null }) })), detect: { ...DETECT, setup: [] } });
+  done(t, noStrict);
+  await noStrict.open();
+  assert.deepEqual([noStrict.$('pf-scranton-state').textContent, noStrict.$('pf-strict-state').textContent], ['ready, Low integrity', 'not available: runner_missing']);
+  await strictOn(noStrict);
+  assert.deepEqual([noStrict.$('pf-scranton-state').textContent, noStrict.$('pf-strict-state').textContent], ['not available: runner_missing', '']);
+  await noStrict.submit();
+  assert.deepEqual(noStrict.sent, []);
+  assert.equal(noStrict.$('run-error').textContent, 'The Scranton sandbox with Block network (strict) is not available here: runner_missing. Turn off Block network, or pick Docker or Trusted host.');
+  assert.equal(noStrict.$('pf-strict').checked, true, 'Block network is not turned off for the human either');
+  await strictOn(noStrict, false);
+  await noStrict.submit();
+  assert.deepEqual(noStrict.sent[0].sandbox, { mode: 'scranton', windowsMode: 'low' });
+});
+
+// guards that loadInfo/renderSandbox only redraw the availability: a refresh that flips it, or a Docker build, moves nothing
+test('Scranton sandbox: a capability refresh or a Docker build never switches the choice', async (t) => {
+  const timers = fakeTimers();
+  const docs = [withNative(NATIVE(), missing()), withNative(MAC, missing({ state: 'running', tail: 'Step 1/9' })), withNative(MAC, sandbox({ build: { state: 'succeeded', tail: '' } }))];
+  const h = harness({ timers, info: (n) => docs[Math.min(n, docs.length - 1)] });
+  done(t, h);
+  await h.open();
+  assert.equal(h.$('pf-scranton-state').textContent, 'ready, Low integrity');
+  await h.pick('docker');
+  await h.$('pf-build').fire('click');
+  await h.pick('scranton');
+  await timers.fire();
+  assert.equal(h.$('pf-scranton-state').textContent, `not available: ${MAC_REASON}`, 'the refresh is shown');
+  assert.deepEqual(radios(h), [true, false, false], 'and moves nothing, although Docker is being built');
+  await timers.fire();
+  assert.equal(h.$('pf-docker-state').textContent, 'ready', 'the build finished');
+  assert.deepEqual(radios(h), [true, false, false]);
+  await h.submit();
+  assert.deepEqual(h.sent, [], 'blocked instead of switched');
+  await h.open();
+  assert.deepEqual(radios(h), [true, false, false], 'the next session keeps the pick too');
+});
+
+// guards renderStrictSetup, the strict check in buildRunBody and `(id|command|network)` in rowOf
+test('Scranton sandbox: strict with a needs-network setup command explains it, keeps the choice, and names the row on Start', async (t) => {
+  const h = harness({ info: withNative(NATIVE()) });
+  done(t, h);
+  await h.open();
+  const s = h.row('pf-setup', 0);
+  assert.equal(s.toggle.checked, true, 'detect: npm ci needs network');
+  assert.equal(h.$('pf-strict-setup').hidden, true, 'low allows it');
+  await strictOn(h);
+  const note = 'Block network (strict) runs setup without network, but setup command npm-ci needs it. Turn off Block network or use Docker; the needs network choice is kept.';
+  assert.deepEqual([h.$('pf-strict-setup').hidden, h.$('pf-strict-setup').textContent], [false, note]);
+  assert.equal(s.toggle.checked, true, 'the saved choice is kept');
+  await h.submit();
+  assert.deepEqual(h.sent, []);
+  assert.equal(s.error.textContent, note, 'said at the row');
+  assert.equal(document.activeElement, s.toggle);
+  assert.equal(s.toggle.getAttribute('aria-invalid'), 'true');
+  assert.equal(h.$('run-error').hidden, true, 'said at the row, not in the drawer');
+
+  s.toggle.checked = false;
+  await s.toggle.fire('change');
+  await s.toggle.fire('input');
+  assert.equal(h.$('pf-strict-setup').hidden, true, 'no command needs network any more');
+  assert.equal(s.error.textContent, '');
+  s.toggle.checked = true;
+  await s.toggle.fire('change');
+  assert.equal(h.$('pf-strict-setup').hidden, false);
+  await h.pick('docker');
+  assert.equal(h.$('pf-strict-setup').hidden, true, 'Docker gives setup its network');
+  await h.pick('scranton');
+  await strictOn(h, false);
+  assert.equal(h.$('pf-strict-setup').hidden, true);
+  await h.submit();
+  assert.deepEqual([h.sent[0].sandbox, h.sent[0].setup], [{ mode: 'scranton', windowsMode: 'low' }, [{ id: 'npm-ci', command: 'npm ci', network: true }]]);
+});
+
+// guards the fromServer path of rowOf for the network field and the /sandbox/ part of sandboxRefused
+test('Scranton sandbox: the server\'s 400 about setup[i].network and its 409 about an unavailable sandbox land where they belong', async (t) => {
+  const message = 'setup[0].network: strict Windows mode runs setup without network';
+  const h = harness({ info: withNative(NATIVE()), answer: { ok: false, status: 400, data: { error: message }, error: message } });
+  done(t, h);
+  await h.open();
+  await h.submit();
+  const s = h.row('pf-setup', 0);
+  assert.equal(s.error.textContent, message);
+  assert.equal(document.activeElement, s.toggle);
+
+  const refused = 'Scranton sandbox is not available: helper_missing';
+  const r = harness({ info: withNative(NATIVE()), answer: { ok: false, status: 409, data: { error: refused }, error: refused } });
+  done(t, r);
+  await r.open();
+  await r.submit();
+  assert.equal(r.$('pf-sandbox-status').textContent, refused);
+  assert.equal(r.$('pf-scranton').getAttribute('aria-invalid'), 'true');
+  assert.equal(document.activeElement, r.$('pf-sandbox-status'));
+  assert.equal(r.$('run-error').hidden, true, 'said once');
+  assert.deepEqual(radios(r), [true, false, false], 'no fallback');
+  await r.pick('host');
+  assert.deepEqual([r.$('pf-sandbox-status').textContent, r.$('pf-scranton').getAttribute('aria-invalid')], ['', null]);
 });
 
 // guards `replans: e.replans.value, parallelSteps: e.parallel.value` in build() and the demo lines of sync()
@@ -506,7 +788,7 @@ test('demo scenario: the select is shown only for a demo, its line follows the c
     assert.equal(h.$('pf-scenario-hint').textContent, line, id);
   }
   await h.submit();
-  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'parallel', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: false, conversation: true });
+  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'parallel', delivery: 'apply', sandbox: { mode: 'scranton', windowsMode: 'low' }, grounding: 'enforce', guidance: false, conversation: true });
 
   // a started run closes the drawer; the next one opens it again
   await h.open();
@@ -544,7 +826,7 @@ test('demo scenario: the evidence demo holds Evidence checks on Enforce and give
   await demoOn(h);
   assert.deepEqual(state(), held, 'the demo on again with the evidence scenario');
   await h.submit();
-  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'host' }, grounding: 'enforce', guidance: false, conversation: true });
+  assert.deepEqual(h.sent[0], { task: 'Fix the parser', demo: true, demoScenario: 'evidence', delivery: 'apply', sandbox: { mode: 'scranton', windowsMode: 'low' }, grounding: 'enforce', guidance: false, conversation: true });
 
   // the scenario and the demo stay as they were; the held choice does not survive a new drawer
   await h.open();
@@ -565,7 +847,7 @@ test('demo scenario: the sandbox choice and the image build stay operable for a 
   done(t, h);
   await h.open();
   await demoOn(h);
-  assert.equal(h.$('pf-host').checked, true, 'the demo keeps the host default');
+  assert.equal(h.$('pf-scranton').checked, true, 'the demo keeps the Scranton default');
   await h.pick('docker');
   assert.deepEqual([h.$('pf-docker').disabled, h.$('pf-host').disabled, h.$('pf-image').disabled, h.$('pf-build').disabled], [false, false, false, false]);
   assert.notEqual(h.$('pf-sandbox-set').dataset.demo, 'true', 'not dimmed');
@@ -583,9 +865,7 @@ test('demo scenario: the trusted host needs no acknowledgement for a demo, says 
   const h = harness({ info: withSandbox(sandbox()) });
   done(t, h);
   await h.open({ ack: false });
-  h.$('pf-docker').checked = false;
-  h.$('pf-host').checked = true;
-  await h.$('pf-host').fire('change');
+  await h.pick('host');
   assert.deepEqual([h.$('pf-trust-row').hidden, h.$('pf-trust-demo').hidden], [false, true]);
   assert.equal(document.activeElement, h.$('pf-trust'), 'a real run asks for the acknowledgement');
   await h.submit();
@@ -594,14 +874,12 @@ test('demo scenario: the trusted host needs no acknowledgement for a demo, says 
 
   await demoOn(h);
   assert.deepEqual([h.$('pf-trust-row').hidden, h.$('pf-trust-demo').hidden], [true, false]);
-  h.$('pf-docker').checked = true;
-  h.$('pf-host').checked = false;
-  await h.$('pf-docker').fire('change');
+  await h.pick('docker');
   assert.equal(h.$('pf-trust-demo').hidden, true, 'nothing to say while Docker is picked');
-  h.$('pf-docker').checked = false;
-  h.$('pf-host').checked = true;
+  await h.pick('scranton');
+  assert.deepEqual([h.$('pf-trust-row').hidden, h.$('pf-trust-demo').hidden], [true, true], 'nor for the Scranton sandbox');
   document.activeElement = null;
-  await h.$('pf-host').fire('change');
+  await h.pick('host');
   assert.equal(h.$('pf-trust-demo').hidden, false);
   assert.notEqual(document.activeElement, h.$('pf-trust'), 'focus does not go to a hidden checkbox');
   assert.match(readFileSync(new URL('../../visualizer/public/index.html', import.meta.url), 'utf8'),
@@ -622,7 +900,8 @@ test('Pipeline Chat dock starts a real conversation using detected checks and st
   h.panel.setReadOnly(true);
   const sent = [];
   const target = { project: 'core', startPipeline: async (body) => { sent.push(body); return { ok: true, status: 202, data: { runId: 'chatanswer' } }; } };
-  // the default host: the acknowledgement of the drawer is not carried into the dock, the fix is in the drawer
+  // a host pick: the acknowledgement of the drawer is not carried into the dock, the fix is in the drawer
+  await h.pick('host');
   assert.deepEqual(await h.panel.startPipelineFollowUp('Why does addition subtract?', target),
     { error: 'Confirm that the checks may run on this computer without OS isolation, or use Docker.', field: 'trustHost', options: true });
   assert.equal(sent.length, 0);

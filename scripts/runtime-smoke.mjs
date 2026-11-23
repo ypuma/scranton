@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createScriptedProvider } from '../src/core/llm/scripted.js';
@@ -22,5 +24,23 @@ try {
   await fs.writeFile(request, JSON.stringify({ v: 1, system: '', user: 'smoke', max_output_tokens: 256, temperature: 0 }));
   assert.equal(await runPipelineCompletion(['--provider', 'scripted', '--model', 'offline', request, response], { env: {}, clientFactory }), 0);
   assert.equal(JSON.parse(await fs.readFile(response, 'utf8')).text, result.text);
+  const runner = fileURLToPath(new URL('../tools/pipeline-sandbox.js', import.meta.url));
+  const probe = JSON.parse(execFileSync(process.execPath, [runner, 'probe', '--protocol', '1', '--windows-mode', 'low', '--scratch', dir], {
+    encoding: 'utf8', timeout: 20000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
+  }));
+  assert.equal(probe.protocol, 1);
+  assert.equal(probe.windows_mode, 'low');
+  assert.equal(typeof probe.available, 'boolean');
+  if (probe.available) {
+    assert.equal(probe.backend, 'low-integrity');
+    assert.equal(probe.check_network, 'allow');
+    assert.equal(probe.setup_network_allowed, true);
+    assert.equal(probe.reason, null);
+  } else {
+    assert.equal(probe.backend, null);
+    assert.equal(probe.check_network, null);
+    assert.equal(probe.setup_network_allowed, false);
+    assert.ok(typeof probe.reason === 'string' && probe.reason.trim());
+  }
 } finally { await fs.rm(dir, { recursive: true, force: true }); }
-console.log('Scranton offline runtime smoke passed (scripted Dreaming/Pipeline, agent import, SQLite)');
+console.log('Scranton offline runtime smoke passed (scripted Dreaming/Pipeline, agent import, SQLite, Pipeline sandbox protocol 1)');

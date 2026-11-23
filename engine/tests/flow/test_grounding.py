@@ -15,7 +15,7 @@ from .conftest import begin, cli, decision, script
 @pytest.mark.parametrize("scenario", ["basic", "replan", "parallel", "evidence"])
 def test_grounded_demos_score_matches_final_status(tmp_path, scenario):
     root = tmp_path / "runs"
-    code, status = cli("demo", "--run-root", root, "--run-id", "ground001", "--scenario", scenario, "--delivery", "apply")
+    code, status = cli("demo", "--sandbox", "host", "--run-root", root, "--run-id", "ground001", "--scenario", scenario, "--delivery", "apply")
     assert code == 3, status
     directory = root / "ground001"
     assert status["grounding"]["mode"] == "enforce"
@@ -103,7 +103,7 @@ def test_score_invalid_directory(tmp_path):
 
 @pytest.mark.parametrize("grounding,guidance", [("observe", "true"), ("enforce", "false")])
 def test_demo_wire_options_persist_and_status_mirrors(tmp_path, grounding, guidance):
-    code, status = cli("demo", "--run-root", tmp_path / "runs", "--run-id", "wire0001", "--grounding", grounding, "--guidance", guidance)
+    code, status = cli("demo", "--sandbox", "host", "--run-root", tmp_path / "runs", "--run-id", "wire0001", "--grounding", grounding, "--guidance", guidance)
     assert code == 3, status
     assert status["grounding"]["mode"] == grounding
     assert status["procedure"]["enabled"] == (guidance == "true")
@@ -113,7 +113,7 @@ def test_demo_wire_options_persist_and_status_mirrors(tmp_path, grounding, guida
 
 @pytest.mark.parametrize("option,value", [("--guidance", "yes"), ("--grounding", "off")])
 def test_demo_wire_options_invalid(tmp_path, option, value):
-    assert cli("demo", "--run-root", tmp_path / "runs", option, value)[0] == 2
+    assert cli("demo", "--sandbox", "host", "--run-root", tmp_path / "runs", option, value)[0] == 2
 
 
 def test_zero_output_observe_run_preserves_trace_settings(case):
@@ -135,7 +135,7 @@ def test_zero_output_observe_run_preserves_trace_settings(case):
 
 def test_evidence_demo_requires_enforce_before_run_creation(tmp_path):
     root = tmp_path / "runs"
-    code, result = cli("demo", "--run-root", root, "--scenario", "evidence", "--grounding", "observe")
+    code, result = cli("demo", "--sandbox", "host", "--run-root", root, "--scenario", "evidence", "--grounding", "observe")
     assert code == 2 and result["failure"]["code"] == "invalid_demo_grounding"
     assert not root.exists()
 

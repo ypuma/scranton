@@ -1,3 +1,4 @@
+import { isolationTestEnv } from '../core/isolation-test-root.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -115,14 +116,15 @@ test('staged Pipeline demo reaches the plan gate using bundled data and the stag
   const runs = await fs.mkdtemp(path.join(scratch, 'packaged-demo-'));
   try {
     const tmp = path.join(root, '.scratch/pipeline/tmp');
-    const run = spawnSync(python, [...engineArgs, 'demo', '--run-root', runs, '--delivery', 'patch'], {
-      cwd: scratch, env: { ...process.env, TEMP: tmp, TMP: tmp, TMPDIR: tmp }, encoding: 'utf8', windowsHide: true, timeout: 90000
+    const run = spawnSync(python, [...engineArgs, 'demo', '--run-root', runs, '--delivery', 'patch', '--sandbox', 'host'], {
+      cwd: scratch, env: isolationTestEnv({ TEMP: tmp, TMP: tmp, TMPDIR: tmp }), encoding: 'utf8', windowsHide: true, timeout: 90000
     });
     assert.equal(run.status, 3, run.stderr || run.stdout || run.error?.message);
     assert.equal(run.stdout.trim().split(/\r?\n/).length, 1, run.stdout);
     const status = JSON.parse(run.stdout);
     assert.equal(status.status, 'awaiting_approval');
     assert.equal(status.pending.gate, 'plan');
+    assert.equal(status.sandbox.mode, 'host');
     console.log(`Packaged Pipeline demo: exit ${run.status}, status ${status.status}, gate ${status.pending.gate}`);
   } finally {
     await fs.rm(runs, { recursive: true, force: true });

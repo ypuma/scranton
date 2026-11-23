@@ -110,10 +110,27 @@ class DockerConfig(StrictModel):
     tmpfs_mb: int = Field(default=512, ge=64, le=4096)
 
 
+class InvalidNativePassthrough(ValueError):
+    """A safe, name-only diagnostic that load_config may report."""
+
+
 class SandboxConfig(StrictModel):
-    mode: Literal["docker", "host"] = "host"
+    mode: Literal["scranton", "docker", "host"] = "scranton"
+    windows_mode: Literal["low", "strict"] = Field(default="low", exclude_if=lambda value: value == "low")
     docker: DockerConfig = Field(default_factory=DockerConfig)
     env_passthrough: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def native_environment(self) -> Self:
+        # Match the runner's payload policy; do not change Host or Docker.
+        denied = r"^(?:SCRANTON_|PI_CODING_AGENT_DIR$)|API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|(?:^|_)AUTH(?:_|$)"
+        if self.mode == "scranton":
+            for name in self.env_passthrough:
+                upper = name.upper()
+                if (not re.fullmatch(r"[^=\x00-\x1f]+", name) or re.search(denied, upper)
+                        or (upper.startswith("NODE_") and upper != "NODE_ENV")):
+                    raise InvalidNativePassthrough(f"env_passthrough: {name[:128]!r} is not allowed in Scranton sandbox mode")
+        return self
 
 
 # Shared check/setup id rule (also consumed by the Node and UI validators).
@@ -196,6 +213,10 @@ class ProcedureConfig(StrictModel):
     max_bytes: int = Field(default=1500, ge=1, le=2000000)
 
 
+class StrictSetupNetwork(ValueError):
+    pass
+
+
 class EngineConfig(StrictModel):
     agents_md: bool = Field(default=True, alias="agentsMd", strict=True, exclude_if=lambda value: value)
     conversation: bool = Field(default=False, strict=True, exclude_if=lambda value: not value)
@@ -216,6 +237,10 @@ class EngineConfig(StrictModel):
 
     @model_validator(mode="after")
     def valid_checks(self) -> Self:
+        if self.sandbox.mode == "scranton" and self.sandbox.windows_mode == "strict":
+            for index, command in enumerate(self.setup):
+                if command.network:
+                    raise StrictSetupNetwork(f"setup[{index}].network is not allowed in strict Scranton sandbox mode")
         if not self.checks and not self.allow_no_checks:
             raise ValueError("checks required unless allow_no_checks is true")
         for commands in (self.checks, self.setup):
@@ -234,7 +259,11 @@ def load_config(path: Path) -> EngineConfig:
             raise ValueError("config must name environment variables, never credentials")
         return EngineConfig.model_validate_json(raw)
     except (OSError, ValueError, ValidationError) as exc:
-        raise EngineError(FailureClass.INVALID_INPUT, "invalid_config", "Invalid configuration", detail=str(exc)) from exc
+        safe_error = None
+        if isinstance(exc, ValidationError):
+            safe_error = next((e["ctx"]["error"] for e in exc.errors()
+                               if isinstance(e.get("ctx", {}).get("error"), (StrictSetupNetwork, InvalidNativePassthrough))), None)
+        raise EngineError(FailureClass.INVALID_INPUT, "invalid_config", str(safe_error) if safe_error else "Invalid configuration", detail=str(exc)) from exc
 
 
 def config_digest(cfg: EngineConfig) -> str:

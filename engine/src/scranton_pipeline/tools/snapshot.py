@@ -7,7 +7,7 @@ from pathlib import Path
 from ..config import DEFAULT_PROTECTED, DEFAULT_WRITE_PROTECTED, Limits, Policy
 from ..errors import EngineError, FailureClass
 from ..models import StrictModel
-from .fs import PathPolicy, write_bytes_atomic
+from .fs import SANDBOX_MARKER, PathPolicy, write_bytes_atomic
 from .git import list_source_files
 
 
@@ -19,11 +19,11 @@ class SnapshotResult(StrictModel):
     manifest_path: str
 
 
-def snapshot_source(source: Path, workspace: Path, *, policy: Policy, limits: Limits, manifest_path: Path) -> SnapshotResult:
+def snapshot_source(source: Path, workspace: Path, *, policy: Policy, limits: Limits, manifest_path: Path, allocated: bool = False) -> SnapshotResult:
     source, workspace = source.resolve(), workspace.resolve()
     if workspace.is_relative_to(source) or source.is_relative_to(workspace) or manifest_path.resolve().is_relative_to(source):
         raise EngineError(FailureClass.INVALID_INPUT, "overlapping_paths", "Snapshot destinations must be outside source")
-    if workspace.exists() and any(workspace.iterdir()):
+    if workspace.exists() and {p.name for p in workspace.iterdir()} not in (set(), {SANDBOX_MARKER} if allocated else set()):
         raise EngineError(FailureClass.INVALID_INPUT, "workspace_not_empty", "Workspace must be empty")
     paths, used_git = list_source_files(source, timeout_s=limits.git_timeout_s)
     path_policy = PathPolicy(source, (*DEFAULT_PROTECTED, *policy.protected_paths), DEFAULT_WRITE_PROTECTED)

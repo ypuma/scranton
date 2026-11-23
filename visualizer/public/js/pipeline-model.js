@@ -40,6 +40,8 @@ export const REPLANS_DEFAULT = 1;
 export const PARALLEL_MAX = 4;
 export const PARALLEL_DEFAULT = 2;
 export const SANDBOX_POLL_MS = 1000;
+// a pending sandbox probe is asked again at most this often, at SANDBOX_POLL_MS (the Docker probe may take 45 s)
+export const SANDBOX_CHECK_POLLS = 60;
 export const BUILD_URL = '/api/pipeline/sandbox/build';
 
 // status -> what the run line says and the chat status the sidebar shows for it (section 9)
@@ -137,7 +139,7 @@ export function detectUrl(project) {
 
 // httpStatus: of the answer (404 = a server older than this page); doc: its body
 export function parseEngineInfo(doc, httpStatus = 200) {
-  const none = (reason) => ({ available: false, reason, version: null, dockerImage: null, sandbox: parseSandbox(null), providers: [] });
+  const none = (reason) => ({ available: false, reason, version: null, dockerImage: null, sandbox: parseSandbox(null), native: null, providers: [] });
   if (httpStatus === 0) return none('The server did not answer.');
   if (httpStatus === 404) return none('This server does not offer the Pipeline engine yet.');
   const d = obj(doc);
@@ -158,17 +160,113 @@ export function parseEngineInfo(doc, httpStatus = 200) {
     version: str(d.version) || null,
     dockerImage: str(obj(d.sandbox)?.dockerImage) || null,
     sandbox: parseSandbox(d.sandbox),
+    native: parseNative(obj(d.sandbox)?.native),
     providers,
   };
 }
 
+export const WINDOWS_MODES = ['low', 'strict'];
+// pipeline-native-sandbox-contract section 7, by Block network (strict) off and on
+export const WINDOWS_MODE_HINT = {
+  low: 'Writes stay in the run workspace; network is not blocked.',
+  strict: 'Checks and setup run without network; tools must be readable by Windows app containers.',
+};
+const BACKEND_LABEL = { 'low-integrity': 'Low integrity', appcontainer: 'AppContainer', seatbelt: 'Seatbelt', bubblewrap: 'bubblewrap' };
+export const backendLabel = (b) => own(BACKEND_LABEL, b) ?? clip(str(b).trim(), 40);
+const CHECK_NETWORK = { none: 'no network for checks', allow: 'network not blocked' };
+const reasonOf = (v) => clip(str(v).replace(/\s+/g, ' ').trim(), 300);
+
+// GET /api/pipeline sandbox.native (pipeline-native-sandbox-contract section 6); null from a server before it.
+// A Windows mode the server leaves out is unknown (available null), unless the Scranton sandbox is unavailable as a whole.
+// A probe the server is still running (pending) leaves every mode unknown.
+export function parseNative(v) {
+  const o = obj(v);
+  if (!o || typeof o.available !== 'boolean') return null;
+  const pending = o.pending === true;
+  const reason = reasonOf(o.reason) || null;
+  const modes = {};
+  for (const m of WINDOWS_MODES) {
+    const x = obj(obj(o.modes)?.[m]);
+    const available = pending ? null : typeof x?.available === 'boolean' ? x.available : o.available ? null : false;
+    modes[m] = {
+      available, reason: available === false ? reasonOf(x?.reason) || reason || 'no reason given' : null,
+      backend: str(x?.backend).trim() || null, checkNetwork: own(CHECK_NETWORK, x?.checkNetwork) ? x.checkNetwork : null,
+      setupNetworkAllowed: x?.setupNetworkAllowed === true,
+    };
+  }
+  return { platform: str(o.platform).trim() || null, available: o.available, reason, modes, ...(pending ? { pending: true } : {}) };
+}
+
+// GET /api/pipeline has a sandbox result it is still probing for: the form asks again until it knows
+export const sandboxPending = (info) => Boolean(info?.sandbox?.pending || info?.native?.pending);
+
+// What each choice of the Sandbox part says about itself, from GET /api/pipeline: { scranton, strict, docker }, each
+// { text, tone }. strict is said only while Block network is off: on, the Scranton line is about it.
+export function sandboxStates(info, { windowsMode = 'low' } = {}) {
+  const none = { text: '', tone: '' };
+  const native = info?.native ?? null;
+  const mode = native?.modes[windowsMode === 'strict' ? 'strict' : 'low'];
+  const checking = { text: 'checking...', tone: 'busy' };
+  const scranton = native?.pending ? checking : !mode || mode.available === null ? none
+    : mode.available ? { text: `ready${mode.backend ? `, ${backendLabel(mode.backend)}` : ''}`, tone: '' }
+      : { text: `not available: ${mode.reason}`, tone: 'error' };
+  const s = native?.modes.strict;
+  const strict = windowsMode !== 'strict' && s?.available === false ? { text: `not available: ${s.reason}`, tone: 'error' } : none;
+  const sb = info?.sandbox;
+  let docker = sb?.pending ? checking : none;
+  if (sb?.known) {
+    docker = sb.build?.state === 'running' ? { text: 'building the image', tone: 'busy' }
+      : !sb.docker.available ? { text: 'not available: Docker is not running', tone: 'error' }
+        : sb.image && !sb.image.present ? { text: 'the image is not built yet', tone: '' } : { text: 'ready', tone: '' };
+  }
+  return { scranton, strict, docker };
+}
+
+const TRAILING_STOP = /[\s.]+$/;
+
+// Why the picked sandbox cannot start a run, as far as GET /api/pipeline knows; '' when it can or nothing is known.
+// The choice itself is never moved: the text names the alternatives.
+export function sandboxBlock(info, { sandbox, windowsMode = 'low', image = '' } = {}) {
+  if (sandbox === 'scranton') {
+    const strict = windowsMode === 'strict';
+    const m = info?.native?.modes[strict ? 'strict' : 'low'];
+    if (m?.available !== false) return '';
+    const lowOk = strict && info.native.modes.low.available !== false;
+    return `The Scranton sandbox${strict ? ' with Block network (strict)' : ''} is not available here: ${m.reason.replace(TRAILING_STOP, '')}. ${lowOk ? 'Turn off Block network, or pick' : 'Pick'} Docker or Trusted host.`;
+  }
+  const sb = info?.sandbox;
+  if (sandbox !== 'docker' || !sb?.known) return '';
+  if (!sb.docker.available) return `Docker is not running: ${(sb.docker.reason || 'no reason given').replace(TRAILING_STOP, '')}. Start Docker, or pick another sandbox.`;
+  if (raw(image).trim() || !sb.image || sb.image.present) return '';
+  const name = sb.image.name ? `The sandbox image ${sb.image.name}` : 'The sandbox image';
+  return sb.build?.state === 'running' ? `${name} is still being built. Wait for it, or pick another sandbox.`
+    : `${name} has not been built yet. Build it, name another image, or pick another sandbox.`;
+}
+
+// Contract section 2: strict runs setup without network, so a filled setup row that needs it cannot run there.
+// -> [{ index, name }], index as the form numbers its rows
+function networkSetup(rows) {
+  return list(rows).map((c, index) => ({ index, id: raw(c?.id).trim(), command: raw(c?.command).trim(), network: c?.network === true }))
+    .filter((r) => (r.id || r.command) && r.network).map((r) => ({ index: r.index, name: r.id || String(r.index + 1) }));
+}
+
+// The plain explanation for strict plus a needs-network setup command; '' when there is none. The choice is kept.
+export function strictSetupText(rows) {
+  const hit = networkSetup(rows);
+  if (!hit.length) return '';
+  const names = hit.map((h) => h.name).join(', ');
+  return `Block network (strict) runs setup without network, but setup command${hit.length === 1 ? ` ${names} needs` : `s ${names} need`} it. Turn off Block network or use Docker; the needs network choice is kept.`;
+}
+
 const BUILD_STATES = ['idle', 'running', 'succeeded', 'failed'];
 
-// GET /api/pipeline sandbox (section 18). known: false for a server that only names the default image.
+// GET /api/pipeline sandbox (section 18). known: false for a server that only names the default image, and for a
+// Docker probe the server is still running (pending: its available: false is a placeholder, not an answer).
 export function parseSandbox(v) {
   const o = obj(v);
   const docker = obj(o?.docker);
   const image = obj(o?.image);
+  if (docker?.pending === true) return { known: false, pending: true, docker: null, image: null, build: null };
   if (!docker || typeof docker.available !== 'boolean') return { known: false, docker: null, image: null, build: null };
   const b = obj(o.build);
   return {
@@ -183,6 +281,7 @@ export function parseSandbox(v) {
 // buildError: the answer to this page's own build request, if it failed.
 // -> { line, tone, ready, build: hidden | idle | running, tail }
 export function sandboxView(sb, { buildError = '' } = {}) {
+  if (sb?.pending) return { line: 'Checking whether Docker is running...', tone: 'busy', ready: null, build: 'hidden', tail: '' };
   if (!sb?.known) return { line: '', tone: '', ready: null, build: 'hidden', tail: '' };
   const name = sb.image?.name || 'the sandbox image';
   const state = sb.build?.state ?? 'idle';
@@ -358,11 +457,7 @@ export function parseStatus(s) {
     artifacts: {
       plan: Boolean(art.plan), diff: Boolean(art.diff), reportMd: Boolean(art.report_md), reportJson: Boolean(art.report_json),
     },
-    sandbox: {
-      mode: obj(o.sandbox)?.mode === 'docker' ? 'docker' : obj(o.sandbox)?.mode === 'host' ? 'host' : null, isolated: obj(o.sandbox)?.isolated === true,
-      isolation: str(obj(o.sandbox)?.isolation).replace(/\s+/g, ' ').trim() || null,
-      image: str(obj(o.sandbox)?.image).trim() || null, setupNetwork: obj(o.sandbox)?.setup_network === true,
-    },
+    sandbox: parseRunSandbox(o.sandbox),
     grounding: parseGrounding(o.grounding),
     procedure: {
       enabled: obj(o.procedure)?.enabled === true, name: str(obj(o.procedure)?.name) || null,
@@ -370,6 +465,21 @@ export function parseStatus(s) {
     },
     reply: parseReply(o.reply),
     createdAt: str(o.created_at) || null, updatedAt: str(o.updated_at) || null,
+  };
+}
+
+const SANDBOX_MODES = ['scranton', 'docker', 'host'];
+
+// status.sandbox as the engine reports it; backend, windowsMode and checkNetwork are null from an engine before
+// the Scranton sandbox (pipeline-native-sandbox-contract section 5)
+function parseRunSandbox(v) {
+  const o = obj(v);
+  return {
+    mode: SANDBOX_MODES.includes(o?.mode) ? o.mode : null, isolated: o?.isolated === true,
+    isolation: str(o?.isolation).replace(/\s+/g, ' ').trim() || null,
+    image: str(o?.image).trim() || null, setupNetwork: o?.setup_network === true,
+    backend: str(o?.backend).trim() || null, windowsMode: WINDOWS_MODES.includes(o?.windows_mode) ? o.windows_mode : null,
+    checkNetwork: own(CHECK_NETWORK, o?.check_network) ? o.check_network : null,
   };
 }
 
@@ -606,6 +716,11 @@ function firstClause(sentence, max = 80) {
 // The sandbox fragment of the run line. -> { text, full, more }
 // full: the engine's sentence ('' from an older engine); more: it says more than the fragment does.
 function sandboxFragment(sb) {
+  // the Scranton sandbox is described by its fields, not a sentence: what enforces it and what the checks may reach
+  if (sb.mode === 'scranton') {
+    const text = ['Scranton sandbox', sb.backend && backendLabel(sb.backend), own(CHECK_NETWORK, sb.checkNetwork)].filter(Boolean).join(' · ');
+    return { text, full: sb.isolation ?? '', more: Boolean(sb.isolation) };
+  }
   const clause = sb.isolation ? firstClause(sb.isolation) : '';
   if (!clause) return { text: sb.mode === 'host' ? 'host, no OS isolation' : 'Docker (isolated, no network)', full: '', more: false };
   const label = sb.mode === 'host' ? 'host' : 'Docker';
@@ -855,6 +970,9 @@ const EVENT_TEXT = {
     const more = hits.length - 1;
     return `Refuted: ${subject} exists at ${hits[0]}${more ? ` and ${more} more place${more === 1 ? '' : 's'}` : ''}`;
   },
+  sandbox_ready: (d) => `sandbox ready: ${[d.mode === 'scranton' ? 'Scranton sandbox' : str(d.mode), str(d.backend) && backendLabel(d.backend),
+    own(CHECK_NETWORK, d.check_network)].filter(Boolean).join(' · ')}`,
+  sandbox_failed: (d) => `sandbox failed${str(d.code) ? `: ${str(d.code)}` : ''}${str(d.message) ? `: ${str(d.message)}` : ''}`,
   probe_finished: (d) => `counterfactual probe: ${own(PROBE_TEXT, d.status) ?? own({ not_needed: 'not needed', off: 'off' }, d.status) ?? (str(d.status).replace(/_/g, ' ') || 'finished')}${
     ids(d.checks) ? ` (${ids(d.checks)})` : ''}`,
 };
@@ -876,7 +994,7 @@ export function eventText(e, ctx = {}) {
   }
 }
 
-export const LOUD_EVENTS = new Set(['failure', 'gate_waiting', 'edits_rejected', 'warning', 'replan_requested']);
+export const LOUD_EVENTS = new Set(['failure', 'gate_waiting', 'edits_rejected', 'warning', 'replan_requested', 'sandbox_failed']);
 export const eventLoud = (e, ctx = {}) => LOUD_EVENTS.has(e.type) || (e.type === 'grounding' && !ctx.observe);
 
 // The events the activity list shows: an accepted output and the per-call procedure event say nothing new.
@@ -927,9 +1045,11 @@ const choice = (v, lo, hi, fallback) => {
 };
 
 // The sandbox of a run. The demo runs only its bundled sample, so the host needs no acknowledgement there.
-// -> { sandbox } or { error, field }
+// form.unavailable: sandboxBlock() for the picked sandbox. -> { sandbox } or { error, field }
 function sandboxOf(form, demo) {
-  if (form.sandbox !== 'host' && form.sandbox !== 'docker') return { error: 'Choose where the checks run: Docker container or Trusted host.', field: 'sandbox' };
+  if (!SANDBOX_MODES.includes(form.sandbox)) return { error: 'Choose where the checks run: Scranton sandbox, Docker container or Trusted host.', field: 'sandbox' };
+  if (raw(form.unavailable)) return { error: raw(form.unavailable), field: 'sandbox' };
+  if (form.sandbox === 'scranton') return { sandbox: { mode: 'scranton', windowsMode: form.windowsMode === 'strict' ? 'strict' : 'low' } };
   if (form.sandbox === 'host') {
     if (demo) return { sandbox: { mode: 'host' } };
     if (form.trustHost !== true) return { error: 'Confirm that the checks may run on this computer without OS isolation, or use Docker.', field: 'trustHost' };
@@ -943,8 +1063,8 @@ function sandboxOf(form, demo) {
 // sections 21.4 and 23.4, sent explicitly for every run: enforce and no guidance unless chosen
 const evidenceOf = (form) => ({ grounding: form.grounding === 'observe' ? 'observe' : 'enforce', guidance: form.guidance === true });
 
-// POST .../pipeline/runs. form: { task, demo, demoScenario, delivery, sandbox: 'docker' | 'host' | '' (none chosen), image,
-// trustHost, replans, parallelSteps, grounding: 'enforce' | 'observe', guidance,
+// POST .../pipeline/runs. form: { task, demo, demoScenario, delivery, sandbox: 'scranton' | 'docker' | 'host' | '' (none
+// chosen), windowsMode: 'low' | 'strict', unavailable, image, trustHost, replans, parallelSteps, grounding: 'enforce' | 'observe', guidance,
 // setup: [{ id, command, network }], checks: [{ id, kind, command, required }],
 // models: { role: { provider, model } | null }, approvals } -> { body } or { error, field }
 // Every run this page starts is a conversation run (chat-view-pipeline-contract section 11.1): role messages,
@@ -975,6 +1095,8 @@ export function buildRunBody(form = {}) {
   const sb = sandboxOf(form, false);
   if (sb.error) return sb;
   const { sandbox } = sb;
+  const offline = sandbox.windowsMode === 'strict' ? networkSetup(form.setup) : [];
+  if (offline.length) return { error: strictSetupText(form.setup), field: `setup.${offline[0].index}.network` };
 
   const models = {};
   for (const role of ROLES) {
@@ -991,7 +1113,7 @@ export function buildRunBody(form = {}) {
 // Which form field a 400 from the runs route is about: a named row field (checks.1.id, setup[0].command), else a guess.
 export function runErrorField(message) {
   const t = raw(message);
-  const row = /\b(checks|setup)(?:\[(\d+)\]|\.(\d+))(?:\.(id|command))?/.exec(t);
+  const row = /\b(checks|setup)(?:\[(\d+)\]|\.(\d+))(?:\.(id|command|network))?/.exec(t);
   if (row) return `${row[1]}.${row[2] ?? row[3]}.${row[4] ?? (/command|argv/i.test(t) ? 'command' : 'id')}`;
   if (/\btask\b/i.test(t)) return 'task';
   if (/trust/i.test(t)) return 'trustHost';

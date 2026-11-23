@@ -52,7 +52,7 @@ def test_legacy_prompt_schema_and_config():
 @pytest.mark.parametrize("scenario", ["basic", "replan", "parallel", "evidence"])
 def test_legacy_run_projection(tmp_path, scenario):
     golden = json.loads((Path(__file__).parent / "fixtures/conversation_legacy.json").read_text())[scenario]
-    status = run_demo(tmp_path, run_id="base" + scenario, scenario=scenario)
+    status = run_demo(tmp_path, sandbox="host", run_id="base" + scenario, scenario=scenario)
     run_dir = tmp_path / ("base" + scenario)
     while status.pending:
         status = resume(run_dir, gate=status.pending["gate"], decision="approve", digest=status.pending["digest"])
@@ -130,7 +130,7 @@ def test_answer_rejected_when_off(case):
 
 @pytest.mark.parametrize("scenario", ["basic", "replan", "parallel", "evidence", "answer"])
 def test_conversation_demos(tmp_path, scenario):
-    status = run_demo(tmp_path, run_id="chat" + scenario, scenario=scenario, conversation=True)
+    status = run_demo(tmp_path, sandbox="host", run_id="chat" + scenario, scenario=scenario, conversation=True)
     run_dir = tmp_path / ("chat" + scenario)
     while status.pending:
         assert "reply" not in status.model_dump() and not (run_dir / "delivery/reply.json").exists()

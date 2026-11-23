@@ -12,6 +12,14 @@ from pathlib import Path
 
 from ..errors import EngineError, FailureClass
 
+SANDBOX_MARKER = ".scranton-sandbox-owned"
+ALLOCATION_PREFIX = ".scranton-sandbox-allocation-"
+
+
+def reserved_sandbox_name(name: str) -> bool:
+    name = name.casefold()
+    return name == SANDBOX_MARKER or name.startswith(ALLOCATION_PREFIX)
+
 
 class PathPolicy:
     def __init__(self, root: Path, protected: Sequence[str], write_protected: Sequence[str]) -> None:
@@ -49,7 +57,8 @@ class PathPolicy:
 
     def is_protected(self, rel: str) -> bool:
         resolved = self.resolve(rel).relative_to(self.root).as_posix()
-        return self._matches(rel, self.protected) or self._matches(resolved, self.protected)
+        return (any(reserved_sandbox_name(part) for path in (rel, resolved) for part in path.split("/"))
+                or self._matches(rel, self.protected) or self._matches(resolved, self.protected))
 
     def is_write_protected(self, rel: str) -> bool:
         resolved = self.resolve(rel).relative_to(self.root).as_posix()

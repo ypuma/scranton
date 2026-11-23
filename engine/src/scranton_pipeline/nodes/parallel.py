@@ -13,8 +13,9 @@ from scranton_pipeline.nodes import workflow
 from scranton_pipeline.nodes.common import Dependencies, scope_id
 from scranton_pipeline.observability import EventLog, _rows
 from scranton_pipeline.state import PipelineState, counter, get_plan
-from scranton_pipeline.tools.fs import write_bytes_atomic
+from scranton_pipeline.tools.fs import ALLOCATION_PREFIX, reserved_sandbox_name, write_bytes_atomic
 from scranton_pipeline.tools.git import WorkspaceRepo
+from scranton_pipeline.tools.native_sandbox import NativeSandbox
 
 
 class LaneEvents(EventLog):
@@ -67,7 +68,7 @@ def parallel_available(deps: Dependencies) -> bool:
     return True
 
 
-def remove_lane(path: Path) -> None:
+def remove_lane(path: Path, *, owned: bool = False) -> None:
     def writable(fn: Any, name: str, exc: BaseException) -> None:
         if not isinstance(exc, PermissionError):
             raise exc
@@ -76,6 +77,17 @@ def remove_lane(path: Path) -> None:
     if path.exists():
         # Git object files are read-only on Windows.
         shutil.rmtree(path, onexc=writable)
+    if owned:
+        path.with_name(f"{ALLOCATION_PREFIX}{path.name}.json").unlink(missing_ok=True)
+
+
+def copy_workspace(source: Path, target: Path, box: Any, *, exclude_state: bool = True) -> None:
+    allocated = isinstance(box, NativeSandbox)
+    if allocated:
+        box.allocate()
+    shutil.copytree(source, target, dirs_exist_ok=allocated,
+                    ignore=lambda _, names: [n for n in names if reserved_sandbox_name(n)
+                                             or exclude_state and n.casefold() in {".git", ".pipeline"}])
 
 
 def lane_prepare(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
@@ -83,10 +95,10 @@ def lane_prepare(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     lane = state["lane"]
     source = Path(lane["source_workspace"])
     directory = deps.git_dir.parent if deps.git_dir else deps.run_dir / "lanes"
-    for path in (deps.workspace, directory):
-        remove_lane(path)
+    remove_lane(deps.workspace, owned=deps.cfg.sandbox.mode == "scranton")
+    remove_lane(directory)
     workspace_bytes(source)
-    shutil.copytree(source, deps.workspace, ignore=lambda _, names: [n for n in names if n.casefold() in {".git", ".pipeline"}])
+    copy_workspace(source, deps.workspace, workflow.sandbox(deps))
     repo = WorkspaceRepo.init(deps.workspace, deps.git_dir, timeout_s=deps.cfg.limits.git_timeout_s)
     source_repo = WorkspaceRepo(source, Path(lane["source_git_dir"]), timeout_s=deps.cfg.limits.git_timeout_s)
     tracked = [p for p in source_repo._run(["ls-tree", "-rz", "--name-only", state["workspace"]["head_commit"]]).split("\0") if p]
@@ -114,7 +126,7 @@ def cleanup_lanes(state: PipelineState, deps: Dependencies) -> None:
         for path in (workspace, directory):
             for attempt in range(3):
                 try:
-                    remove_lane(path)
+                    remove_lane(path, owned=path == workspace and deps.cfg.sandbox.mode == "scranton")
                     break
                 except Exception:  # noqa: BLE001 - cleanup must not prevent terminal status
                     if attempt == 2:
@@ -151,6 +163,10 @@ def merge_wave(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
         return update
     plan = get_plan(state)
     assert plan is not None
+    for lane in state["lanes"].values():
+        failure = lane.get("failure")
+        if failure and failure["code"] in {"sandbox_failed", "output_not_closed"}:
+            return {"failure": failure}
     repo = deps.repo()
     repo.reset_hard(state["workspace"]["head_commit"])
     merged, failed, records = [], [], []

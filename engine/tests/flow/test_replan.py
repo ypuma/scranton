@@ -241,7 +241,7 @@ def test_recursion_bound_with_every_replan():
 
 def test_replan_prompt_keeps_reason_before_bulk(tmp_path):
     # Guard: bounded control ordering keeps replan_reason/context/feedback before bulk previous-plan/repo text.
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     state = {"task": "Fix", "plan_revision": 1, "counters": {"plan_context:r1": 1},
         "feedback": {"message": "REPAIR SENTINEL"}, "previous_plan": {"summary": "OLD PLAN SENTINEL"},
         "replan_brief": {"reason": "REASON SENTINEL", "failed_step": {"id": "FAILED STEP SENTINEL"},
@@ -256,7 +256,7 @@ def test_replan_prompt_keeps_reason_before_bulk(tmp_path):
 
 def test_additive_kernel_defaults_and_bounds(tmp_path):
     # Guards: new config defaults and RunStatus progress/pending validators keep historical JSON valid.
-    cfg = EngineConfig.model_validate(config(tmp_path).model_dump())
+    cfg = EngineConfig.model_validate(config(tmp_path, sandbox="host").model_dump())
     assert cfg.limits.max_replans == 1
     assert cfg.execution.max_parallel_steps == 1 and cfg.execution.max_lane_workspace_bytes == 536870912
     assert cfg.sandbox.docker.tmpfs_mb == 512
@@ -278,7 +278,7 @@ def test_instrument_status_merges_progress_deltas(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(graph, "make_status", lambda state, deps, **kw: state)
     monkeypatch.setattr(graph, "write_status", lambda directory, status: seen.append(status))
-    deps = SimpleNamespace(run_dir=tmp_path, cfg=config(tmp_path),
+    deps = SimpleNamespace(run_dir=tmp_path, cfg=config(tmp_path, sandbox="host"),
         events=SimpleNamespace(emit=lambda *a, **kw: None),
         stop=SimpleNamespace(cancel_requested=lambda: False, suspend_requested=lambda: False))
     state = {"counters": {"replans": 1, "attempts:step:x": 2}, "steps_done": [{"step_id": "step:old"}]}
@@ -317,9 +317,9 @@ def test_resume_cleanup_before_graph_and_finalize(case, monkeypatch):
     calls = []
     monkeypatch.setattr(HostSandbox, "cleanup", lambda self: calls.append("cleanup"))
     original = runner.drive
-    def drive(deps, value=None):
+    def drive(deps, value=None, *, execute=True):
         assert calls == ["cleanup"]
-        return original(deps, value)
+        return original(deps, value, execute=execute)
     monkeypatch.setattr(runner, "drive", drive)
     result = runner.resume(case["root"] / "test0001", gate="plan", decision="approve",
         digest=status["pending"]["digest"], trust_host=True)

@@ -1,3 +1,4 @@
+import { isolationTestEnv } from './isolation-test-root.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -85,7 +86,7 @@ test('Pipeline override remains highest priority and rejects malformed argv', (t
 });
 test('Pipeline spawn preserves argv boundaries and credential filtering', async (t) => {
   const root = fixture(t), script = put(root, 'fake engine.cjs', 'console.log(JSON.stringify({argv:process.argv.slice(2), secret:process.env.SOME_TOKEN ?? null}));');
-  const result = await execPipeline({ argv: [process.execPath, script, 'bootstrap with spaces'] }, ['version', 'argument with spaces'], { env: { ...process.env, SOME_TOKEN: 'do-not-forward' } });
+  const result = await execPipeline({ argv: [process.execPath, script, 'bootstrap with spaces'] }, ['version', 'argument with spaces'], { env: isolationTestEnv({ SOME_TOKEN: 'do-not-forward' }) });
   assert.equal(result.code, 0);
   assert.deepEqual(result.value, { argv: ['bootstrap with spaces', 'version', 'argument with spaces'], secret: null });
   assert.deepEqual(pipelineChildEnv({ PATH: 'ok', API_KEY: 'bad', SCRANTON_PIPELINE_KEY_PLANNER: 'bad' }), { PATH: 'ok' });
@@ -106,12 +107,23 @@ test('Pipeline bundled executable cannot escape engine-runtime through a directo
   assert.throws(() => resolvePipelineCommand({ root, env: {}, platform: 'win32', arch: 'x64' }), /outside engine-runtime/);
 });
 
-test('Pipeline resume binds completion to this installation, overriding stale environment paths', async (t) => {
-  const root = fixture(t), script = put(root, 'completion-env.cjs', 'console.log(JSON.stringify(JSON.parse(process.env.SCRANTON_PIPELINE_COMPLETION_COMMAND)));');
-  const result = await execPipeline({ argv: [process.execPath, script] }, ['resume', '--run-dir', root], {
-    env: { ...process.env, SCRANTON_PIPELINE_COMPLETION_COMMAND: JSON.stringify(['missing-node', '/old/tools/pipeline-pi-complete.js']) }
-  });
-  assert.equal(result.code, 0);
-  assert.deepEqual(result.value, [process.execPath, path.resolve('tools/pipeline-complete.js')]);
-  for (const file of result.value) assert.ok(fs.statSync(file).isFile());
+test('Every Pipeline child binds native and completion to this installation, preserving Team helper override', async (t) => {
+  const root = fixture(t), helper = path.join(root, 'scranton-sandbox-helper.exe');
+  const script = put(root, 'binding-env.cjs', `console.log(JSON.stringify({
+    completion: JSON.parse(process.env.SCRANTON_PIPELINE_COMPLETION_COMMAND),
+    native: JSON.parse(process.env.SCRANTON_PIPELINE_NATIVE_COMMAND),
+    helper: process.env.SCRANTON_SANDBOX_HELPER,
+    isolation: process.env.SCRANTON_ISOLATION_ROOT,
+  }));`);
+  const env = isolationTestEnv({ SCRANTON_PIPELINE_COMPLETION_COMMAND: '["stale-completion"]', SCRANTON_PIPELINE_NATIVE_COMMAND: '["stale-native"]', SCRANTON_SANDBOX_HELPER: helper });
+  for (const args of [['version'], ['sandbox', 'check', '--mode', 'scranton'], ['run'], ['resume', '--run-dir', root], ['cancel']]) {
+    const result = await execPipeline({ argv: [process.execPath, script] }, args, { env });
+    assert.equal(result.code, 0);
+    assert.deepEqual(result.value, {
+      completion: [process.execPath, path.resolve('tools/pipeline-complete.js')],
+      native: [process.execPath, path.resolve('tools/pipeline-sandbox.js')],
+      helper, isolation: env.SCRANTON_ISOLATION_ROOT,
+    });
+  }
+  assert.ok(fs.statSync(path.resolve('tools/pipeline-complete.js')).isFile());
 });

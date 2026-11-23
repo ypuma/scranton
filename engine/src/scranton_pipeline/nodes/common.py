@@ -28,9 +28,16 @@ class Dependencies:
     trust_host: bool = False
     checkpointer: Any = None
     git_warning_emitted: bool = False
+    native_ready: bool = False
     lane_suffix: str = ""
     git_dir: Path | None = None
     wave_clocks: dict[int, tuple[float, float]] = field(default_factory=dict)
+
+    def sandbox_failure(self, exc: Exception, *, code: str, node: str) -> None:
+        if self.cfg.sandbox.mode == "scranton" and code in {"sandbox_failed", "output_not_closed"}:
+            from scranton_pipeline.tools.native_sandbox import describe_native
+            backend = describe_native(self.cfg.sandbox, ready=self.native_ready)["backend"]
+            self.events.emit("sandbox_failed", node=node, mode="scranton", backend=backend, code=code, message=str(exc))
 
     def procedure_event(self, role: str, state: PipelineState) -> None:
         from scranton_pipeline.guidance import situation

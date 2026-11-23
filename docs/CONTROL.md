@@ -205,7 +205,7 @@ type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 Provider and exact model ID must exist together in the signed-in catalogue in all Team sandbox modes. Unknown roles/extra fields/invalid Thinking produce 400 before launch. Omitted roles keep agent defaults; absent defaults use Automatic. Valid overrides become role environment values for that run, not config writes. Demo remains scripted and sends no model choice.
 
-There is no Team Docker inference broker: all provider calls remain host-side. Container network policy governs tools only. Pipeline uses its separate check sandbox and host completion bridge.
+There is no Team Docker inference broker: all provider calls remain host-side. Container network policy governs tools only. Pipeline uses the check/setup sandbox described below; its model calls and completion bridge also remain on the host.
 
 Offline tests do not prove live OAuth acceptance, subscription entitlements, native macOS/Linux isolation or installed desktop lifecycle. Historical broker tests do not apply to the new tool-only executor. Verify these separately at release.
 
@@ -360,6 +360,20 @@ In Registry-Betrieb wählen die unscoped Aliase den zuletzt über einen Run-POST
 - **413/415:** Body-/Archivgrenze überschritten bzw. falscher Content-Type.
 - **429:** Registry-Runlimit erreicht → exakt `{error:"too_many_runs"}`; davon getrennt Instanz-Chatspool voll → `{error:"Chat queue is full"}`. Es wird kein Run für später eingereiht. Nach Freigabe eines Slots erneut starten.
 - **500:** unerwarteter interner Fehler, bereinigt als `Registry operation failed` bzw. `Control operation failed`.
+
+### Pipeline sandbox HTTP
+
+`POST /api/projects/:p/chats/:c/pipeline/runs` accepts `sandbox: {mode:"scranton"|"docker"|"host", image?, trustHost?, windowsMode?}`. For a new real run, omitting `sandbox` means `{mode:"scranton", windowsMode:"low"}`. There is no fallback to another mode. Host is not OS isolation and requires `trustHost:true`; only an actual acknowledgement is forwarded as `--trust-host`. Resume and gate decisions keep the existing run's persisted mode and trust. For the bundled demo only, Host needs no acknowledgement and an omitted sandbox selects Scranton if a fresh Low probe succeeds, otherwise Host.
+
+| HTTP | Sandbox validation |
+|---|---|
+| 400 | Unknown mode or field, `image` outside Docker, `trustHost` outside Host, invalid `windowsMode` or `windowsMode` outside Scranton, or `setup[i].network:true` in Strict (the error names `setup[i].network`). |
+| 409 | Real Host run without `trustHost:true`, or Scranton unavailable after a fresh probe of the requested Windows mode; includes the reason. |
+| 503 | Unusable Pipeline engine. |
+
+`GET /api/pipeline` adds `sandbox.native: {platform, available, reason, modes: {low, strict}}`. Each mode reports `{available, reason, backend, checkNetwork, setupNetworkAllowed}`. Native `available` is true if either mode is available. This capability probe is cached for three seconds and independent of Docker; a failed Docker probe must not delay it. Run details report the actual execution policy in `status.sandbox`, not the requested form value.
+
+Pipeline native supports **Windows only**. `low` (`low-integrity`, default) restricts writes with Low integrity but leaves ordinary Medium files readable and leaves network open. `strict` (`appcontainer`) reads only what Windows permits AppContainers to read and blocks network for checks and setup. To run networked setup while keeping checks offline, choose Docker explicitly. The native mode does not mount `/workspace/.pipeline`; setup output stays in the workspace. See [PIPELINE.md](PIPELINE.md) for the full routes, run events and [follow-ups](PIPELINE.md#offene-punkte-der-nativen-sandbox).
 
 ### Speicherung und Desktop-Import
 

@@ -6,12 +6,17 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ..errors import EngineError, FailureClass
-from .fs import PathPolicy
+from .fs import PathPolicy, reserved_sandbox_name
 from .process import run_process, scrubbed_env
 from .secrets import Redactor
 
 DEFAULT_IGNORED_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache",
                                 ".ruff_cache", ".pytest_cache", "dist", "build", "target", ".scratch"})
+
+
+SANDBOX_EXCLUDES = tuple(f":(exclude,icase,glob)**/{name}{suffix}"
+                         for name in (".scranton-sandbox-owned", ".scranton-sandbox-allocation-*")
+                         for suffix in ("", "/**"))
 
 
 def git_available() -> bool:
@@ -77,7 +82,7 @@ class WorkspaceRepo:
         return _git(self.workspace, args, self.timeout_s, git_dir=self.git_dir)
 
     def commit_all(self, message: str) -> str:
-        self._run(["add", "-A", "--", "."])
+        self._run(["add", "-A", "--", ".", *SANDBOX_EXCLUDES])
         self._run(["-c", "commit.gpgsign=false", "commit", "--no-verify", "--allow-empty", "-m", message])
         return self.head()
 
@@ -90,6 +95,9 @@ class WorkspaceRepo:
         return self.head()
 
     def add_paths(self, paths: Sequence[str], *, force: bool = False) -> None:
+        paths = [p for p in paths if not any(reserved_sandbox_name(part) for part in p.split("/"))]
+        if not paths:
+            return
         with tempfile.NamedTemporaryFile(dir=self.git_dir, delete=False) as stream:
             path = Path(stream.name)
             stream.write(b"".join(p.encode("utf-8") + b"\0" for p in paths))
@@ -104,7 +112,7 @@ class WorkspaceRepo:
 
     def reset_hard(self, commit: str) -> None:
         self._run(["reset", "--hard", commit])
-        self._run(["clean", "-fd"])
+        self._run(["clean", "-fd", "-e", ".[sS][cC][rR][aA][nN][tT][oO][nN]-[sS][aA][nN][dD][bB][oO][xX]-[oO][wW][nN][eE][dD]"])
 
     def restore_tracked(self) -> list[str]:
         changed = [p for p in self._run(["diff", "HEAD", "--name-only", "-z"]).split("\0") if p]

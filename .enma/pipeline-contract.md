@@ -274,7 +274,8 @@ live in `state.py`; nodes never index raw dicts for models.
 ```jsonc
 { "schema": 1,
   "models": { "planner": ModelConfig, "implementer": ModelConfig, "reviewer": ModelConfig },
-  "sandbox": { "mode": "docker" | "host",
+  "sandbox": { "mode": "scranton" | "docker" | "host", // default "scranton"
+               "windows_mode": "low" | "strict",    // Scranton; default "low"
                "docker": { "image": "name-or-id", "cpus": 2, "memory_mb": 2048, "pids": 256 },
                "env_passthrough": [] },
   "setup":  [ { "id": "deps", "argv": ["npm","ci"], "timeout_s": 600, "network": true } ],
@@ -340,6 +341,7 @@ class Sandbox(Protocol):
     def describe(self) -> dict[str, Any]         # mode, image, isolation statement (goes into the report)
     def preflight(self) -> None                  # raises EngineError(INFRASTRUCTURE, ...) if unusable
 def build_sandbox(cfg: SandboxConfig, *, workspace: Path, run_id: str, trust_host: bool) -> Sandbox
+    # NativeSandbox: default, uses Scranton's Windows helper via the Node runner (see §18).
     # HostSandbox: needs trust_host=True (else EngineError(INVALID_INPUT,"host_trust_required")); scrubbed env; cwd=workspace.
     # DockerSandbox: `docker run --rm --pull never --name scranton-pipeline-<run8>-<n> --network none
     #   (bridge only when network=True) --cpus --memory --pids-limit --cap-drop ALL --security-opt no-new-privileges
@@ -513,8 +515,8 @@ python -m scranton_pipeline version                         -> {"version","pytho
 - `status`: reads `status.json`; if it says `running` but the lock is free (owner died) it reports and
   persists `suspended` with `resumable: true`.
 - `demo`: creates a tiny buggy fixture project under `<run-dir>/demo-source`, uses scripted models and the
-  host sandbox with `[sys.executable, "-m", "unittest", ...]` (trust implied for the bundled fixture only),
-  `approvals.plan = "always"`. It behaves exactly like `run` afterwards (stops at the plan gate with exit 3).
+  selected `--sandbox scranton|docker|host` (default `scranton`; `--windows-mode` for Scranton only).
+  Host trust is implied only for the bundled fixture. `approvals.plan = "always"`; it stops at the plan gate with exit 3.
 
 Run directory:
 ```
@@ -542,7 +544,7 @@ Run directory:
   "checks": [ { "id","kind","status","required","duration_s" } ],        // latest verify (or baseline before the first)
   "delivery": null | { "applied": true|false|null, "diff_sha256": "...", "files": 0, "conflicts": [] },
   "artifacts": { "plan": null|"...", "diff": null|"...", "report_md": null|"...", "report_json": null|"..." },
-  "sandbox": { "mode": "host|docker", "isolated": false }, "pid": 1234 | null,
+  "sandbox": { "mode": "scranton|docker|host", "isolated": true|false, ... }, "pid": 1234 | null, // see §18
   "created_at": "...", "updated_at": "...", "engine_version": "..." }
 ```
 Report (`delivery/report.json` schema 1 + `report.md`, English, built ONLY from state/artifacts - no model):
@@ -678,7 +680,7 @@ errors `{ "error": "<message>" }`):
 ```
 GET  /api/pipeline
   -> { available: bool, reason: string|null, version: string|null, source: "env"|"bundled"|"dev"|null,
-       sandbox: { dockerImage: string|null },
+       sandbox: { dockerImage: string|null, docker, image, build, native }, // see §18
        models: [ { provider, label, supported: bool, reason: string|null, models: [ { id, label } ] } ] }
 POST /api/projects/:p/pipeline/detect            body {}
   -> { git: bool, languages: {..}, checks: [ { id, kind, command, reason } ] }
@@ -686,14 +688,14 @@ GET  /api/projects/:p/chats/:c/pipeline
   -> { active: runId|null, runs: [ { runId, status, phase, task, createdAt, updatedAt } ] }      // oldest first
 POST /api/projects/:p/chats/:c/pipeline/runs     -> 202 { ok: true, runId }
   body { task: string,                                      // 1..32768 bytes
-         demo?: bool,                                       // true: engine `demo`; only `delivery` is honoured besides
+         demo?: bool,                                       // true: bundled scripted fixture; see §18 for sandbox selection
          delivery?: "apply"|"patch",                        // default "apply"
-         sandbox?: { mode: "docker"|"host", image?: string, trustHost?: bool },
+         sandbox?: { mode: "scranton"|"docker"|"host", image?: string, trustHost?: bool, windowsMode?: "low"|"strict" },
          checks?: [ { id, kind, command, timeoutSec?, required?, scope? } ],     // <= 12
          setup?:  [ { id, command, timeoutSec?, network? } ],                    // <= 4
          models?: { planner: {provider, model}, implementer: {provider, model}, reviewer: {provider, model} },
          approvals?: { plan: "always"|"auto_low_risk" }, review?: bool }
-  errors: 400 validation - 409 chat has a non-terminal run / wrong engine / host mode without trustHost
+  errors: 400 validation - 409 chat has a non-terminal run / wrong engine / sandbox conflict (see §18)
           429 too_many_runs - 503 "Pipeline engine is not available: <reason>"
 GET  /api/projects/:p/chats/:c/pipeline/runs/:runId?after=<seq>
   -> { status: RunStatus, live: bool, events: [ ...seq > after, at most 500 ], lastSeq: number,
@@ -732,9 +734,9 @@ dynamic text via `textContent`. Vanilla ES modules, no build step, no new depend
 - New-run drawer (`#run-dialog`, `js/control-panel.js`): when it creates a NEW chat and `GET /api/pipeline`
   says `available`, offer the engine choice "Team" (default, today's behaviour, unchanged) / "Pipeline". If the
   engine is unavailable the choice is shown disabled with the server's reason. Pipeline form: task; checks
-  (prefilled from `POST .../pipeline/detect`, editable rows: id, kind, command, required); sandbox (Docker with
-  image field prefilled from `sandbox.dockerImage`, or Trusted host with an explicit acknowledgement checkbox
-  stating that checks run on this machine without OS isolation); one model per role from `models` (unsupported
+  (prefilled from `POST .../pipeline/detect`, editable rows: id, kind, command, required); sandbox (Scranton by
+  default with optional Strict, Docker with image field prefilled from `sandbox.dockerImage`, or Host with an
+  explicit acknowledgement that checks run without OS isolation); one model per role from `models` (unsupported
   providers visible but disabled with their reason; "use for all roles" convenience); plan approval policy;
   "Demo run (sample project, no model)" which needs none of the above. Submit = create chat with
   `engine: "pipeline"`, then `POST .../pipeline/runs`. A follow-up run in an existing pipeline chat reuses the
@@ -1028,7 +1030,84 @@ deterministic Python node merges their results one after another.
   `get_graph(xray=True).draw_mermaid()` so the lane loop is visible.
 
 ---------------------------------------------------------------------------------------------------
-## 18. Docker sandboxing (2026-11-10) - from "adapter exists" to a usable, hardened default
+## 18. Pipeline sandboxing
+
+### Native Scranton sandbox (0.8.1)
+
+The [native sandbox contract](pipeline-native-sandbox-contract.md) governs this mode. New runs default to
+`mode:"scranton"` in engine config, CLI demo, HTTP and the UI. Pipeline native is Windows-only in this release:
+`Scranton sandbox for Pipeline is available on Windows only in this version`. Unavailable native fails closed
+with a reason; there is no automatic fallback to Docker, Host or another Windows mode.
+
+| Windows mode | Backend | Check/setup network and reads |
+|---|---|---|
+| `low` (default) | `low-integrity` | Restricted Low-integrity token: owned workspace and private temp are writable. This is not an exact allowlist of all writable Low locations. Ordinary Medium files stay readable. Network is not blocked (`check_network:"allow"`); setup `network:true` is allowed. |
+| `strict` | `appcontainer` | Zero-capability AppContainer; reads limited to what AppContainers can read; no network for checks or setup (`check_network:"none"`). The engine rejects `setup[i].network:true` before execution, naming the field. Use Docker explicitly for networked setup while keeping checks offline. No broad user/toolchain ACL grants. |
+
+The native sandbox runs setup, checks, parallel lanes and integration, the grounding probe/counterfactual and
+Eval acceptance. Git, the completion `command` provider and model HTTP remain on the host. The main, lane,
+probe and Eval workspaces are allocated roots: snapshots/copies may start with only `.scranton-sandbox-owned`;
+the reserved marker is never source, an edit, index/Git content, diff, delivery or copy content. Never relabel
+anything outside allocated roots. Native does not mount `/workspace/.pipeline`; setup output stays in the
+workspace. Docker state semantics are in §20.
+
+**HTTP.** The start body accepts `sandbox: {mode:"scranton"|"docker"|"host", image?, trustHost?, windowsMode?}`.
+Omitted sandbox for real starts means `{mode:"scranton", windowsMode:"low"}`. Only the bundled HTTP demo is
+exempt: an omitted sandbox selects Scranton if a fresh Low probe succeeds, otherwise Host; demo Host does
+not require trust. For real Host runs only a genuine `trustHost:true` acknowledgement sends `--trust-host`.
+Existing runs keep persisted mode, config digest and trust for resume and gate decisions; no re-prompt.
+
+| HTTP | When |
+|---|---|
+| 400 | Unknown mode or field; `image` outside Docker; `trustHost` outside Host; invalid `windowsMode` or `windowsMode` outside Scranton; Strict setup with `network:true` (error names `setup[i].network`). |
+| 409 | Real Host without `trustHost:true`; Scranton unavailable after a fresh probe of the requested Windows mode (reason included; no fallback). |
+| 503 | Unusable engine, unchanged. |
+
+`GET /api/pipeline` adds `sandbox.native: {platform, available, reason, modes:{low,strict}}`. Each mode is
+`{available, reason, backend, checkNetwork, setupNetworkAllowed}`. Overall `available` means either mode is
+available. Results from `sandbox check --mode scranton` are cached for three seconds, independently of Docker;
+a failed Docker probe must not delay native capability results. The form shows mode availability/reason and
+blocks an unavailable choice without changing it. Run details show engine-reported policy, not the form value.
+
+**Status and events (schema 1).** Native `status.sandbox` is
+`{mode:"scranton", image:null, windows_mode, backend, isolated:true, check_network:"allow"|"none", setup_network:bool}`.
+`isolated:true` describes OS process isolation, not full read or network isolation in Low. After successful
+preflight, emit `sandbox_ready {mode,backend,windows_mode,check_network}` once per execution-bearing invocation.
+Emit `sandbox_failed {mode,backend,code,message}` for native infrastructure failures. No env, credential or
+executable paths, profile IDs or raw output in events.
+
+**Runner protocol v1 (internal).** Every engine child gets `SCRANTON_PIPELINE_NATIVE_COMMAND` from the
+supervisor as absolute JSON argv `[process.execPath, <package root>/tools/pipeline-sandbox.js]`. The engine uses
+no other discovery path; a missing, invalid, non-absolute or nonexistent binding gives `runner_missing`. The
+runner shares Team's helper resolver and Scranton credential-store hardening lifecycle; Tauri sets the packaged
+helper path. Runner env is a small control allowlist without `NODE_*`, model keys or prompts. The engine sends
+only the `scrubbed_env` payload explicitly; sandbox spawn sets private `TEMP`/`TMP`. Scranton config and payload validation permit `NODE_ENV` but reject other `NODE_*`, `SCRANTON_*`, `PI_CODING_AGENT_DIR` and credential-like names.
+
+| Verb (all require `--protocol 1`) | Inputs and results |
+|---|---|
+| `probe` | `--windows-mode low\|strict --scratch ABS_DIR`; one JSON line `{protocol,available,backend,windows_mode,check_network,setup_network_allowed,reason}`. Tests a real owned-root write and an outside overwrite denial with unchanged bytes; Strict also tests loopback denial against a reachable host control. Cleans up and exits 0 for available or unavailable; nonzero or invalid JSON means unavailable. |
+| `allocate` | `--path ABS`; exclusively creates an owned root under an existing parent; one JSON line `{protocol,path,marker}`. |
+| `exec` | `--request ABS_FILE`; the host-only request names the owned root, temp parent, in-root cwd, argv with a host-resolved absolute executable, scrubbed env, network, Windows mode, deadline, receipt and profile record. A fresh owned temp is removed afterwards. Only tool streams go to stdout/stderr. The stdin control pipe stops the tree on EOF or any byte; the runner deadline is a backstop, with the engine as timing authority. |
+| `recover` | `--record ABS_FILE`; removes safely reachable ACEs without following reparse points, then reaps the recorded Strict profile even if ACE cleanup was partial. Only after successful reap is the record removed. One JSON line `{protocol,recovered}` (optional `warning:"ace_cleanup_incomplete"`). Record the planned profile before creation; delete the record after successful dispose. Reconcile leftovers for this run at start, resume and finish. |
+
+`exec` writes an atomic receipt `{protocol,state,code,error}` (state `exited|stopped|timed_out|error`, tool code
+`int|null`, error `null|{code,message}` with `policy|launch|protocol|ownership|cleanup|workspace_link`; optional `warning:"ace_cleanup_incomplete"` for partial Strict ACE cleanup after a successful reap). The runner exits 0 when
+it writes the receipt; tool codes are in the receipt only. `exited` codes, including 124 and 125, are ordinary
+results. Engine stop/deadline or `stopped`/`timed_out` preserves existing semantics. `error`, missing receipt
+without engine stop, or protocol violation is infrastructure `sandbox_failed`, fatal even for optional checks
+and never tolerated as a baseline failure. A retained pipe still yields `output_not_closed` after bounded drain.
+The outer Windows Job owns Node and the helper; the inner Job owns the tool, with no breakaway.
+
+**CLI.** `sandbox check --mode scranton [--windows-mode low|strict]` prints `{native:{platform,low:<probe>,strict:<probe>}}`,
+probing both modes when `--windows-mode` is omitted. Without `--mode` the check remains Docker-only. No
+unconditional Docker sweeps on native or Host invocations.
+
+**Follow-ups, not in this release:** macOS/Linux Pipeline native; an `internetClient`-style Strict setup
+capability; re-acknowledgement for old Host runs; a typed helper exit channel instead of exit 125; and reducing
+per-exec relabel cost on large trees. Workspace links and junctions (including dependency links made by setup)
+are unsupported in native mode and cause `sandbox_failed`; use Docker for these projects.
+
+### Optional Docker sandbox (introduced 2026-11-10)
 
 State before: `tools/sandbox.py: DockerSandbox` runs each command in an ephemeral container (`--network none`,
 cap-drop, limits), one opt-in live test passed; but there is no suitable image, no hardening of the root
@@ -1053,13 +1132,13 @@ filesystem/user, no way to see or fix "Docker/image missing" from the app, and i
 - CLI: `python -m scranton_pipeline sandbox check [--image NAME]` -> `{"docker": {"available", "version",
   "reason"}, "image": {"name", "present"}, "default_image": "..."}` (exit 0 whenever it can answer);
   `sandbox build [--image NAME]` builds the packaged Dockerfile (build output on stderr, one JSON line
-  `{"built": bool, "image", "reason"}` on stdout, exit 0 or 5); `demo` gains `--sandbox host|docker [--image NAME]`.
-- Node/UI: `GET /api/pipeline` `sandbox` becomes `{ dockerImage: <default image name>, docker: { available,
+  `{"built": bool, "image", "reason"}` on stdout, exit 0 or 5); select Docker for `demo` with `--sandbox docker [--image NAME]`.
+- Node/UI: Alongside `native` above, `GET /api/pipeline` returns these `sandbox` fields: `{ dockerImage: <default image name>, docker: { available,
   version, reason }, image: { name, present }, build: { state: "idle"|"running"|"succeeded"|"failed",
   startedAt, finishedAt, tail } }` (probe cached for a few seconds). `POST /api/pipeline/sandbox/build` (body
   `{}`) starts ONE background build through the engine CLI (202; 409 while one runs; 503 without Docker). The
-  run form preselects Docker when Docker is available and the image is present; otherwise it says exactly what
-  is missing and offers "Build sandbox image" (with live tail) or Trusted host with the acknowledgement.
+  run form shows Docker availability and offers "Build sandbox image" (with live tail) when the image is missing.
+  A Docker probe/build does not change the selected sandbox mode.
 - Run request additions (section 9 API, all optional): `replans: 0..3` (default 1), `parallelSteps: 1..4`
   (default 1 on the server; the form defaults to 2).
 - Verification required: unit tests pin the exact argv; opt-in live tests (`SCRANTON_PIPELINE_DOCKER_TEST=1`,
@@ -1071,8 +1150,8 @@ filesystem/user, no way to see or fix "Docker/image missing" from the app, and i
 ---------------------------------------------------------------------------------------------------
 ## 19. Demo scenarios through the app (2026-11-10) - live verification without model calls
 
-- Engine: `demo --scenario basic|replan|parallel` (default `basic`), combinable with `--sandbox host|docker
-  [--image NAME]`. `replan`: the first plan's step is blocked, the revised plan succeeds. `parallel`: two
+- Engine: `demo --scenario basic|replan|parallel` (default `basic`), combinable with `--sandbox scranton|docker|host`
+  (default `scranton`; see §18). `replan`: the first plan's step is blocked, the revised plan succeeds. `parallel`: two
   independent bugs in two files, two `depends_on: []` steps, `max_parallel_steps = 2`.
 - Run request (section 9): `demoScenario?: "basic" | "replan" | "parallel"` - accepted only together with
   `demo: true` (400 otherwise), default `basic`. A demo run now also honours `sandbox.mode` / `sandbox.image`
@@ -1085,7 +1164,7 @@ filesystem/user, no way to see or fix "Docker/image missing" from the app, and i
 ---------------------------------------------------------------------------------------------------
 ## 20. Amendments after the second-round review (2026-11-10) - binding over sections 17/18 where they differ
 
-- Sandbox state directory: NOT inside the workspace. One engine-created directory per run under the run directory
+- Docker sandbox state directory: NOT inside the workspace. One engine-created directory per run under the run directory
   is the only thing mounted at `/workspace/.pipeline` - read-write for `setup` commands, read-only for checks;
   lanes mount the same run-level directory read-only. The mount-point directory inside the workspace stays
   protected, git-excluded and out of every diff and snapshot. (A nested read-only mount over a directory that

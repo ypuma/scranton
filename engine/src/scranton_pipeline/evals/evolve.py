@@ -132,7 +132,7 @@ def evolve(graph: Graph, out: Path, *, rollout: Rollout, refine: Refine, rounds:
 
 def run_evolution(pack: Pack, graph: Graph, out: Path, *, cfg: EngineConfig, models: str = "scripted",
                   rounds: int = 3, max_seconds: float = 3600, trust_host: bool = False) -> dict[str, Any]:
-    validate_trust(cfg, trust_host or pack.builtin)
+    validate_trust(cfg, trust_host)
     select(pack, None, "train")
     select(pack, None, "val")
     if not 1 <= rounds <= 20 or not math.isfinite(max_seconds) or max_seconds <= 0:

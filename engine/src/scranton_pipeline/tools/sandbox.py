@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from .. import __version__
 from ..config import SandboxConfig
 from ..errors import EngineError, FailureClass
+from .native_sandbox import NativeSandbox, describe_native
 from .process import ProcResult, StopSignal, run_process, scrubbed_env
 from .secrets import Redactor
 
@@ -45,6 +46,8 @@ CONTAINER_ENV = {
 def sandbox_description(cfg: SandboxConfig, *, setup_network: bool = False) -> dict[str, Any]:
     if cfg.mode == "host":
         return {"mode": "host", "isolated": False, "image": None, "isolation": "No OS isolation.", "setup_network": setup_network}
+    if cfg.mode == "scranton":
+        return describe_native(cfg, setup_network)
     return {"mode": "docker", "isolated": True, "image": cfg.docker.image or default_image(),
             "isolation": "Docker container with read-only root and no network for checks; shares the Docker VM kernel; workspace mounted read-write; setup commands with network can reach the internet and local services (including host.docker.internal).",
             "setup_network": setup_network}
@@ -220,11 +223,15 @@ class DockerSandbox:
             self._remove_container(name, pending=pending)
 
 
-def build_sandbox(cfg: SandboxConfig, *, workspace: Path, run_id: str, trust_host: bool, name_suffix: str = "", state_dir: Path | None = None) -> Sandbox:
+def build_sandbox(cfg: SandboxConfig, *, workspace: Path, run_id: str, trust_host: bool, name_suffix: str = "", state_dir: Path | None = None, run_dir: Path | None = None) -> Sandbox:
     if cfg.mode == "host":
         if not trust_host:
             raise EngineError(FailureClass.INVALID_INPUT, "host_trust_required", "Host execution requires explicit trust")
         return HostSandbox(cfg, workspace)
+    if cfg.mode == "scranton":
+        if run_dir is None:
+            raise ValueError("Native sandbox requires a run directory")
+        return NativeSandbox(cfg, workspace, run_dir)
     return DockerSandbox(cfg, workspace, run_id, name_suffix=name_suffix, state_dir=state_dir)
 
 

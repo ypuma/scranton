@@ -216,7 +216,7 @@ def decide_criteria(state: PipelineState, deps: Dependencies) -> list[dict[str, 
 
 
 def probe(state: PipelineState, deps: Dependencies, criteria: list[dict[str, Any]]) -> dict[str, Any]:
-    from scranton_pipeline.nodes.parallel import remove_lane, workspace_bytes
+    from scranton_pipeline.nodes.parallel import copy_workspace, remove_lane, workspace_bytes
     from scranton_pipeline.tools.git import WorkspaceRepo
     from scranton_pipeline.tools.sandbox import build_sandbox
     pending = [c for c in criteria if c["state"] == "met_not_demonstrated"]
@@ -236,8 +236,10 @@ def probe(state: PipelineState, deps: Dependencies, criteria: list[dict[str, Any
             return {"status": "inconclusive", "checks": [c.id for c in checks]}
         if workspace_bytes(deps.workspace) > deps.cfg.execution.max_lane_workspace_bytes:
             return {"status": "inconclusive", "checks": [c.id for c in checks]}
-        remove_lane(workspace)
-        shutil.copytree(deps.workspace, workspace, ignore=lambda _, names: [n for n in names if n.casefold() in {".git", ".pipeline"}])
+        remove_lane(workspace, owned=deps.cfg.sandbox.mode == "scranton")
+        box = build_sandbox(deps.cfg.sandbox, workspace=workspace, run_id=deps.run_dir.name, trust_host=deps.trust_host,
+            name_suffix="probe", state_dir=deps.run_dir / "sandbox-state", run_dir=deps.run_dir)
+        copy_workspace(deps.workspace, workspace, box)
         repo = deps.repo()
         base = state["workspace"]["base_commit"]
         existing = {p for p in repo._run(["ls-tree", "-rz", "--name-only", base]).split("\0") if p}
@@ -245,8 +247,6 @@ def probe(state: PipelineState, deps: Dependencies, criteria: list[dict[str, Any
         remove_lane(git_dir)
         shutil.copytree(repo.git_dir, git_dir)
         private_repo = WorkspaceRepo(workspace, git_dir, timeout_s=deps.cfg.limits.git_timeout_s)
-        box = build_sandbox(deps.cfg.sandbox, workspace=workspace, run_id=deps.run_dir.name, trust_host=deps.trust_host,
-            name_suffix="probe", state_dir=deps.run_dir / "sandbox-state")
         start = time.monotonic()
         def execute(control: bool) -> set[str] | None:
             failed: set[str] = set()
@@ -281,12 +281,16 @@ def probe(state: PipelineState, deps: Dependencies, criteria: list[dict[str, Any
             if failed.intersection(criterion["checks"]):
                 criterion.update(state="demonstrated", by="probe")
         return {"status": "demonstrated" if failed else "not_demonstrated", "checks": [c.id for c in checks]}
-    except Exception:  # noqa: BLE001 - a probe is never a run failure
+    except EngineError as exc:
+        if deps.cfg.sandbox.mode == "scranton" and exc.code in {"sandbox_failed", "output_not_closed"}:
+            raise
+        return {"status": "inconclusive", "checks": [c.id for c in checks]}
+    except Exception:  # noqa: BLE001 - ordinary probe errors are inconclusive
         return {"status": "inconclusive", "checks": [c.id for c in checks]}
     finally:
         # run() removes its own Docker container; cleanup() would also kill main-run containers.
         try:
-            remove_lane(workspace)
+            remove_lane(workspace, owned=deps.cfg.sandbox.mode == "scranton")
             remove_lane(deps.run_dir / "probe-git")
         except OSError:
             pass

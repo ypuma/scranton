@@ -28,6 +28,7 @@ from scranton_pipeline.tools.checks import (
 from scranton_pipeline.tools.context import eviction_index, fulfil, unique_evidence
 from scranton_pipeline.tools.fs import PathPolicy, write_bytes_atomic
 from scranton_pipeline.tools.git import WorkspaceRepo
+from scranton_pipeline.tools.native_sandbox import NativeSandbox
 from scranton_pipeline.tools.patches import apply_to_source as source_apply
 from scranton_pipeline.tools.patches import validate_and_apply
 from scranton_pipeline.tools.repo_index import build_index, detect_checks, render_tree
@@ -40,19 +41,22 @@ def json_write(path: Path, value: Any) -> None:
 
 
 def sandbox(deps: Dependencies) -> Any:
-    return build_sandbox(deps.cfg.sandbox, workspace=deps.workspace, run_id=deps.run_dir.name, trust_host=deps.trust_host, name_suffix=deps.lane_suffix, state_dir=deps.run_dir / "sandbox-state")
+    return build_sandbox(deps.cfg.sandbox, workspace=deps.workspace, run_id=deps.run_dir.name, trust_host=deps.trust_host, name_suffix=deps.lane_suffix, state_dir=deps.run_dir / "sandbox-state", run_dir=deps.run_dir)
 
 
 def prepare_workspace(state: PipelineState, deps: Dependencies) -> dict[str, Any]:
     box = sandbox(deps)
-    box.preflight()
+    if not isinstance(box, NativeSandbox):
+        box.preflight()
     manifest = deps.run_dir / "artifacts" / "source_manifest.json"
     # No checkpoint can refer to a partially prepared snapshot: rebuild it on replay.
     if deps.workspace.exists():
-        import shutil
-        shutil.rmtree(deps.workspace)
+        from scranton_pipeline.nodes.parallel import remove_lane
+        remove_lane(deps.workspace, owned=isinstance(box, NativeSandbox))
+    if isinstance(box, NativeSandbox):
+        box.allocate()
     snapshot = snapshot_source(Path(state["source_dir"]), deps.workspace, policy=deps.cfg.policy,
-                               limits=deps.cfg.limits, manifest_path=manifest)
+                               limits=deps.cfg.limits, manifest_path=manifest, allocated=isinstance(box, NativeSandbox))
     repo = WorkspaceRepo.init(deps.workspace, deps.run_dir / "git", timeout_s=deps.cfg.limits.git_timeout_s)
     base = repo.commit_all("Pipeline snapshot")
     files = list(json.loads(manifest.read_text(encoding="utf-8")))

@@ -4,8 +4,8 @@ import { CLIENT_HEADERS } from './control.js';
 import { postJson, store } from './control-panel.js';
 import {
   parseEngineInfo, modelGroups, parseModelValue, hasSupportedModel, parseDetect, buildRunBody, runErrorField, detectUrl, sandboxView, demoScenario,
-  ROLES, CHECK_KINDS, CHECKS_MAX, SETUP_MAX, COMMAND_ID_MAX, TASK_MAX_BYTES, SANDBOX_POLL_MS, BUILD_URL, PIPELINE_MODELS_KEY, byteLength,
-  storedPlannerPick,
+  sandboxStates, sandboxBlock, strictSetupText, WINDOWS_MODE_HINT, ROLES, CHECK_KINDS, CHECKS_MAX, SETUP_MAX, COMMAND_ID_MAX, TASK_MAX_BYTES, SANDBOX_POLL_MS, BUILD_URL, PIPELINE_MODELS_KEY, byteLength,
+  storedPlannerPick, sandboxPending, SANDBOX_CHECK_POLLS,
 } from './pipeline-model.js';
 
 const $ = (id) => document.getElementById(id);
@@ -27,7 +27,7 @@ async function getDoc(url) {
   }
 }
 
-// timers: setTimeout/clearTimeout for the image build poll (tests pass fakes). onPlanner(): the planner pick the
+// timers: setTimeout/clearTimeout for the image build and pending probe poll (tests pass fakes). onPlanner(): the planner pick the
 // next run would send (plannerPick) may have changed
 export function createPipelineForm({ timers = globalThis, onPlanner = null } = {}) {
   const e = {
@@ -36,7 +36,9 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
     fields: $('pipeline-fields'), unavailable: $('pf-unavailable'), task: $('pf-task'), taskOpt: $('pf-task-opt'), taskCount: $('pf-task-count'),
     demo: $('pf-demo'), scenarioRow: $('pf-scenario-row'), scenario: $('pf-scenario'), scenarioHint: $('pf-scenario-hint'), checksSet: $('pf-checks-set'), checks: $('pf-checks'), add: $('pf-check-add'), detect: $('pf-check-detect'),
     setupSet: $('pf-setup-set'), setup: $('pf-setup'), setupAdd: $('pf-setup-add'), setupNote: $('pf-setup-note'),
-    checksStatus: $('pf-checks-status'), sandboxSet: $('pf-sandbox-set'), docker: $('pf-docker'), host: $('pf-host'),
+    checksStatus: $('pf-checks-status'), sandboxSet: $('pf-sandbox-set'), scranton: $('pf-scranton'), docker: $('pf-docker'), host: $('pf-host'),
+    scrantonState: $('pf-scranton-state'), dockerState: $('pf-docker-state'), nativeRow: $('pf-native-row'), strict: $('pf-strict'),
+    strictState: $('pf-strict-state'), strictHint: $('pf-strict-hint'), strictSetup: $('pf-strict-setup'), imageRow: $('pf-image-row'),
     image: $('pf-image'), imageHint: $('pf-image-hint'), trustRow: $('pf-trust-row'), trust: $('pf-trust'), trustKept: $('pf-trust-kept'), trustDemo: $('pf-trust-demo'),
     sandboxStatus: $('pf-sandbox-status'), build: $('pf-build'), buildLog: $('pf-build-log'), buildTail: $('pf-build-tail'),
     execRow: $('pf-exec-row'), replans: $('pf-replans'), parallel: $('pf-parallel'), grounding: $('pf-grounding'), groundingHint: $('pf-grounding-hint'), guidance: $('pf-guidance'),
@@ -62,15 +64,20 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
   let detectedFor = null;
   let detectGen = 0;
   let modelsKey = '';
-  // 'docker' | 'host' as the human last picked it; kept across drawer sessions, unlike the acknowledgement
+  // 'scranton' | 'docker' | 'host' as the human last picked it, and Block network (strict); kept across drawer
+  // sessions, unlike the acknowledgement. Nothing else ever moves them.
   let sandboxPick = null;
+  let strictPick = false;
   // the chat on screen already ran on the trusted host: its acknowledgement is given
   let kept = false;
   let building = false;
   let buildError = '';
-  // the server's 409 about the sandbox (image missing, Docker gone), shown in the sandbox line instead of the probe
+  // the server's 409 about the sandbox (image missing, Docker gone, Scranton sandbox unavailable), shown in the
+  // sandbox line instead of the probe
   let refused = '';
   let pollTimer = 0;
+  // polls of this drawer session spent on a sandbox probe the server is still running
+  let checkPolls = 0;
   // the Evidence checks choice while a scenario that needs Enforce holds the select; null when it is free
   let groundingHeld = null;
 
@@ -117,39 +124,66 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
     await found;
   }
 
-  // ------------------------------------------------------------ Docker state and the image build
+  // ------------------------------------------------------------ sandbox availability and the image build
+  const radios = () => [e.scranton, e.docker, e.host];
+  const picked = () => (e.host.checked ? 'host' : e.docker.checked ? 'docker' : e.scranton.checked ? 'scranton' : '');
+  const windowsMode = () => (e.strict.checked ? 'strict' : 'low');
+
   function renderSandbox() {
-    const sb = info?.sandbox ?? null;
-    const v = sandboxView(sb, { buildError });
-    e.sandboxStatus.textContent = refused || v.line;
-    e.sandboxStatus.dataset.tone = refused ? 'error' : v.tone;
-    e.build.hidden = v.build === 'hidden';
+    const docker = picked() === 'docker';
+    const v = sandboxView(info?.sandbox ?? null, { buildError });
+    e.sandboxStatus.textContent = refused || (docker ? v.line : '');
+    e.sandboxStatus.dataset.tone = refused ? 'error' : docker ? v.tone : '';
+    e.build.hidden = !docker || v.build === 'hidden';
     e.build.textContent = v.build === 'running' ? 'Building...' : 'Build sandbox image';
     const wasFocused = document.activeElement === e.build;
     e.build.disabled = v.build === 'running' || building;
     if (wasFocused && e.build.disabled) e.sandboxStatus.focus();
-    e.buildLog.hidden = !v.tail.trim();
+    e.buildLog.hidden = !docker || !v.tail.trim();
     if (e.buildTail.textContent !== v.tail) e.buildTail.textContent = v.tail;
-    // a probe only reports on Docker; it never moves the sandbox choice (open() and the human set it)
+    const states = sandboxStates(info, { windowsMode: windowsMode() });
+    for (const [node, s] of [[e.scrantonState, states.scranton], [e.strictState, states.strict], [e.dockerState, states.docker]]) {
+      node.textContent = s.text;
+      node.dataset.tone = s.tone;
+    }
+    // a probe only reports what each choice can do; it never moves the choice (open() and the human set it)
     sync();
   }
 
   function schedulePoll() {
     timers.clearTimeout(pollTimer);
     pollTimer = 0;
-    if (info?.sandbox?.build?.state !== 'running' || !e.dialog.open) return;
+    if (!e.dialog.open) return;
+    if (info?.sandbox?.build?.state !== 'running') {
+      if (!sandboxPending(info) || checkPolls >= SANDBOX_CHECK_POLLS) return;
+      checkPolls += 1;
+    }
     pollTimer = timers.setTimeout(() => {
       pollTimer = 0;
       if (e.dialog.open) loadInfo();
     }, SANDBOX_POLL_MS);
   }
 
+  e.dialog.addEventListener('close', () => {
+    timers.clearTimeout(pollTimer);
+    pollTimer = 0;
+  });
+
   function clearRefused() {
     if (!refused) return;
     refused = '';
-    e.image.removeAttribute('aria-invalid');
-    e.image.removeAttribute('aria-describedby');
+    for (const x of [e.image, ...radios()]) {
+      x.removeAttribute('aria-invalid');
+      x.removeAttribute('aria-describedby');
+    }
     renderSandbox();
+  }
+
+  // the human changed the sandbox: a refusal or a blocked start was about the old choice
+  function sandboxChanged() {
+    for (const r of radios()) r.removeAttribute('aria-invalid');
+    if (refused) clearRefused();
+    else renderSandbox();
   }
 
   e.build.addEventListener('click', async () => {
@@ -304,8 +338,10 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
       x.addEventListener('input', () => {
         rowsTouched = true;
         clearRowError(row);
+        renderStrictSetup();
       });
     }
+    row.network?.addEventListener('change', renderStrictSetup);
     remove.addEventListener('click', () => {
       const list = setup ? setupRows : rows;
       const i = list.indexOf(row);
@@ -323,7 +359,7 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
 
   function clearRowError(r) {
     r.error.textContent = '';
-    for (const x of [r.id, r.command]) if (x.getAttribute('aria-describedby') === r.error.id) x.removeAttribute('aria-describedby');
+    for (const x of [r.id, r.command, r.network].filter(Boolean)) if (x.getAttribute('aria-describedby') === r.error.id) x.removeAttribute('aria-describedby');
   }
 
   function renderRows() {
@@ -343,6 +379,14 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
     e.setupNote.hidden = !setupRows.length;
     e.add.disabled = e.demo.checked || rows.length >= CHECKS_MAX;
     e.setupAdd.disabled = e.demo.checked || setupRows.length >= SETUP_MAX;
+    renderStrictSetup();
+  }
+
+  // strict with a needs-network setup command: said plainly, the command's choice is left as it is
+  function renderStrictSetup() {
+    const text = !e.demo.checked && picked() === 'scranton' && e.strict.checked ? strictSetupText(setupRows.map(rowValue)) : '';
+    if (e.strictSetup.textContent !== text) e.strictSetup.textContent = text;
+    e.strictSetup.hidden = !text;
   }
 
   function setRows(checks, setup) {
@@ -405,6 +449,10 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
   function sync() {
     const demo = e.demo.checked;
     const host = e.host.checked;
+    const docker = e.docker.checked;
+    e.nativeRow.hidden = !e.scranton.checked;
+    e.strictHint.textContent = WINDOWS_MODE_HINT[windowsMode()];
+    renderStrictSetup();
     e.taskOpt.hidden = !demo;
     e.scenarioRow.hidden = !demo;
     e.scenarioHint.textContent = demoScenario(e.scenario.value).hint;
@@ -414,7 +462,8 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
     e.add.disabled = demo || rows.length >= CHECKS_MAX;
     e.setupAdd.disabled = demo || setupRows.length >= SETUP_MAX;
     e.detect.disabled = demo || !info?.available;
-    e.image.disabled = host;
+    e.imageRow.hidden = !docker;
+    e.image.disabled = !docker;
     e.build.disabled = building || info?.sandbox?.build?.state === 'running';
     // the demo honours the evidence checks and the guidance, not re-planning or parallel steps
     e.replans.disabled = demo;
@@ -452,15 +501,21 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
     if (!e.demo.checked) detect();
   });
   e.scenario.addEventListener('change', sync);
+  e.scranton.addEventListener('change', () => {
+    if (e.scranton.checked) sandboxPick = 'scranton';
+    sandboxChanged();
+  });
+  e.strict.addEventListener('change', () => {
+    strictPick = e.strict.checked;
+    sandboxChanged();
+  });
   e.docker.addEventListener('change', () => {
     if (e.docker.checked) sandboxPick = 'docker';
-    clearRefused();
-    sync();
+    sandboxChanged();
   });
   e.host.addEventListener('change', () => {
     if (e.host.checked) sandboxPick = 'host';
-    clearRefused();
-    sync();
+    sandboxChanged();
     if (e.host.checked && kept) e.trust.checked = true;
     else if (e.host.checked && !e.demo.checked) e.trust.focus();
   });
@@ -479,18 +534,18 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
     if (field === 'task') return e.task;
     if (field === 'trustHost') return e.trust;
     if (field === 'image') return e.image;
-    if (field === 'sandbox') return e.docker;
+    if (field === 'sandbox') return radios().find((r) => r.checked) ?? e.scranton;
     if (field?.startsWith('models.')) return e.models[field.slice(7)] ?? null;
     return null;
   }
 
   // fromServer: the server numbers only the rows that were sent
   function rowOf(field, fromServer) {
-    const m = /^(checks|setup)\.(\d+)\.(id|command)$/.exec(field ?? '');
+    const m = /^(checks|setup)\.(\d+)\.(id|command|network)$/.exec(field ?? '');
     if (!m) return null;
     const list = fromServer ? sent[m[1]] : m[1] === 'setup' ? setupRows : rows;
     const row = list[Number(m[2])] ?? null;
-    return row && { row, input: row[m[3]] };
+    return row?.[m[3]] ? { row, input: row[m[3]] } : null;
   }
 
   return {
@@ -510,13 +565,18 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
         renderRows();
       }
       project = p;
-      // Trusted host unless the human picked Docker; a chat asks for the acknowledgement once (trust.js)
-      e.docker.checked = sandboxPick === 'docker';
-      e.host.checked = !e.docker.checked;
+      // the Scranton sandbox unless the human picked another one; a chat asks for the host acknowledgement once (trust.js)
+      const pick = sandboxPick ?? 'scranton';
+      e.scranton.checked = pick === 'scranton';
+      e.docker.checked = pick === 'docker';
+      e.host.checked = pick === 'host';
+      e.strict.checked = strictPick;
+      for (const r of radios()) r.removeAttribute('aria-invalid');
       kept = trusted === true;
       e.trust.checked = kept && e.host.checked;
       buildError = '';
       refused = '';
+      checkPolls = 0;
       groundingHeld = null;
       e.grounding.value = 'enforce';
       e.guidance.checked = false;
@@ -541,9 +601,11 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
       if (fixed && info && !info.available) return { error: `The Pipeline engine is not available: ${info.reason}` };
       sent = { checks: rows.filter(filled), setup: setupRows.filter(filled) };
       clearRefused();
+      const sandbox = picked();
       return buildRunBody({
         task: over.task ?? e.task.value, demo: over.demo ?? e.demo.checked, demoScenario: e.scenario.value, delivery: e.delivery.value,
-        sandbox: e.host.checked ? 'host' : e.docker.checked ? 'docker' : '', image: e.image.value, trustHost: e.trust.checked,
+        sandbox, windowsMode: windowsMode(), unavailable: sandboxBlock(info, { sandbox, windowsMode: windowsMode(), image: e.image.value }),
+        image: e.image.value, trustHost: e.trust.checked,
         replans: e.replans.value, parallelSteps: e.parallel.value, grounding: e.grounding.value, guidance: e.guidance.checked,
         setup: setupRows.map(rowValue),
         checks: rows.map(rowValue),
@@ -566,14 +628,17 @@ export function createPipelineForm({ timers = globalThis, onPlanner = null } = {
       return atRow;
     },
     errorField: runErrorField,
-    // A 409 about the sandbox (the image is missing, Docker is gone) is said in the sandbox line. -> true when shown there
+    // A 409 about the sandbox (the image is missing, Docker is gone, the Scranton sandbox is unavailable after the
+    // server's fresh probe) is said in the sandbox line. -> true when shown there
     sandboxRefused(r) {
-      if (r?.status !== 409 || !/\bimage\b|docker/i.test(r.error ?? '')) return false;
+      if (r?.status !== 409 || !/\bimage\b|docker|sandbox/i.test(r.error ?? '')) return false;
       refused = r.error;
       renderSandbox();
-      e.image.setAttribute('aria-invalid', 'true');
-      e.image.setAttribute('aria-describedby', 'pf-sandbox-status');
-      (e.image.disabled ? e.sandboxStatus : e.image).focus();
+      const docker = picked() === 'docker';
+      const at = docker ? e.image : fieldInput('sandbox');
+      at.setAttribute('aria-invalid', 'true');
+      at.setAttribute('aria-describedby', 'pf-sandbox-status');
+      (docker && !e.image.disabled ? e.image : e.sandboxStatus).focus();
       return true;
     },
     started() {

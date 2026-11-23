@@ -94,21 +94,29 @@ class _Job:
             self.handle = None
 
 
-def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout_s: float,
-                log_path: Path | None = None, tail_bytes: int = 8192, max_log_bytes: int = 5000000,
-                stop: StopSignal | None = None, redact_output: bool = True) -> ProcResult:
-    if not argv or timeout_s <= 0 or tail_bytes < 0 or max_log_bytes < 0:
-        raise EngineError(FailureClass.INVALID_INPUT, "invalid_process", "Invalid process bounds")
-    name = argv[0].rstrip(" .") if os.name == "nt" else argv[0]
-    executable = shutil.which(name, path=env.get("PATH")) or name
-    command: Sequence[str] | str = list(argv)
+def windows_shim(argv: Sequence[str], executable: str) -> tuple[str, str] | None:
     if os.name == "nt" and Path(executable.rstrip(" .")).suffix.lower() in (".bat", ".cmd"):
         if (any(not re.fullmatch(r"[A-Za-z0-9_./:=+,@\\-]+", arg) for arg in argv[1:])
                 or any(c in str(executable) for c in '\"&|<>^%!\r\n')):
             raise EngineError(FailureClass.INVALID_INPUT, "unsafe_shim_arguments",
                               "Windows shims require simple arguments without whitespace, quotes or shell metacharacters; use a native executable for complex arguments")
         comspec = str(Path(os.environ.get("SYSTEMROOT", "C:/Windows")) / "System32" / "cmd.exe")
-        command = f'"{comspec}" /d /s /c ""{executable}" {" ".join(argv[1:])}"' 
+        return comspec, f'""{executable}" {" ".join(argv[1:])}"'
+    return None
+
+
+def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout_s: float,
+                log_path: Path | None = None, tail_bytes: int = 8192, max_log_bytes: int = 5000000,
+                stop: StopSignal | None = None, redact_output: bool = True,
+                control_stdin: bool = False) -> ProcResult:
+    if not argv or timeout_s <= 0 or tail_bytes < 0 or max_log_bytes < 0:
+        raise EngineError(FailureClass.INVALID_INPUT, "invalid_process", "Invalid process bounds")
+    name = argv[0].rstrip(" .") if os.name == "nt" else argv[0]
+    executable = name if control_stdin else shutil.which(name, path=env.get("PATH")) or name
+    command: Sequence[str] | str = list(argv)
+    if shim := windows_shim(argv, executable):
+        comspec, tail_arg = shim
+        command = f'"{comspec}" /d /s /c {tail_arg}'
     started = time.monotonic()
     job = _Job() if os.name == "nt" else None
     proc: subprocess.Popen[bytes] | None = None
@@ -119,7 +127,7 @@ def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeo
     try:
         try:
             proc = subprocess.Popen(command, cwd=cwd, env=dict(env), shell=False,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stdin=subprocess.PIPE if control_stdin else subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, start_new_session=os.name != "nt",
                                     creationflags=0x4 if os.name == "nt" else 0)
             if job:
@@ -152,6 +160,12 @@ def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeo
             stopped = stop is not None and stop.should_stop()
             timed_out = time.monotonic() - started >= timeout_s
             if stopped or timed_out:
+                if control_stdin and proc.stdin is not None:
+                    proc.stdin.close()
+                    grace_deadline = time.monotonic() + 2
+                    while proc.poll() is None and time.monotonic() < grace_deadline:
+                        if not drain():
+                            time.sleep(0.05)
                 break
             if not drain():
                 time.sleep(0.05)
@@ -190,6 +204,8 @@ def run_process(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeo
             if proc.poll() is None:
                 proc.kill()
                 proc.wait(timeout=10)
+            if control_stdin and proc.stdin is not None:
+                proc.stdin.close()
             if proc.stdout:
                 proc.stdout.close()
 

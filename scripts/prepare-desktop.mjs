@@ -180,7 +180,7 @@ export async function prepareDesktop() {
   const host = assertNativeBuild(desktopPlatform());
   if (process.env.SCRANTON_DESKTOP_STUB) throw new Error('Desktop stub builds are not distributable; unset SCRANTON_DESKTOP_STUB.');
   const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
-    'tools/pipeline-complete.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
+    'tools/pipeline-complete.js', 'tools/pipeline-sandbox.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'voice-models.lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
   for (const input of inputs) {
     try { await fs.access(path.join(root, input)); }
@@ -236,7 +236,7 @@ export async function prepareDesktop() {
   await fs.mkdir(profile, { recursive: true });
   await run(node, [path.join(app, 'scripts/runtime-smoke.mjs')], {
     cwd: profile, stdio: ['ignore', 'inherit', 'inherit'],
-    env: { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: profile }
+    env: { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: path.join(profile, 'credentials'), SCRANTON_SANDBOX_HELPER: path.join(tauri, 'binaries', helperFile) }
   });
   const pipeline = await preparePipeline(host);
   const licenseIndex = 'licenses/index.json';
@@ -249,7 +249,7 @@ export async function prepareDesktop() {
     platform: host.platform, arch: host.arch, target: host.target, pipeline, licenseIndex,
     node: process.version, nodeDistribution, runtime: { engine: 'scranton', smoke: 'scripts/runtime-smoke.mjs' }, sandboxHelper, tools,
     lockSha256: createHash('sha256').update(await fs.readFile(path.join(app, 'package-lock.json'))).digest('hex'),
-    verification: 'Own runtime scripted completion smoke with bundled Node, empty PATH and isolated profile; no network or credentials'
+    verification: 'Own runtime scripted completion and Pipeline sandbox protocol smoke with bundled Node, empty PATH and isolated profile; no network or credentials'
   }, null, 2) + '\n');
   console.log(`Desktop inputs prepared: ${app}\nScranton runtime, completion helpers, sandbox helper and pinned tools staged; offline smoke passed.`);
   } catch (error) {

@@ -25,6 +25,15 @@ async function setup(t, { cap = 2, slow = 0, command, suspend = false, fail = fa
     const r = await fetch(server.url + url, { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await r.text(); responses.push(text); return { code: r.status, value: JSON.parse(text) };
   }
+  async function waitDocker() {
+    const deadline = Date.now() + 10000;
+    do {
+      const r = await req('/api/pipeline');
+      if (!r.value.sandbox?.docker.pending) return r;
+      await sleep(30);
+    } while (Date.now() < deadline);
+    assert.fail('Docker capability did not finish');
+  }
   const route = (i = 0) => `/api/projects/${project.id}/chats/${chats[i].id}`;
   const runRoute = (id, i = 0) => `${route(i)}/pipeline/runs/${id}`;
   async function wait(id, status, i = 0) {
@@ -34,7 +43,7 @@ async function setup(t, { cap = 2, slow = 0, command, suspend = false, fail = fa
   }
   const start = async (body = { task: 'Demo', demo: true }, i = 0) => { const r = await req(`${route(i)}/pipeline/runs`, body); assert.equal(r.code, 202, JSON.stringify(r)); return r.value.runId; };
   const decide = (id, s, decision = 'approve') => req(`${runRoute(id)}/decision`, { gate: s.pending.gate, digest: s.pending.digest, decision });
-  return { dir, dataDir, registry, project, chats, server, responses, req, route, runRoute, wait, start, decide };
+  return { dir, dataDir, registry, project, chats, server, responses, req, waitDocker, route, runRoute, wait, start, decide };
 }
 
 test('Pipeline HTTP happy path, exact gates, summaries, artifacts, incremental events and removal', async (t) => {
@@ -67,8 +76,13 @@ test('Pipeline HTTP happy path, exact gates, summaries, artifacts, incremental e
   assert.equal((await f.req('/api/control')).value.pendingHuman, 0);
   assert.equal((await f.req('/api/projects')).value.projects[0].chats[0].status, 'done');
   assert.match((await f.req(`${f.runRoute(id)}/artifacts/report`)).value.content, /succeeded/);
+  const allocation = path.join(f.dir, 'workspaces', `.scranton-sandbox-allocation-${id}.json`);
+  const otherAllocation = path.join(f.dir, 'workspaces', '.scranton-sandbox-allocation-unrelated.json');
+  fs.writeFileSync(allocation, '{}'); fs.writeFileSync(otherAllocation, '{}');
   assert.equal((await f.req(`/api/projects/${f.project.id}/chats/remove`, { id: f.chats[0].id })).code, 200);
   assert.equal(fs.existsSync(path.join(f.dir, 'workspaces', id)), false);
+  assert.equal(fs.existsSync(allocation), false);
+  assert.equal(fs.existsSync(otherAllocation), true);
   assert.equal(fs.existsSync(path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline')), false);
 });
 
@@ -217,6 +231,8 @@ test('Pipeline unavailable returns capability reason and start 503; optional rou
   const f = await setup(t, { command: JSON.stringify([path.resolve('.scratch/pipeline/lane-n/no-python.exe')]) });
   const cap = (await f.req('/api/pipeline')).value;
   assert.equal(cap.available, false); assert.ok(cap.reason);
+  assert.equal(cap.sandbox.native.available, false);
+  assert.match(cap.sandbox.native.reason, /engine is not available/);
   assert.equal((await f.req(f.route() + '/pipeline/runs', { task: 'demo', demo: true })).code, 503);
   assert.equal((await fetch(f.server.url + '/api/pipeline')).status, 403);
 });
@@ -268,7 +284,7 @@ test('Pipeline launch errors survive restart without a run directory and later s
   const f = await setup(t);
   const models = Object.fromEntries(['planner', 'implementer', 'reviewer'].map((r) => [r, { provider: 'openai', model: 'gpt-4o' }]));
   fs.rmSync(f.project.workspace, { recursive: true });
-  const id = await f.start({ task: 'Deleted source', models });
+  const id = await f.start({ ...hostRun, task: 'Deleted source' });
   let r;
   for (let i = 0; i < 200; i++) { r = await f.req(f.runRoute(id)); if (r.value.launchError) break; await sleep(20); }
   assert.equal(r.code, 200); assert.equal(r.value.status, null); assert.equal(r.value.live, false);
@@ -350,7 +366,7 @@ test('Pipeline replans and parallelSteps validate named fields and generate exac
 
 test('Pipeline sandbox capability handles daemon absent, image missing and older engines without 500', async (t) => {
   for (const env of [{}, { FAKE_PIPELINE_DOCKER_ABSENT: '1' }, { FAKE_PIPELINE_IMAGE_MISSING: '1' }, { FAKE_PIPELINE_OLD_ENGINE: '1' }]) await t.test(JSON.stringify(env), async (t) => {
-    const f = await setup(t, { env }), r = await f.req('/api/pipeline'), s = r.value.sandbox;
+    const f = await setup(t, { env }), r = await f.waitDocker(), s = r.value.sandbox;
     assert.equal(r.code, 200); assert.equal(r.value.available, true);
     assert.deepEqual(s.build, { state: 'idle', startedAt: null, finishedAt: null, tail: '' });
     const available = !env.FAKE_PIPELINE_DOCKER_ABSENT && !env.FAKE_PIPELINE_OLD_ENGINE;
@@ -364,7 +380,7 @@ test('Pipeline sandbox capability handles daemon absent, image missing and older
 
 test('Pipeline Docker runs re-probe cached capability and refuse missing daemon or named image up front', async (t) => {
   const f = await setup(t, { env: { FAKE_PIPELINE_DOCKER_ABSENT: '0', FAKE_PIPELINE_IMAGE_MISSING: '0' } });
-  assert.equal((await f.req('/api/pipeline')).value.sandbox.image.present, true);
+  assert.equal((await f.waitDocker()).value.sandbox.image.present, true);
   process.env.FAKE_PIPELINE_IMAGE_MISSING = '1';
   const missing = await f.req(f.route() + '/pipeline/runs', { task: 'x', models, sandbox: { mode: 'docker', image: 'custom:image' } });
   assert.equal(missing.code, 409); assert.match(missing.value.error, /image is missing: custom:image/);
@@ -475,17 +491,17 @@ test('Pipeline demoScenario validation names the field before launching', async 
 test('Pipeline demos pass exact scenario and sandbox argv and retain scenarios across resumes', async (t) => {
   const f = await setup(t);
   for (const demoScenario of [undefined, 'basic', 'replan', 'parallel', 'evidence']) {
-    for (const sandbox of [undefined, { mode: 'host' }, { mode: 'docker' }, { mode: 'docker', image: 'custom/demo:v2' }]) {
-      const scenario = demoScenario ?? 'basic', mode = sandbox?.mode ?? 'host';
+    for (const sandbox of [undefined, { mode: 'host' }, { mode: 'scranton', windowsMode: 'strict' }, { mode: 'docker' }, { mode: 'docker', image: 'custom/demo:v2' }]) {
+      const scenario = demoScenario ?? 'basic', mode = sandbox?.mode ?? 'scranton', windowsMode = sandbox?.windowsMode ?? 'low';
       const id = await f.start({ task: 'Ignored demo task', demo: true, demoScenario, sandbox, delivery: 'patch', models: null, checks: 'ignored', setup: 'ignored', approvals: null, review: 'ignored', replans: 0, parallelSteps: 1 });
       const first = await f.wait(id, 'awaiting_approval');
       const runRoot = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs');
       const image = mode === 'docker' ? sandbox.image ?? 'scranton-pipeline-sandbox:fake-1' : null;
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runRoot, id, 'argv.json'))), [
         'demo', '--run-root', runRoot, '--run-id', id, '--workspace-root', path.join(f.dir, 'workspaces'), '--delivery', 'patch',
-        '--scenario', scenario, '--sandbox', mode, ...(image ? ['--image', image] : []), '--parent-guard'
+        '--scenario', scenario, '--sandbox', mode, ...(image ? ['--image', image] : []), ...(mode === 'scranton' ? ['--windows-mode', windowsMode] : []), '--parent-guard'
       ]);
-      assert.deepEqual(first.status.sandbox, { mode, isolated: mode === 'docker', image, isolation: mode === 'host' ? 'No OS isolation.' : 'Docker container with read-only root and no network for checks; shares the Docker VM kernel; workspace mounted read-write; setup commands with network can reach the internet and local services (including host.docker.internal).', setup_network: false });
+      assert.deepEqual(first.status.sandbox, mode === 'scranton' ? { mode, image: null, isolated: true, windows_mode: windowsMode, backend: windowsMode === 'low' ? 'low-integrity' : 'appcontainer', check_network: windowsMode === 'low' ? 'allow' : 'none', setup_network: false } : { mode, isolated: mode === 'docker', image, isolation: mode === 'host' ? 'No OS isolation.' : 'Docker container with read-only root and no network for checks; shares the Docker VM kernel; workspace mounted read-write; setup commands with network can reach the internet and local services (including host.docker.internal).', setup_network: false });
       assert.equal(first.status.task, 'Fix the demo');
       assert.equal(first.plan.steps.length, scenario === 'parallel' ? 2 : 1);
       await f.decide(id, first.status);
@@ -504,7 +520,7 @@ test('Pipeline demos pass exact scenario and sandbox argv and retain scenarios a
 
 test('Pipeline Docker demos freshly check daemon and image while host demos need no trust', async (t) => {
   const f = await setup(t, { env: { FAKE_PIPELINE_IMAGE_MISSING: '0', FAKE_PIPELINE_DOCKER_ABSENT: '0' } });
-  assert.equal((await f.req('/api/pipeline')).value.sandbox.image.present, true);
+  assert.equal((await f.waitDocker()).value.sandbox.image.present, true);
   process.env.FAKE_PIPELINE_IMAGE_MISSING = '1';
   for (const image of [undefined, 'missing/demo:v2']) {
     const r = await f.req(f.route() + '/pipeline/runs', { task: 'Demo', demo: true, sandbox: { mode: 'docker', image } });
@@ -543,7 +559,7 @@ for (const scenario of ['replan', 'parallel', 'evidence']) test(`real Pipeline $
   catch (e) { t.skip('Engine demo help is not runnable yet: ' + e.message); return; }
   if (!text.includes('--scenario')) { t.skip('Engine demo --help does not list --scenario yet'); return; }
   if (scenario === 'evidence' && !/\{[^}]*\bevidence\b[^}]*\}/.test(text)) { t.skip('Engine demo --help does not list evidence in scenario choices yet'); return; }
-  const id = await f.start({ task: 'Scenario demo', demo: true, demoScenario: scenario });
+  const id = await f.start({ task: 'Scenario demo', demo: true, demoScenario: scenario, sandbox: { mode: 'host', trustHost: true } });
   const gates = [], deadline = Date.now() + 60000; let last;
   while (Date.now() < deadline) {
     const r = await f.req(f.runRoute(id)); last = r;
@@ -792,20 +808,14 @@ test('Pipeline conversation config is opt-in, byte-compatible off, and list repl
 });
 
 test('Pipeline conversation demos pass the switch only when enabled and accept answer scenario', async (t) => {
-  const base = path.resolve('.scratch/pipeline/chat-node/tests'); fs.mkdirSync(base, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(base, 'demo-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  // The existing fake predates answer; extend only its scenario allowlist in a private copy.
-  const { pathToFileURL } = await import('node:url');
-  const file = path.join(dir, 'fake.mjs');
-  fs.writeFileSync(file, fs.readFileSync('tools/fake-pipeline.js', 'utf8').replace("'../src/core/util.js'", JSON.stringify(pathToFileURL(path.resolve('src/core/util.js')).href)).replace("['basic', 'replan', 'parallel', 'evidence']", "['basic', 'replan', 'parallel', 'evidence', 'answer']"));
-  const f = await setup(t, { command: JSON.stringify([process.execPath, file]) });
+  const f = await setup(t);
   for (const fields of [{}, { conversation: false }, { conversation: true }, { conversation: true, demoScenario: 'answer' }]) {
     const id = await f.start({ task: 'Demo question', demo: true, ...fields });
     const gate = await f.wait(id, 'awaiting_approval');
     const runRoot = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs');
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runRoot, id, 'argv.json'))), [
       'demo', '--run-root', runRoot, '--run-id', id, '--workspace-root', path.join(f.dir, 'workspaces'), '--delivery', 'apply',
-      '--scenario', fields.demoScenario ?? 'basic', '--sandbox', 'host', ...(fields.conversation ? ['--conversation'] : []), '--parent-guard'
+      '--scenario', fields.demoScenario ?? 'basic', '--sandbox', 'scranton', '--windows-mode', 'low', ...(fields.conversation ? ['--conversation'] : []), '--parent-guard'
     ]);
     await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
   }
@@ -813,22 +823,6 @@ test('Pipeline conversation demos pass the switch only when enabled and accept a
     const r = await f.req(f.route() + '/pipeline/runs', { task: 'x', demo, demoScenario: 'answer', conversation: true });
     assert.equal(r.code, 400); assert.match(r.value.error, /^demoScenario:/);
   }
-});
-
-test('Pipeline omitted sandbox defaults to host even without Docker; explicit host still requires trust', async (t) => {
-  const f = await setup(t, { env: { FAKE_PIPELINE_DOCKER_ABSENT: '1' } });
-  for (const trustHost of [undefined, false]) {
-    const r = await f.req(f.route() + '/pipeline/runs', { task: 'x', models, sandbox: { mode: 'host', trustHost } });
-    assert.equal(r.code, 409); assert.match(r.value.error, /trustHost:true/);
-  }
-  const id = await f.start({ task: 'Default host', models }), gate = await f.wait(id, 'awaiting_approval');
-  const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
-  const cfg = JSON.parse(fs.readFileSync(path.join(base, 'requests', id + '.json')));
-  assert.deepEqual(cfg.sandbox, { mode: 'host' });
-  assert.equal(gate.status.sandbox.mode, 'host'); assert.equal(gate.status.sandbox.isolated, false);
-  const argv = JSON.parse(fs.readFileSync(path.join(base, 'runs', id, 'argv.json')));
-  assert.ok(argv.includes('--trust-host'));
-  await f.decide(id, gate.status, 'reject'); await f.wait(id, 'rejected');
 });
 
 for (const setting of ['0', '1']) test(`AGENTS.md effective setting ${setting} reaches fake Pipeline config`, async t => {
@@ -863,4 +857,119 @@ test('AGENTS.md file opt-out and flags > env > file reach the fake Pipeline', as
       }
     }
   }
+});
+
+test('Pipeline sandbox body rejects invalid modes, fields and strict network recipes before probing', async (t) => {
+  const f = await setup(t, { env: { FAKE_PIPELINE_PROBE_FILE: '' } }), calls = path.join(f.dir, 'calls.jsonl');
+  process.env.FAKE_PIPELINE_PROBE_FILE = calls;
+  const start = (body) => f.req(f.route() + '/pipeline/runs', { task: 'Test sandbox selection', models, ...body });
+  for (const sandbox of [null, [], {}, { mode: 'future' }, { mode: 'scranton', extra: true },
+    { mode: 'host', image: 'repo:tag', trustHost: true }, { mode: 'scranton', image: 'repo:tag' }, { mode: 'docker', image: 'not an image' },
+    { mode: 'scranton', trustHost: true }, { mode: 'docker', trustHost: false }, { mode: 'host', trustHost: 'true' },
+    { mode: 'host', windowsMode: 'low', trustHost: true }, { mode: 'docker', windowsMode: 'strict' }, { mode: 'scranton', windowsMode: 'other' }]) {
+    assert.equal((await start({ sandbox })).code, 400, JSON.stringify(sandbox));
+  }
+  for (const trustHost of [undefined, false]) {
+    const r = await start({ sandbox: { mode: 'host', trustHost } });
+    assert.equal(r.code, 409); assert.match(r.value.error, /trustHost:true/);
+  }
+  for (const demo of [false, true]) {
+    const r = await start({ demo, sandbox: { mode: 'scranton', windowsMode: 'strict' }, setup: [
+      { id: 'offline', command: 'node -v', network: false }, { id: 'deps', command: 'npm ci', network: true },
+    ] });
+    assert.equal(r.code, 400); assert.match(r.value.error, /^setup\[1\]\.network:/);
+  }
+  assert.equal(fs.existsSync(calls), false);
+  assert.deepEqual((await f.req(f.route() + '/pipeline')).value.runs, []);
+});
+
+test('Pipeline omitted sandbox launches Low, explicit strict stays strict, and neither grants host trust', async (t) => {
+  const f = await setup(t, { env: { FAKE_PIPELINE_DOCKER_ABSENT: '1' } });
+  const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
+  for (const mode of ['low', 'strict']) {
+    const id = await f.start({ task: 'Native fixture', models, ...(mode === 'strict' ? { sandbox: { mode: 'scranton', windowsMode: 'strict' } } : {}),
+      setup: [{ id: 'setup', command: 'node -v', network: mode === 'low' }] });
+    const gate = await f.wait(id, 'awaiting_approval');
+    const request = path.join(base, 'requests', id + '.json'), argv = path.join(base, 'runs', id, 'argv.json');
+    assert.deepEqual(JSON.parse(fs.readFileSync(request)).sandbox, { mode: 'scranton', windows_mode: mode });
+    assert.equal(JSON.parse(fs.readFileSync(request + '.launch.json')).trustHost, false);
+    assert.equal(JSON.parse(fs.readFileSync(argv)).includes('--trust-host'), false);
+    assert.equal(gate.status.sandbox.windows_mode, mode);
+    assert.equal(gate.status.sandbox.setup_network, mode === 'low');
+    assert.equal((await f.decide(id, gate.status, 'reject')).code, 202); await f.wait(id, 'rejected');
+  }
+});
+
+test('Pipeline native GET caches for three seconds, while start re-probes just its chosen mode and fails closed', async (t) => {
+  const calls = path.resolve('.scratch/pipeline/chat-node/tests/native-probe-calls.jsonl');
+  fs.rmSync(calls, { force: true }); t.after(() => fs.rmSync(calls, { force: true }));
+  const f = await setup(t, { env: { FAKE_PIPELINE_PROBE_FILE: calls, FAKE_PIPELINE_NATIVE_STRICT_ABSENT: '0',
+    FAKE_PIPELINE_NATIVE_LOW_ABSENT: '0', FAKE_PIPELINE_NATIVE_REASON: 'Helper not ready: password=redact-me' } });
+  const probes = () => fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse).filter(args => args.includes('scranton'));
+  const get = async () => (await f.req('/api/pipeline')).value.sandbox.native;
+  const [native, again] = await Promise.all([get(), get()]);
+  assert.deepEqual(again, native);
+  assert.deepEqual(native, { platform: 'win32', available: true, reason: null, modes: {
+    low: { available: true, reason: null, backend: 'low-integrity', checkNetwork: 'allow', setupNetworkAllowed: true },
+    strict: { available: true, reason: null, backend: 'appcontainer', checkNetwork: 'none', setupNetworkAllowed: false },
+  } });
+  const all = ['check', '--mode', 'scranton'];
+  assert.deepEqual(probes(), [all]);
+  process.env.FAKE_PIPELINE_NATIVE_STRICT_ABSENT = '1';
+  assert.deepEqual(await get(), native);
+  const r = await f.req(f.route() + '/pipeline/runs', { task: 'No strict fallback', models, sandbox: { mode: 'scranton', windowsMode: 'strict' } });
+  assert.equal(r.code, 409); assert.match(r.value.error, /strict.*Helper not ready: password=\[REDACTED\]/);
+  assert.deepEqual(probes(), [all, [...all, '--windows-mode', 'strict']]);
+  await sleep(3100);
+  const expired = await get();
+  assert.equal(expired.available, true);
+  assert.deepEqual(expired.modes.strict, { available: false, reason: 'Helper not ready: password=[REDACTED]', backend: null, checkNetwork: null, setupNetworkAllowed: false });
+  assert.deepEqual(probes(), [all, [...all, '--windows-mode', 'strict'], all]);
+  process.env.FAKE_PIPELINE_NATIVE_LOW_ABSENT = '1';
+  const omitted = await f.req(f.route() + '/pipeline/runs', { task: 'No implicit host', models });
+  assert.equal(omitted.code, 409); assert.match(omitted.value.error, /low.*Helper not ready/);
+  assert.deepEqual((await f.req(f.route() + '/pipeline')).value.runs, []);
+});
+
+test('Pipeline default demo falls back to host only when Low is unavailable and stores no implicit trust', async (t) => {
+  const f = await setup(t, { env: { FAKE_PIPELINE_NATIVE_LOW_ABSENT: '1' } });
+  const explicit = await f.req(f.route() + '/pipeline/runs', { task: 'Demo', demo: true, sandbox: { mode: 'scranton' } });
+  assert.equal(explicit.code, 409);
+  const id = await f.start({ task: 'Default demo', demo: true });
+  const gate = await f.wait(id, 'awaiting_approval');
+  const base = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline');
+  assert.equal(gate.status.sandbox.mode, 'host');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(base, 'requests', id + '.json.launch.json'))).trustHost, false);
+  assert.equal((await f.decide(id, gate.status, 'reject')).code, 202); await f.wait(id, 'rejected');
+});
+
+test('Pipeline native capability and start do not wait for a stalled Docker probe', { timeout: 10000 }, async (t) => {
+  const f = await setup(t, { env: { FAKE_PIPELINE_PROBE_SLOW_MS: '60000', FAKE_PIPELINE_DOCKER_ABSENT: '1' } });
+  const first = (await f.req('/api/pipeline')).value.sandbox;
+  assert.equal(first.native.available, true);
+  assert.deepEqual(first.docker, { available: false, version: null, reason: 'Checking Docker availability', pending: true });
+  const id = await f.start({ task: 'Native while Docker is pending', models });
+  const gate = await f.wait(id, 'awaiting_approval');
+  assert.equal(gate.status.sandbox.mode, 'scranton');
+});
+
+test('Pipeline host and Docker continuation keeps persisted trust and config without a native probe', async (t) => {
+  const calls = path.resolve('.scratch/pipeline/chat-node/tests/continuation-calls.jsonl');
+  fs.rmSync(calls, { force: true }); t.after(() => fs.rmSync(calls, { force: true }));
+  const f = await setup(t, { env: { FAKE_PIPELINE_INVOCATIONS: calls, FAKE_PIPELINE_NATIVE_INVALID: '1' } });
+  for (const sandbox of [{ mode: 'host', trustHost: true }, { mode: 'docker' }]) {
+    const id = await f.start({ task: 'Persisted legacy sandbox', models, sandbox });
+    const gate = await f.wait(id, 'awaiting_approval');
+    const config = path.join(f.dataDir, 'projects', f.project.id, 'chats', f.chats[0].id, 'pipeline/runs', id, 'config.json');
+    const before = fs.readFileSync(config, 'utf8');
+    assert.equal((await f.decide(id, gate.status, 'reject')).code, 202);
+    const done = await f.wait(id, 'rejected');
+    assert.equal(done.status.sandbox.mode, sandbox.mode);
+    assert.equal(fs.readFileSync(config, 'utf8'), before);
+    const invocations = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(invocations.some(args => args[0] === 'sandbox' && args.includes('scranton')), false);
+    assert.equal(invocations.filter(args => args[0] === 'resume').at(-1).includes('--trust-host'), sandbox.mode === 'host');
+  }
+  const native = (await f.req('/api/pipeline')).value.sandbox.native;
+  assert.equal(native.available, false); assert.match(native.reason, /invalid data/);
 });

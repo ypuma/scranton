@@ -10,7 +10,7 @@ import { amount } from './usage.js';
 import { runDag } from './scheduler.js';
 import { ChatRouter } from './chat-router.js';
 import { createDurableRuntime } from './durable/index.js';
-import { createSandbox, createOwnedDirectory, credentialLocations, hardenCredentials } from './sandbox-native/index.js';
+import { createSandbox, createOwnedDirectory, credentialLocations, hardenCredentials, credentialHardening } from './sandbox-native/index.js';
 import { createSandbox as createDockerSandbox } from './sandbox-docker/index.js';
 import { pollStop, rejectResponse, waitForResponse } from './file-control.js';
 import { EventRecorder } from './events.js';
@@ -639,15 +639,8 @@ export class Orchestrator {
     let sandbox, tempDir;
     try {
     if (instance.sandbox === 'scranton') {
-      if (process.platform === 'win32' && !this.credentialsProtected) {
-        const credentialsDir = credentialLocations({ env: { ...process.env, ...this.extraEnv } })[0];
-        fs.mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
-        const backups = path.join(this.hive.dir, 'credential-label-backups');
-        fs.mkdirSync(backups, { recursive: true, mode: 0o700 });
-        this.credentialProtection ??= Promise.resolve().then(() => this.protectCredentials(credentialsDir, { backup: path.join(backups, `${this.runId}-${randomUUID()}.json`), env: { ...process.env, ...this.extraEnv } }));
-        await this.credentialProtection;
-        this.credentialsProtected = true;
-      }
+      this.credentialProtection ??= credentialHardening({ backupParent: this.hive.dir, runId: this.runId, protect: (dir, opts) => this.protectCredentials(dir, opts) });
+      await this.credentialProtection({ ...process.env, ...this.extraEnv });
       tempDir = createOwnedDirectory(path.join(path.dirname(instance.worktree), `temp-${randomUUID()}`));
       sandbox = this.sandboxFactory({ worktree: instance.worktree, tempDir, network: this.config.execution.sandbox.network !== 'none', protectedRoots: this.access.protectedRoots, extraRoots: () => this.access.roots().map(g => writable ? g : { ...g, mode: 'read' }), env: { ...process.env, ...this.extraEnv } });
       await sandbox.prepare();

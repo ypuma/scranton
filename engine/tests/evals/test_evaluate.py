@@ -9,16 +9,21 @@ import pytest
 
 from scranton_pipeline.agents.gateway import ChatModelGateway
 from scranton_pipeline.cli import main
+from scranton_pipeline.config import SandboxConfig
 from scranton_pipeline.evals.evaluate import base_config, evaluate, graph_option, summary
 from scranton_pipeline.evals.pack import invalid, load_pack, select
 from scranton_pipeline.observability import _rows
+
+
+def host_config(pack):
+    return base_config(pack, None, "scripted", False).model_copy(update={"sandbox": SandboxConfig(mode="host")})
 
 
 @pytest.fixture(scope="module")
 def evaluated(tmp_path_factory):
     root = tmp_path_factory.mktemp("evals")
     pack = load_pack("core")
-    cfg = base_config(pack, None, "scripted", False)
+    cfg = host_config(pack)
     prompts = []
     original = ChatModelGateway.complete
     def capture(self, role, *, system, user, schema, **kwargs):
@@ -26,8 +31,8 @@ def evaluated(tmp_path_factory):
         return original(self, role, system=system, user=user, schema=schema, **kwargs)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(ChatModelGateway, "complete", capture)
-        first = evaluate(pack, root / "one", cfg=cfg)
-        second = evaluate(pack, root / "two", cfg=cfg)
+        first = evaluate(pack, root / "one", cfg=cfg, trust_host=True)
+        second = evaluate(pack, root / "two", cfg=cfg, trust_host=True)
     return root, pack, cfg, first, second, prompts
 
 
@@ -141,7 +146,9 @@ def test_wrong_expect_exits_four(tmp_path, capsys):
     value = json.loads(path.read_text())
     value["tasks"][0]["expect"]["adjusted"] = 0
     path.write_text(json.dumps(value))
-    assert main(["eval", "--pack", str(path.parent), "--tasks", "baseline", "--trust-host", "--out", str(tmp_path / "out")]) == 4
+    cfg_path = tmp_path / "host.json"
+    cfg_path.write_text(host_config(pack).model_dump_json(by_alias=True))
+    assert main(["eval", "--pack", str(path.parent), "--config", str(cfg_path), "--tasks", "baseline", "--trust-host", "--out", str(tmp_path / "out")]) == 4
     output = capsys.readouterr().out.splitlines()
     assert len(output) == 1 and json.loads(output[0])["tasks"][0]["expect_met"] is False
 
@@ -150,7 +157,7 @@ def test_graph_option_and_guidance_rollout(tmp_path):
     assert graph_option(None) is None
     graph = graph_option("default")
     pack = load_pack("core")
-    value = evaluate(pack, tmp_path / "guidance", cfg=base_config(pack, None, "scripted", False), graph=graph, tasks="baseline")
+    value = evaluate(pack, tmp_path / "guidance", cfg=host_config(pack), graph=graph, tasks="baseline", trust_host=True)
     assert value["tasks"][0]["expect_met"]
     events = _rows(Path(value["meta"]["tasks"][0]["run_dir"]) / "events.jsonl")
     assert any(e["type"] == "procedure" and e["data"]["matched"] for e in events)
@@ -239,7 +246,7 @@ def test_hidden_acceptance_path_and_check_conjunction(tmp_path, monkeypatch, all
     monkeypatch.setattr(module, "build_sandbox", sandbox)
     monkeypatch.setattr(module, "run_checks", run)
     monkeypatch.setattr(module.time, "monotonic", lambda: 10)
-    score, _ = module.acceptance(pack, task, tmp_path, tmp_path / "run", base_config(pack, None, "scripted", False), True, True, deadline=12)
+    score, _ = module.acceptance(pack, task, tmp_path, tmp_path / "run", host_config(pack), True, True, deadline=12)
     assert score == answer and boxes[0]["workspace"] == tmp_path / "accepted-tree"
     assert all(isinstance(c, CheckConfig) and c.timeout_s == 2 for c in checks)
     assert boxes[0]["workspace"] != pack.root / task.fixture

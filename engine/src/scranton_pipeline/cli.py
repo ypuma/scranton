@@ -36,15 +36,20 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--parent-guard", action="store_true")
         command.add_argument("--conversation", action="store_true", default=None)
         if name == "demo":
-            command.add_argument("--sandbox", choices=("host", "docker"), default="host")
+            command.add_argument("--sandbox", choices=("scranton", "docker", "host"), default="scranton")
             command.add_argument("--image")
+            command.add_argument("--windows-mode", choices=("low", "strict"))
             command.add_argument("--scenario", choices=("basic", "replan", "parallel", "evidence", "answer"), default="basic")
             command.add_argument("--grounding", choices=("enforce", "observe"), default="enforce")
             command.add_argument("--guidance", choices=("true", "false"), default="false")
     sandbox = sub.add_parser("sandbox")
     actions = sandbox.add_subparsers(dest="sandbox_action", required=True)
     for action in ("check", "build"):
-        actions.add_parser(action).add_argument("--image")
+        subcommand = actions.add_parser(action)
+        subcommand.add_argument("--image")
+        if action == "check":
+            subcommand.add_argument("--mode", choices=("scranton", "docker"), default="docker")
+            subcommand.add_argument("--windows-mode", choices=("low", "strict"))
     run.add_argument("--trust-host", action="store_true")
     res = sub.add_parser("resume")
     res.add_argument("--run-dir", type=Path, required=True)
@@ -97,9 +102,6 @@ def main(argv: list[str] | None = None) -> int:
         args = parser().parse_args(argv)
         command = args.command
         result: Any
-        if command in {"run", "resume", "demo"} or command == "sandbox" and args.sandbox_action == "check":
-            from scranton_pipeline.tools.sandbox import sweep_expired
-            sweep_expired()
         if command in {"eval", "evolve"}:
             from scranton_pipeline.evals.evaluate import (
                 base_config,
@@ -123,8 +125,19 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result))
             return 0
         if command == "sandbox":
-            from scranton_pipeline.tools.sandbox import build_image, check_image
-            result = build_image(args.image) if args.sandbox_action == "build" else check_image(args.image)
+            from scranton_pipeline.tools.sandbox import build_image, check_image, sweep_expired
+            if args.sandbox_action == "build":
+                result = build_image(args.image)
+            elif args.mode == "scranton":
+                if args.image is not None:
+                    raise EngineError(FailureClass.INVALID_INPUT, "usage", "--image requires Docker mode")
+                from scranton_pipeline.tools.native_sandbox import check_native
+                result = check_native(args.windows_mode)
+            else:
+                if args.windows_mode is not None:
+                    raise EngineError(FailureClass.INVALID_INPUT, "usage", "--windows-mode requires Scranton sandbox mode")
+                sweep_expired()
+                result = check_image(args.image)
             print(json.dumps(result))
             return 5 if args.sandbox_action == "build" and not result["built"] else 0
         if command == "score":
@@ -148,9 +161,11 @@ def main(argv: list[str] | None = None) -> int:
             index = build_index(args.source, files, limits=Limits())
             result = {"git": git, "languages": index.languages, "checks": detect_checks(index), "setup": detect_setup(index)}
         elif command == "demo":
+            if args.windows_mode is not None and args.sandbox != "scranton":
+                raise EngineError(FailureClass.INVALID_INPUT, "usage", "--windows-mode requires Scranton sandbox mode")
             from scranton_pipeline.demo.fixture import run_demo
             result = run_demo(args.run_root, run_id=args.run_id, workspace_root=args.workspace_root,
-                              delivery=args.delivery, guarded=args.parent_guard, sandbox=args.sandbox, image=args.image, scenario=args.scenario, grounding=args.grounding, guidance=args.guidance == "true", conversation=bool(args.conversation))
+                              delivery=args.delivery, guarded=args.parent_guard, sandbox=args.sandbox, image=args.image, windows_mode=args.windows_mode or "low", scenario=args.scenario, grounding=args.grounding, guidance=args.guidance == "true", conversation=bool(args.conversation))
         elif command == "run":
             cfg = load_config(args.config)
             if args.conversation:

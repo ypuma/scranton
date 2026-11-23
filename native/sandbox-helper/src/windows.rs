@@ -268,6 +268,10 @@ unsafe extern "system" {
 
 #[link(name = "advapi32")]
 unsafe extern "system" {
+    fn GetSecurityInfo(handle: *mut c_void, kind: u32, info: u32, owner: *mut *mut c_void, group: *mut *mut c_void, dacl: *mut *mut c_void, sacl: *mut *mut c_void, sd: *mut *mut c_void) -> u32;
+    fn GetAce(acl: *mut c_void, index: u32, ace: *mut *mut c_void) -> i32;
+    fn DeleteAce(acl: *mut c_void, index: u32) -> i32;
+    fn EqualSid(left: *const c_void, right: *const c_void) -> i32;
     fn GetNamedSecurityInfoW(name: *const u16, kind: u32, info: u32, owner: *mut *mut c_void, group: *mut *mut c_void, dacl: *mut *mut c_void, sacl: *mut *mut c_void, sd: *mut *mut c_void) -> u32;
     fn SetSecurityInfo(handle: *mut c_void, kind: u32, info: u32, owner: *mut c_void, group: *mut c_void, dacl: *mut c_void, sacl: *mut c_void) -> u32;
     fn ConvertSecurityDescriptorToStringSecurityDescriptorW(sd: *mut c_void, revision: u32, info: u32, text: *mut *mut u16, length: *mut u32) -> i32;
@@ -330,6 +334,47 @@ fn paths(root: &Path, result: &mut Vec<PathBuf>) -> Result<(),String> {
     result.push(root.to_path_buf());
     if meta.is_dir() { for entry in std::fs::read_dir(root).map_err(|e|e.to_string())? { paths(&entry.map_err(|e|e.to_string())?.path(), result)?; } } Ok(())
 }
+fn remove_profile_aces(file: &std::fs::File, profile_sid: *const c_void) -> Result<(), String> {
+    unsafe {
+        let mut acl = std::ptr::null_mut();
+        let mut sd = std::ptr::null_mut();
+        let handle = file.as_raw_handle();
+        let rc = GetSecurityInfo(handle, 1, 4, std::ptr::null_mut(), std::ptr::null_mut(), &mut acl, std::ptr::null_mut(), &mut sd);
+        if rc != 0 { return Err(format!("Read profile DACL: Win32 {rc}")); }
+        let _sd = Local(sd);
+        if acl.is_null() { return Ok(()); }
+        // ACL.AceCount is the u16 at offset 4. A basic allow ACE stores its SID
+        // immediately after the 4-byte header and 4-byte access mask.
+        let count = *acl.cast::<u16>().add(2) as u32;
+        let mut changed = false;
+        for index in (0..count).rev() {
+            let mut ace = std::ptr::null_mut();
+            check(GetAce(acl, index, &mut ace), "get ACE")?;
+            if *ace.cast::<u8>() == 0 && EqualSid(ace.cast::<u8>().add(8).cast(), profile_sid) != 0 {
+                check(DeleteAce(acl, index), "delete ACE")?;
+                changed = true;
+            }
+        }
+        if changed {
+            let rc = SetSecurityInfo(handle, 1, 4, std::ptr::null_mut(), std::ptr::null_mut(), acl, std::ptr::null_mut());
+            if rc != 0 { return Err(format!("Write profile DACL: Win32 {rc}")); }
+        }
+    }
+    Ok(())
+}
+fn clean_profile_tree(root: &Path, profile_sid: *const c_void) -> Result<(), String> {
+    let meta = std::fs::symlink_metadata(root).map_err(|e| e.to_string())?;
+    // Same refusal as labeling, with a handle opened MAXIMUM_ALLOWED so ACL
+    // changes cannot propagate to unopened children (including junctions).
+    let file = checked_file(root, 0x02000000)?;
+    let mut complete = remove_profile_aces(&file, profile_sid).is_ok();
+    if meta.is_dir() {
+        for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
+            complete &= entry.is_ok_and(|entry| clean_profile_tree(&entry.path(), profile_sid).is_ok());
+        }
+    }
+    if complete { Ok(()) } else { Err("Some profile ACEs could not be removed".into()) }
+}
 fn harden(path: &str, backup: &str) -> Result<(),String> {
     let mut entries=Vec::new(); paths(Path::new(path), &mut entries)?;
     let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(backup).map_err(|e|e.to_string())?;
@@ -351,6 +396,24 @@ fn unharden(backup: &str) -> Result<(),String> {
         } saved.push((pair.remove(0),pair.remove(0)));
     }
     for (p,s) in saved { label_set(&p,&s)?; } Ok(())
+}
+fn pipeline_profile(name: &str) -> bool {
+    name.strip_prefix("scranton_").is_some_and(|id| id.len()==32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+fn derive_profile(name: &str) -> Result<String,String> {
+    if !pipeline_profile(name) {return Err("Invalid Pipeline profile name".into());}
+    unsafe {
+        let mut p=std::ptr::null_mut();
+        let hr=DeriveAppContainerSidFromAppContainerName(wide(name).as_ptr(),&mut p);
+        if hr!=0 {return Err(format!("derive profile HRESULT {hr:#x}"));}
+        let mut s=std::ptr::null_mut(); let ok=ConvertSidToStringSidW(p,&mut s); FreeSid(p);
+        check(ok,"profile SID")?; let _s=Local(s as _); Ok(text(s))
+    }
+}
+fn reap_profile(name: &str) -> Result<u32,String> {
+    if !pipeline_profile(name) {return Err("Invalid Pipeline profile name".into());}
+    let hr=unsafe {DeleteAppContainerProfile(wide(name).as_ptr())} as u32;
+    match hr {0|0x80070002|0x80070003|0x80070490=>Ok(0), _=>Err(format!("DeleteAppContainerProfile HRESULT {hr:#x}"))}
 }
 fn profile(name: &str, create: bool) -> Result<String,String> {
     unsafe {
@@ -382,6 +445,17 @@ fn quote(arg: &str) -> String {
     let mut out=String::from("\""); let mut slashes=0;
     for c in arg.chars() { if c=='\\' {slashes+=1;} else { if c=='"' {out.push_str(&"\\".repeat(slashes*2+1));} else {out.push_str(&"\\".repeat(slashes));} slashes=0; out.push(c); } }
     out.push_str(&"\\".repeat(slashes*2)); out.push('"'); out
+}
+fn payload_environment(names: &str) -> Vec<u16> {
+    // libuv inserts a few essential host variables even with explicit env.
+    // Only keys supplied by Pipeline may cross into the payload token.
+    let mut entries:Vec<_>=std::env::vars_os().filter(|(key,_)| names.split('\n').any(|name| name.eq_ignore_ascii_case(&key.to_string_lossy()))).collect();
+    entries.sort_by_key(|(key,_)| key.to_string_lossy().to_uppercase());
+    let mut block=Vec::new();
+    for (key,value) in entries {block.extend(key.encode_wide()); block.push(b'=' as u16); block.extend(value.encode_wide()); block.push(0);}
+    if block.is_empty() {block.push(0);}
+    block.push(0);
+    block
 }
 fn exec(opts: &std::collections::HashMap<String,String>, command: &[String]) -> Result<u32,String> {
     let cwd=opts.get("--cwd").ok_or("--cwd required")?;
@@ -428,7 +502,9 @@ fn exec(opts: &std::collections::HashMap<String,String>, command: &[String]) -> 
         let is_cmd=Path::new(&command[0]).file_name().unwrap_or_default().to_string_lossy().eq_ignore_ascii_case("cmd.exe");
         let line=if is_cmd {{ let split=command.iter().position(|v|v.eq_ignore_ascii_case("/c") || v.eq_ignore_ascii_case("/k")).ok_or("cmd requires /c or /k")?; format!("{} {} \"{}\"",quote(&command[0]),command[1..=split].join(" "),command[split+1..].join(" ")) }} else {command.iter().map(|a|quote(a)).collect::<Vec<_>>().join(" ")};
         let mut line=wide(&line); let mut pi:PROCESS_INFORMATION=std::mem::zeroed();
-        check(CreateProcessAsUserW(restricted,wide(&command[0]).as_ptr(),line.as_mut_ptr(),std::ptr::null_mut(),std::ptr::null_mut(),1,CREATE_SUSPENDED|CREATE_UNICODE_ENVIRONMENT|EXTENDED_STARTUPINFO_PRESENT,std::ptr::null_mut(),wide(cwd).as_ptr(),&si.StartupInfo,&mut pi),"create sandbox process")?;
+        let env=opts.get("--pipeline-env").map(|names| payload_environment(names));
+        let env_ptr=env.as_ref().map_or(std::ptr::null_mut(),|block|block.as_ptr().cast_mut().cast());
+        check(CreateProcessAsUserW(restricted,wide(&command[0]).as_ptr(),line.as_mut_ptr(),std::ptr::null_mut(),std::ptr::null_mut(),1,CREATE_SUSPENDED|CREATE_UNICODE_ENVIRONMENT|EXTENDED_STARTUPINFO_PRESENT,env_ptr,wide(cwd).as_ptr(),&si.StartupInfo,&mut pi),"create sandbox process")?;
         let process=Handle(pi.hProcess); let thread=Handle(pi.hThread);
         if AssignProcessToJobObject(job.0,process.0)==0 {TerminateProcess(process.0,125); return Err(error("assign job"));}
         if ResumeThread(thread.0)==u32::MAX {TerminateProcess(process.0,125); return Err(error("resume process"));}
@@ -442,20 +518,62 @@ fn exec(opts: &std::collections::HashMap<String,String>, command: &[String]) -> 
         drop(job); let _=out.join(); let _=err.join(); Ok(code)
     }
 }
+fn pipeline_exec(opts: &std::collections::HashMap<String,String>, command: &[String], status: &str) -> Result<u32,String> {
+    use std::io::Write;
+    // The status path is host-only; its handle is not on the payload inheritance list.
+    let Ok(mut file)=std::fs::OpenOptions::new().write(true).create_new(true).open(status) else {return Ok(125);};
+    let (tag, code)=pipeline_result(exec(opts,command));
+    if file.write_all(tag).and_then(|_|file.sync_all()).is_err() {return Ok(125);}
+    Ok(code)
+}
+fn pipeline_result(result: Result<u32,String>) -> (&'static [u8], u32) {
+    match result {Ok(code)=>(b"exited\n",code), Err(_)=>(b"launch\n",125)}
+}
 pub fn main_result() -> Result<u32,String> {
     let args:Vec<String>=std::env::args().skip(1).collect(); let action=args.first().ok_or("command required")?;
     let mut opts=std::collections::HashMap::new(); let mut i=1;
     while i<args.len() && args[i]!="--" {if !args[i].starts_with("--") || i+1>=args.len() {return Err("Expected --option value".into());} if opts.insert(args[i].clone(),args[i+1].clone()).is_some() {return Err("Duplicate option".into());} i+=2;}
     let get=|key:&str|opts.get(key).map(String::as_str).ok_or_else(||format!("{key} required"));
-    let allowed:&[&str]=match action.as_str() {"exec"=>&["--cwd","--mode","--network","--profile","--timeout-ms","--memory-mb","--processes","--cpu-ms"],"label-low"=>&["--path"],"harden"=>&["--path","--backup"],"unharden"=>&["--backup"],"profile-create"|"profile-delete"=>&["--name"],_=>return Err("Unknown command".into())};
+    let allowed:&[&str]=match action.as_str() {"exec"=>&["--cwd","--mode","--network","--profile","--timeout-ms","--memory-mb","--processes","--cpu-ms","--pipeline-status","--pipeline-env"],"label-low"|"pipeline-check-tree"=>&["--path"],"harden"=>&["--path","--backup"],"pipeline-profile-clean-tree"=>&["--name","--path"],"unharden"=>&["--backup"],"profile-create"|"profile-delete"|"pipeline-profile-derive"|"pipeline-profile-reap"=>&["--name"],_=>return Err("Unknown command".into())};
     if opts.keys().any(|k|!allowed.contains(&k.as_str())) {return Err("Unknown option".into());}
     match action.as_str() {
-        "exec"=>exec(&opts,if i<args.len(){&args[i+1..]}else{&[]}),
+        "exec"=>{
+            let command=if i<args.len(){&args[i+1..]}else{&[]};
+            if let Some(status)=opts.get("--pipeline-status") {pipeline_exec(&opts,command,status)} else if opts.contains_key("--pipeline-env") {Err("--pipeline-env requires --pipeline-status".into())} else {exec(&opts,command)}
+        },
+        "pipeline-check-tree"=>{paths(Path::new(get("--path")?),&mut Vec::new())?;Ok(0)},
+        "pipeline-profile-derive"=>{println!("{}",derive_profile(get("--name")?)?);Ok(0)},
+        "pipeline-profile-reap"=>reap_profile(get("--name")?),
+        "pipeline-profile-clean-tree"=>{
+            let profile_sid = sid(&derive_profile(get("--name")?)?)?;
+            clean_profile_tree(Path::new(get("--path")?), profile_sid.0)?;
+            Ok(0)
+        },
         "label-low"=>{let mut entries=Vec::new(); paths(Path::new(get("--path")?),&mut entries)?; for entry in entries {label_set(&entry.to_string_lossy(),"S:(ML;OICI;NW;;;LW)")?;} Ok(0)},
         "harden"=>{harden(get("--path")?,get("--backup")?)?;Ok(0)},
         "unharden"=>{unharden(get("--backup")?)?;Ok(0)},
         "profile-create"=>{println!("{}",profile(get("--name")?,true)?);Ok(0)},
         "profile-delete"=>{profile(get("--name")?,false)?;Ok(0)},
         _=>unreachable!()
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_status_preserves_reserved_tool_exits() {
+        assert_eq!(pipeline_result(Ok(124)), (&b"exited\n"[..], 124));
+        assert_eq!(pipeline_result(Ok(125)), (&b"exited\n"[..], 125));
+        assert_eq!(pipeline_result(Err("launch failed".into())), (&b"launch\n"[..], 125));
+    }
+
+    #[test]
+    fn pipeline_recovery_only_accepts_generated_profile_names() {
+        assert!(pipeline_profile("scranton_0123456789abcdef0123456789abcdef"));
+        assert!(!pipeline_profile("scranton_0123456789abcdef0123456789abcdeF"));
+        assert!(!pipeline_profile("scranton_0123456789abcdef0123456789abcde"));
+        assert!(!pipeline_profile("unrelated"));
     }
 }

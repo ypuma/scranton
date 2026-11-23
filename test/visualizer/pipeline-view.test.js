@@ -544,6 +544,29 @@ test('sandbox fragment: the first clause in the run line, the whole sentence as 
   assert.equal(walk(host.$('pv-meta'), (n) => n.className === 'hint pv-block').length, 0, 'nothing left out, no second line');
 });
 
+// pipeline-native-sandbox-contract section 7: the details show what the engine reported, not the form's radio
+test('sandbox fragment: the Scranton sandbox shows the engine-reported backend and network; an older status keeps its words', async (t) => {
+  const strict = { mode: 'scranton', image: null, windows_mode: 'strict', backend: 'appcontainer', isolated: true, check_network: 'none', setup_network: false };
+  const h = harness({ doc: () => doc(runStatus({ sandbox: strict })) });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  assert.match(lineText(h.$('pv-meta')), /· Scranton sandbox · AppContainer · no network for checks$/);
+  assert.equal(walk(h.$('pv-meta'), (n) => n.title).length, 0, 'no sentence, no title');
+
+  const low = harness({ doc: () => doc(runStatus({ sandbox: { ...strict, windows_mode: 'low', backend: 'low-integrity', check_network: 'allow', setup_network: true } })) });
+  done(t, low);
+  low.view.show({ project: 'core', chat: 'c1' });
+  await low.tick();
+  assert.match(lineText(low.$('pv-meta')), /· Scranton sandbox · Low integrity · network not blocked · setup had network access$/);
+
+  const bare = harness({ doc: () => doc(runStatus({ sandbox: { mode: 'scranton' } })) });
+  done(t, bare);
+  bare.view.show({ project: 'core', chat: 'c1' });
+  await bare.tick();
+  assert.match(lineText(bare.$('pv-meta')), /· Scranton sandbox$/, 'a status without the new fields names the sandbox only');
+});
+
 // guards `if (e.meta.dataset.key === key) return;` in renderMeta
 test('sandbox fragment: a poll that changes nothing keeps the titled node, so its tooltip stays up', async (t) => {
   const h = harness({ doc: () => doc(runStatus({ sandbox: DOCKER_SANDBOX })) });

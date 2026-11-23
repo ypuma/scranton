@@ -7,17 +7,26 @@ from pathlib import Path
 import pytest
 
 from scranton_pipeline.cli import main
+from scranton_pipeline.config import SandboxConfig
 from scranton_pipeline.evals import evaluate as harness
 from scranton_pipeline.evals.pack import load_pack
 
 
-def test_core_isolated_matches_normal(tmp_path, monkeypatch, capsys):
+@pytest.fixture
+def host_flags(tmp_path):
+    cfg = harness.base_config(load_pack("core"), None, "scripted", False)
+    path = tmp_path / "host.json"
+    path.write_text(cfg.model_copy(update={"sandbox": SandboxConfig(mode="host")}).model_dump_json(by_alias=True))
+    return ["--config", str(path), "--trust-host"]
+
+
+def test_core_isolated_matches_normal(tmp_path, monkeypatch, capsys, host_flags):
     normal = tmp_path / "normal"
     isolated = tmp_path / "isolated"
-    assert main(["eval", "--pack", "core", "--out", str(normal)]) == 0
+    assert main(["eval", "--pack", "core", *host_flags, "--out", str(normal)]) == 0
     normal_stdout = capsys.readouterr().out
     monkeypatch.setattr(harness, "python_command", lambda mode: [sys.executable, "-I"])
-    code = main(["eval", "--pack", "core", "--out", str(isolated)])
+    code = main(["eval", "--pack", "core", *host_flags, "--out", str(isolated)])
     captured = capsys.readouterr()
     result = json.loads(captured.out)
     assert code == 0, (code, sum(t["expect_met"] for t in result["tasks"]), result["mean_adjusted"])
@@ -50,10 +59,10 @@ def test_demo_checks_isolated(tmp_path, monkeypatch, scenario):
         return kwargs["cfg"]
 
     monkeypatch.setattr(runner, "start", inspect)
-    fixture.run_demo(tmp_path, run_id="isolateddemo", scenario=scenario)
+    fixture.run_demo(tmp_path, sandbox="host", run_id="isolateddemo", scenario=scenario)
 
 
-def test_exit_four_reports_first_acceptance_failure_per_task(tmp_path, monkeypatch, capsys):
+def test_exit_four_reports_first_acceptance_failure_per_task(tmp_path, monkeypatch, capsys, host_flags):
     pack = load_pack("core")
     tasks = []
     for task in pack.manifest.tasks[:2]:
@@ -65,7 +74,7 @@ def test_exit_four_reports_first_acceptance_failure_per_task(tmp_path, monkeypat
     import scranton_pipeline.evals.pack as packs
     monkeypatch.setattr(packs, "load_pack", lambda _: pack)
     out = tmp_path / "out"
-    assert main(["eval", "--pack", "core", "--out", str(out)]) == 4
+    assert main(["eval", "--pack", "core", *host_flags, "--out", str(out)]) == 4
     captured = capsys.readouterr()
     assert len(captured.out.splitlines()) == 1
     value = json.loads((out / "eval.json").read_text())

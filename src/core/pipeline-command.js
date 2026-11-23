@@ -63,19 +63,30 @@ export function pipelineChildEnv(env = process.env) {
 }
 export function spawnPipeline(spec, args, env = process.env) {
   // Resume rebinds saved bridge paths after upgrades without rewriting the audited config.
-  return spawn(spec.argv[0], [...spec.argv.slice(1), ...args], { cwd: PACKAGE_ROOT, env: { ...env, SCRANTON_PIPELINE_COMPLETION_COMMAND: JSON.stringify([process.execPath, path.join(PACKAGE_ROOT, 'tools/pipeline-complete.js')]) }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+  return spawn(spec.argv[0], [...spec.argv.slice(1), ...args], { cwd: PACKAGE_ROOT, env: {
+    ...env, // Includes the same SCRANTON_SANDBOX_HELPER override that Team inherits from Tauri.
+    SCRANTON_PIPELINE_COMPLETION_COMMAND: JSON.stringify([process.execPath, path.join(PACKAGE_ROOT, 'tools/pipeline-complete.js')]),
+    SCRANTON_PIPELINE_NATIVE_COMMAND: JSON.stringify([process.execPath, path.join(PACKAGE_ROOT, 'tools/pipeline-sandbox.js')]),
+  }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
 }
-export function execPipeline(spec, args, { env = process.env, timeoutMs = 15000 } = {}) {
+export function execPipeline(spec, args, { env = process.env, timeoutMs = 15000, signal } = {}) {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: null, value: null, error: 'Pipeline command cancelled', stderr: '' }); return; }
     const child = spawnPipeline(spec, args, pipelineChildEnv(env));
     let stdout = '', stderr = '', error = null;
-    const timer = setTimeout(() => { error = args[0] === 'sandbox' && args[1] === 'check' ? 'Docker did not answer in time' : 'Pipeline command timed out'; void killTree(child); }, timeoutMs);
+    const stop = (message) => { error = message; void killTree(child); };
+    const abort = () => stop('Pipeline command cancelled');
+    signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(() => stop(args[0] === 'sandbox' && args[1] === 'check'
+      ? args[2] === '--mode' && args[3] === 'scranton' ? 'Scranton sandbox did not answer in time' : 'Docker did not answer in time'
+      : 'Pipeline command timed out'), timeoutMs);
     child.stdin.on('error', () => {}); child.stdin.end();
     child.stdout.on('data', (d) => { stdout = (stdout + d).slice(-1024 * 1024); });
     child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-8192); });
     child.on('error', () => { error = 'Pipeline command could not start'; });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       let value = null;
       try { value = JSON.parse(stdout.trim()); } catch {}
       resolve({ code, value, error: error ?? (value ? null : 'Pipeline command returned invalid JSON'), stderr });
@@ -106,4 +117,35 @@ export async function probePipelineSandbox(spec, { image, ...options } = {}) {
     if (r.code !== 0 || typeof v?.default_image !== 'string' || !v.default_image || typeof v.docker?.available !== 'boolean' || typeof v.image?.name !== 'string' || typeof v.image?.present !== 'boolean' || ![null, 'string'].includes(v.docker.version === null ? null : typeof v.docker.version) || ![null, 'string'].includes(v.docker.reason === null ? null : typeof v.docker.reason)) return fallback;
     return { default_image: v.default_image, docker: { available: v.docker.available, version: v.docker.version, reason: v.docker.reason }, image: { name: v.image.name, present: v.image.present } };
   } catch { return fallback; }
+}
+export function unavailablePipelineNative(reason, platform = process.platform) {
+  const mode = () => ({ available: false, reason, backend: null, checkNetwork: null, setupNetworkAllowed: false });
+  return { platform, available: false, reason, modes: { low: mode(), strict: mode() } };
+}
+
+export async function probePipelineNative(spec, { windowsMode, ...options } = {}) {
+  const fallback = 'Scranton sandbox check is unavailable or returned invalid data (engine upgrade may be required)';
+  try {
+    const r = await execPipeline(spec, ['sandbox', 'check', '--mode', 'scranton', ...(windowsMode ? ['--windows-mode', windowsMode] : [])], {
+      // The engine can spend 30 seconds on each mode, plus process cleanup.
+      timeoutMs: windowsMode ? 45000 : 90000, ...options,
+    });
+    const native = r.value?.native;
+    if (r.error || r.code !== 0 || typeof native?.platform !== 'string' || !native.platform) {
+      return unavailablePipelineNative(r.error === 'Scranton sandbox did not answer in time' ? r.error : fallback);
+    }
+    const result = unavailablePipelineNative(fallback, native.platform);
+    for (const mode of windowsMode ? [windowsMode] : ['low', 'strict']) {
+      const p = native[mode], backend = mode === 'low' ? 'low-integrity' : 'appcontainer', checkNetwork = mode === 'low' ? 'allow' : 'none';
+      if (p?.protocol !== 1 || p.windows_mode !== mode) continue;
+      if (native.platform === 'win32' && p.available === true && p.reason === null && p.backend === backend && p.check_network === checkNetwork && p.setup_network_allowed === (mode === 'low')) {
+        result.modes[mode] = { available: true, reason: null, backend, checkNetwork, setupNetworkAllowed: p.setup_network_allowed };
+      } else if (p.available === false && typeof p.reason === 'string' && p.reason.trim()) {
+        result.modes[mode].reason = p.reason.trim().slice(0, 1024);
+      }
+    }
+    result.available = Object.values(result.modes).some((p) => p.available);
+    result.reason = result.available ? null : result.modes[windowsMode ?? 'low'].reason;
+    return result;
+  } catch { return unavailablePipelineNative(fallback); }
 }

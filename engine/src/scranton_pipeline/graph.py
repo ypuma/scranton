@@ -45,6 +45,7 @@ def instrument(name: str, fn: Node, deps: Dependencies) -> Callable[[PipelineSta
                 finally:
                     call_context.reset(token)
             except EngineError as exc:
+                deps.sandbox_failure(exc, code=exc.code, node=name)
                 update = {"failure": exc.to_failure(name)}
                 deps.events.emit("failure", **update["failure"])
         except EngineError as exc:

@@ -7,6 +7,7 @@ from typing import Any, Literal
 from ..config import CheckConfig
 from ..errors import EngineError
 from ..models import CheckResult
+from .native_sandbox import NativeSandbox
 from .process import StopSignal
 from .sandbox import Sandbox
 from .secrets import Redactor
@@ -32,7 +33,7 @@ def run_checks(checks: Sequence[CheckConfig], *, sandbox: Sandbox, log_dir: Path
                                  duration_s=result.duration_s, output_tail=result.output_tail,
                                  log_path=str(path), required=check.required)
         except EngineError as exc:
-            if exc.code == "docker_failed":
+            if exc.code in {"docker_failed", "sandbox_failed"} or (isinstance(sandbox, NativeSandbox) and exc.code == "output_not_closed"):
                 raise
             record = CheckResult(id=check.id, kind=check.kind, status="error", exit_code=None,
                                  duration_s=0, output_tail=Redactor().redact(str(exc)),

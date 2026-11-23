@@ -17,10 +17,10 @@ REVIEW = {"verdict": "approve", "summary": "Addition corrected and verified", "c
     {"id": "sum", "status": "met", "evidence": "Unit tests pass"}], "findings": []}
 
 
-def config(run_dir: Path, *, sandbox: str = "host", image: str | None = None, scenario: str = "basic") -> EngineConfig:
+def config(run_dir: Path, *, sandbox: str = "scranton", image: str | None = None, scenario: str = "basic", windows_mode: str = "low") -> EngineConfig:
     return EngineConfig.model_validate({"models": {role: {"provider": "scripted", "model": "demo",
         "script_path": str(run_dir / "artifacts" / f"{role}.json")} for role in ("planner", "implementer", "reviewer")},
-        "sandbox": {"mode": sandbox, "docker": {"image": image}}, "checks": [{"id": "unit", "kind": "test", "argv": ["python" if sandbox == "docker" else sys.executable, "-m", "unittest", "-q"], "timeout_s": 30}],
+        "sandbox": {"mode": sandbox, "windows_mode": windows_mode, "docker": {"image": image}}, "checks": [{"id": "unit", "kind": "test", "argv": ["python" if sandbox == "docker" else sys.executable, "-m", "unittest", "-q"], "timeout_s": 30}],
         "approvals": {"plan": "always"}, "execution": {"max_parallel_steps": 2 if scenario == "parallel" else 1}})
 
 
@@ -69,7 +69,7 @@ def materialize(run_dir: Path, scenario: str = "basic") -> None:
 
 
 def run_demo(run_root: Path, *, run_id: str | None = None, workspace_root: Path | None = None,
-             delivery: str = "patch", guarded: bool = False, sandbox: str = "host", image: str | None = None, scenario: str = "basic", grounding: str = "enforce", guidance: bool = False, conversation: bool = False) -> Any:
+             delivery: str = "patch", guarded: bool = False, sandbox: str = "scranton", image: str | None = None, scenario: str = "basic", grounding: str = "enforce", guidance: bool = False, conversation: bool = False, windows_mode: str = "low") -> Any:
     from scranton_pipeline.runner import start
     if scenario == "evidence" and grounding != "enforce":
         from scranton_pipeline.runner import invalid
@@ -79,7 +79,7 @@ def run_demo(run_root: Path, *, run_id: str | None = None, workspace_root: Path 
         raise invalid("conversation_required", "Answer demo requires conversation mode")
     run_id = run_id or uuid.uuid4().hex[:12]
     run_dir = (run_root / run_id).resolve()
-    cfg = config(run_dir, sandbox=sandbox, image=image, scenario=scenario)
+    cfg = config(run_dir, sandbox=sandbox, image=image, scenario=scenario, windows_mode=windows_mode)
     cfg = cfg.model_copy(update={"conversation": conversation, "grounding": cfg.grounding.model_copy(update={"mode": grounding}), "procedure": cfg.procedure.model_copy(update={"enabled": guidance})})
     if scenario == "parallel":
         from scranton_pipeline.config import CheckConfig

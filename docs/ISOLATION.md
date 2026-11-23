@@ -35,7 +35,16 @@ The host owns workflows, LLM calls, credentials and contained file tools. Docker
 
 Kill, abort, timeout and disposal remove the container and verify absence; a cancelled adapter is terminal. Cleanup failure retains ownership for recovery, never a host fallback. This is not a VM guarantee or proof of arbitrary toolchain compatibility. [Docker adapter](../src/core/sandbox-docker/README.md).
 
-Pipeline has a separate check/setup sandbox and its own image; the Team default does not change Pipeline's explicit host/Docker choices. Its model bridge remains on the host; see [PIPELINE.md](PIPELINE.md).
+## Pipeline check and setup isolation
+
+New Pipeline runs default to `scranton`, using the same native policy and helper as Team, but **only on Windows in this release**. Checks and setup use the selected executor; Git, model HTTP and the completion bridge stay on the host. An unavailable sandbox fails closed without switching modes (the bundled HTTP demo is the only omitted-mode exception).
+
+- **`low` (default):** restricted Low-integrity token; the owned workspace and private temp are writable. This is not an exact write allowlist: pre-existing Low locations can remain writable. Ordinary Medium files remain readable, and the network is not blocked, including during checks.
+- **`strict`:** zero-capability AppContainer. Reads depend on AppContainer permissions; tools must be readable by the container. Neither checks nor setup can use the network. If setup requires network but checks must stay offline, select Pipeline's **Docker** mode explicitly. Do not grant broad access to user or toolchain directories to make Strict work.
+
+Windows native mode refuses workspace links and junctions, including those generated during setup (for example, by pnpm or npm workspaces). If your project needs them, select **Docker**; the next native command fails with `sandbox_failed` rather than following them. Strict cleanup still deletes the AppContainer profile and warns if it cannot safely remove all permission entries.
+
+The native mode does not mount `/workspace/.pipeline`; setup output stays in the writable workspace. Docker uses a separate Pipeline image and mounts per-run state for setup (read-write) and checks (read-only). **Host** is not OS isolation and requires explicit trust for real runs. Existing host runs keep their persisted trust on resume. See [PIPELINE.md](PIPELINE.md) for selection, HTTP details and the [remaining work](PIPELINE.md#offene-punkte-der-nativen-sandbox).
 
 ## Dateistände und sichere Übernahme
 

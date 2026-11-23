@@ -872,7 +872,7 @@
           </div>
           <fieldset class="exec" id="pf-setup-set">
             <legend>Setup</legend>
-            <p class="hint pf-note" id="pf-setup-note" hidden>Runs once in the fresh workspace before the first check, for example to install dependencies. Network stays off unless a command needs it.</p>
+            <p class="hint pf-note" id="pf-setup-note" hidden>Runs once in the fresh workspace before the first check, for example to install dependencies. Docker keeps the network off unless a command needs it; the Scranton sandbox blocks it only with Block network (strict).</p>
             <ul class="pf-checks" id="pf-setup" aria-label="Setup commands"></ul>
             <div class="pf-row-actions">
               <button type="button" class="btn btn-small" id="pf-setup-add">Add setup command</button>
@@ -891,8 +891,14 @@
           <fieldset class="exec" id="pf-sandbox-set">
             <legend>Sandbox</legend>
             <div class="field" role="radiogroup" aria-label="Where the checks run">
-              <label class="check"><input type="radio" name="pf-sandbox" value="docker" id="pf-docker"><span>Docker container <span class="hint">no network, limited CPU, memory and processes; the image must exist locally</span></span></label>
-              <label class="check"><input type="radio" name="pf-sandbox" value="host" id="pf-host" checked><span>Trusted host <span class="hint">checks run on this computer with your user rights</span></span></label>
+              <label class="check"><input type="radio" name="pf-sandbox" value="scranton" id="pf-scranton" checked><span>Scranton sandbox <span class="hint">default: checks run in Scranton's own OS sandbox on this computer</span> <span class="hint form-status" id="pf-scranton-state"></span></span></label>
+              <div class="field pf-scenario" id="pf-native-row">
+                <label class="check"><input type="checkbox" id="pf-strict" aria-describedby="pf-strict-hint"><span>Block network (strict) <span class="hint form-status" id="pf-strict-state"></span></span></label>
+                <span class="hint" id="pf-strict-hint">Writes stay in the run workspace; network is not blocked.</span>
+                <p class="form-status pf-note" id="pf-strict-setup" data-tone="error" aria-live="polite" hidden></p>
+              </div>
+              <label class="check"><input type="radio" name="pf-sandbox" value="docker" id="pf-docker"><span>Docker container <span class="hint">no network, limited CPU, memory and processes; the image must exist locally</span> <span class="hint form-status" id="pf-docker-state"></span></span></label>
+              <label class="check"><input type="radio" name="pf-sandbox" value="host" id="pf-host"><span>Trusted host <span class="hint">checks run on this computer with your user rights</span></span></label>
             </div>
             <div class="pf-sandbox-state">
               <p class="form-status" id="pf-sandbox-status" role="status" aria-live="polite" tabindex="-1"></p>

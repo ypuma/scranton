@@ -41,6 +41,17 @@ by: "core"
 ---
 
 ---
+file: "engine/src/scranton_pipeline/tools/native_sandbox.py"
+kind: "where"
+text: "Engine side of sandbox mode `scranton` (default for new runs; SandboxConfig.windows_mode low|strict). It sits behind the existing Sandbox interface, and build_sandbox in tools/sandbox.py selects it. It calls the Node runner (tools/pipeline-sandbox.js) through SCRANTON_PIPELINE_NATIVE_COMMAND. A missing or invalid binding means unavailable, and there is no fallback to Docker or host. Setup, checks, parallel lanes, the grounding probe and eval acceptance run through it. Host Git, the `command` completion provider and model HTTP stay on the host. Strict rejects setup network:true at config validation (`setup[i].network`). Workspace links or hard links fail as typed sandbox_failed `workspace_link`, which recommends Docker. The real Windows gate is engine/tests/integration/, enabled with SCRANTON_PIPELINE_NATIVE_TEST=1."
+see_also: ".enma/pipeline-native-sandbox-contract.md §5; unit tests engine/tests/unit/test_native_sandbox.py"
+hash: "shape2:5d52c2f3b4c20d14"
+written: "2026-11-23"
+commit: "3191877"
+by: "core"
+---
+
+---
 file: "engine/src/scranton_pipeline/tools/process.py"
 symbol: "run_process"
 ordinal: 0

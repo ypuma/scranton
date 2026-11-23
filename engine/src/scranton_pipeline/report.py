@@ -12,6 +12,7 @@ from scranton_pipeline.nodes.common import Dependencies, cleanup_provider, scope
 from scranton_pipeline.observability import _rows
 from scranton_pipeline.state import PipelineState, counter, current_step, get_plan
 from scranton_pipeline.tools.fs import write_bytes_atomic
+from scranton_pipeline.tools.native_sandbox import describe_native
 from scranton_pipeline.tools.sandbox import sandbox_description
 
 
@@ -53,6 +54,9 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
                  "diff": delivery.get("diff_path") if delivery else None,
                  "report_md": str(deps.run_dir / "delivery" / "report.md") if (deps.run_dir / "delivery" / "report.md").exists() else None,
                  "report_json": str(deps.run_dir / "delivery" / "report.json") if (deps.run_dir / "delivery" / "report.json").exists() else None}
+    setup_network = any(c.network for c in deps.cfg.setup)
+    box = (describe_native(deps.cfg.sandbox, setup_network, ready=deps.native_ready)
+           if deps.cfg.sandbox.mode == "scranton" else sandbox_description(deps.cfg.sandbox, setup_network=setup_network))
     return RunStatus.model_validate({**({"reply": terminal_reply(state, deps, status)} if deps.cfg.conversation and status in {"succeeded", "failed", "rejected", "cancelled"} else {}),"procedure": procedure_status(deps.run_dir, deps.cfg.procedure.enabled, metadata.get("procedure", {})), "grounding": recompute_summary(deps.run_dir), "run_id": state["run_id"], "status": status, "phase": phase, "node": node,
         "instructions": instructions.get("summary") if instructions else None,
         "task": deps.redactor.redact(state["task"])[:500], "source_dir": state["source_dir"], "delivery_mode": state["delivery_mode"],
@@ -69,7 +73,7 @@ def make_status(state: PipelineState, deps: Dependencies, *, status: str = "runn
                     "output_tail": deps.redactor.redact(c.get("output_tail", ""))[-4096:] if c["status"] != "passed" else ""} for c in state.get("checks", state.get("baseline", []))],
         "delivery": {"applied": delivery.get("applied"), "diff_sha256": delivery.get("diff_sha256", ""),
                      "files": len(delivery.get("files", [])), "conflicts": delivery.get("conflicts", [])} if delivery else None,
-        "artifacts": artifacts, "sandbox": sandbox_description(deps.cfg.sandbox, setup_network=any(c.network for c in deps.cfg.setup)),
+        "artifacts": artifacts, "sandbox": box,
         "pid": os.getpid() if status == "running" else None, "created_at": metadata.get("created_at", now()), "updated_at": now()})
 
 
@@ -83,6 +87,10 @@ def write_report(state: PipelineState, deps: Dependencies, *, status: str) -> No
             limitations.append("Network-enabled setup is configured; it can reach the internet and local host services, including the control API via host.docker.internal.")
     if deps.cfg.sandbox.mode == "host":
         limitations.append("Trusted host checks have no OS isolation.")
+    if deps.cfg.sandbox.mode == "scranton":
+        limitations.append("Windows Low integrity does not block network or reads of ordinary Medium integrity files."
+                           if deps.cfg.sandbox.windows_mode == "low" else
+                           "Windows AppContainer blocks network; tools require AppContainer-readable files.")
     if not deps.cfg.checks:
         limitations.append("No checks configured: nothing was verified automatically.")
     if state.get("deviations"):

@@ -168,7 +168,7 @@ def test_environment_precedence(monkeypatch, value, configured, expected):
 
 @pytest.mark.parametrize("role", ["planner", "implementer", "reviewer"])
 def test_instructions_do_not_evict_budgeted_context(tmp_path, role):
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     cfg = cfg.model_copy(update={"limits": cfg.limits.model_copy(update={"max_prompt_bytes": 16000})})
     baseline = bounded(role, {"bulk": "x" * 20000}, [], cfg)
     instruction = "all mandatory " * 2400
@@ -180,7 +180,7 @@ def test_instructions_do_not_evict_budgeted_context(tmp_path, role):
 
 
 def test_config_strict_boolean_and_legacy_digest(tmp_path):
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     raw = cfg.model_dump(mode="json", by_alias=True)
     assert cfg.agents_md is True and "agentsMd" not in raw
     from scranton_pipeline.config import EngineConfig
@@ -254,7 +254,7 @@ def test_invalid_environment_is_config_error(monkeypatch, value):
 @pytest.mark.parametrize("mode", ["json_text", "json_schema", "function_calling"])
 @pytest.mark.parametrize("repository", [False, True])
 def test_user_orders_exact_once_before_repository_within_budget(tmp_path, builder, mode, repository):
-    cfg = config(tmp_path)
+    cfg = config(tmp_path, sandbox="host")
     cfg = cfg.model_copy(update={
         "limits": cfg.limits.model_copy(update={"max_prompt_bytes": 16000}),
         "models": cfg.models.model_copy(update={

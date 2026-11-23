@@ -28,7 +28,7 @@ test('staged desktop contains own runtime, completion helpers and locked product
     assert.equal((await json(path.join(app, relative, 'package.json'))).version, pkg.version, relative);
   }
   await assert.rejects(fs.access(path.join(app, 'node_modules/@tauri-apps/cli')));
-  for (const file of ['tools/pipeline-complete.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json']) {
+  for (const file of ['tools/pipeline-complete.js', 'tools/pipeline-sandbox.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json']) {
     assert.deepEqual(await fs.readFile(path.join(app, file)), await fs.readFile(path.join(root, file)), file);
   }
   for (const file of ['hive', '.env', '.pi', '.git', 'sessions', '.scratch']) await assert.rejects(fs.access(path.join(app, file)));
@@ -45,11 +45,12 @@ test('bundled Node runs own runtime offline with empty PATH and isolated credent
   const profile = path.join(root, '.scratch/packaging/test-profile');
   await fs.mkdir(profile, { recursive: true });
   const node = path.join(root, 'src-tauri/binaries', host.nodeFile);
-  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: profile };
+  const manifest = await json(path.join(app, 'packaging-manifest.json'));
+  const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: path.join(profile, 'credentials'), SCRANTON_SANDBOX_HELPER: path.join(root, 'src-tauri/binaries', manifest.sandboxHelper.file) };
   const run = (entry) => spawnSync(node, [entry], { cwd: profile, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
   const result = run(path.join(app, 'scripts/runtime-smoke.mjs'));
   assert.equal(result.status, 0, result.stderr || result.error?.message);
-  assert.match(result.stdout, /Scranton offline runtime smoke passed/);
+  assert.match(result.stdout, /Scranton offline runtime smoke passed .*Pipeline sandbox protocol 1/);
   assert.notEqual(run(path.join(profile, 'missing-runtime.mjs')).status, 0);
 });
 
