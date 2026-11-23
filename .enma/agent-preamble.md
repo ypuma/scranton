@@ -43,7 +43,7 @@ dashboard look - no game/pixel-art/Office gimmicks, no hues (critical states use
 - `src/core/sandbox-docker/`: optional tool-only Docker executor, no credential/session/prompt projection. `host` mode requires explicit trust. CLI/API options: `.enma/run-options-contract.md`; streams/approvals: `.enma/agent-stream-contract.md` and `src/server/AGENT-ROUTES.md`.
 - Automatic chooses the first signed-in supported account: Claude, ChatGPT, Gemini, Antigravity, Vertex, with explicit newest markers in `llm/catalogue.js` (ChatGPT: user-pinned GPT-6.2 Sol). Selection is offline, account-aware and requires catalogue updates for new releases; custom providers require explicit selection.
 - Under node:test, set both `SCRANTON_CREDENTIALS_DIR` and `PI_CODING_AGENT_DIR` to project-local scratch directories before initialization (or inject explicit store/import paths). Never read a real profile or the real Hive. Use `SCRANTON_FAKE_MODE=1` + `SCRANTON_FAKE_SCENARIO` for child CLI/server tests or inject scripted LLMs in process.
-- Code, comments, CLI/UI text and SKILL.md prompts in English. README.md is German.
+- Code, comments, CLI/UI text, SKILL.md prompts, README.md and docs/guide/ are English.
 - Full suite: `node --test "test/**/*.test.js"` from the project root (also `npm.cmd test`).
 
 ## Gates (local, current runtime)

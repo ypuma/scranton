@@ -19,7 +19,7 @@ Read `docs/EVENTS.md` in full before changing event writers/readers, state.json,
 
 ## Language and style
 
-- Code, comments, CLI/UI text and role prompts are English; `README.md` is German.
+- Code, comments, CLI/UI text, role prompts, `README.md` and `docs/guide/` are English.
 - Every UI is professional, dark and strictly monochrome/grayscale. No hues, pixel art, games or Office gimmicks; critical states use inversion.
 - Match nearby code and existing helpers; keep comments few and short, explaining WHY rather than narrating code.
 - JavaScript is Node.js ESM (`"type": "module"`), using Node 24. No new runtime dependencies; use built-ins. The only approved runtime dependency is `@dbos-inc/dbos-sdk` for optional Postgres. Never import `@earendil-works/*`.

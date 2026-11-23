@@ -113,7 +113,7 @@ Google-Konto-OAuth erfolgt über **Google Antigravity**, mit vollständiger stat
 
 Gemini (`google`) verwendet **Add API key**; OAuth für dieses Provider-ID ist derzeit nicht implementiert. Antigravity bleibt unabhängig. Auch Claude/ChatGPT unterstützen API-Keys; Keys werden im eigenen Store gespeichert, niemals über die API zurückgegeben. Gespeicherte Zugänge haben Vorrang vor Umgebungs-Keys.
 
-Eigene Provider: ID, HTTPS-/Loopback-Basis-URL, API-Typ, Key und deklarierte oder per **Fetch models** ermittelte Modelle. Definition und Key liegen atomar im eigenen Store; bestehende IDs werden nicht überschrieben. Remove entfernt nur die eigene Deklaration und deren Zugang. Keine Änderungen an Pi-Dateien; [README](../README.md#anmelden).
+Eigene Provider: ID, HTTPS-/Loopback-Basis-URL, API-Typ, Key und deklarierte oder per **Fetch models** ermittelte Modelle. Definition und Key liegen atomar im eigenen Store; bestehende IDs werden nicht überschrieben. Remove entfernt nur die eigene Deklaration und deren Zugang. Keine Änderungen an Pi-Dateien. Details zur [Anmeldung](guide/providers-and-models.md#sign-in).
 
 Unter **Options → Models** gelten Rollenwahlen in jedem Team-Sandboxmodus. Leere Wahl übernimmt den Agent-Default, sonst **Automatic** (Claude → OpenAI → Gemini → Antigravity → Vertex, jeweils mit explizitem Neuestes-Modell-Marker in `llm/catalogue.js`; ChatGPT-Modus: `gpt-6.2-sol` nach Nutzerwahl, direktes OAuth und API-Keys: API-Katalog. Neue Releases benötigen Katalogupdates, keine Live-Modellabfrage). Ohne passendes Konto scheitert der Start; eigene Provider brauchen explizite Auswahl. Katalogpräsenz garantiert keine Modellberechtigung. Overrides gelten nur für den gestarteten Run.
 
