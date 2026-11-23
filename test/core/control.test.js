@@ -41,17 +41,27 @@ for (const scenario of ['blocked', 'infra']) {
 
 test('stale, mismatched and invalid answers are archived, never applied', { timeout: 20000 }, async (t) => {
   let hive;
-  const timers = [];
-  t.after(() => timers.forEach(clearTimeout));
+  let expected;
+  let pending = [];
+  const sendNext = () => writeFileAtomicSync(path.join(hive, 'human/response.json'), JSON.stringify(pending.shift()));
   const run = await runFake(t, { scenario: 'blocked', onBreaker: 'hive', beforeRun: (o) => { hive = o.hive.dir; }, listener: (e) => {
     if (e.type === 'run_started') writeFileAtomicSync(path.join(hive, 'human/response.json'), '{}');
+    // The rejection log is emitted after the archive rename. Don't overwrite the
+    // single response slot while the consumer is still polling the previous answer.
+    if (e.type === 'log' && e.message === 'Rejected stale, invalid or mismatched human response' && pending.length) sendNext();
     if (e.type !== 'hitl_request') return;
     const base = { v: 1, runId: e.runId, requestSeq: e.seq, decision: 'skip', ts: new Date().toISOString() };
     const bad = [{ ...base, runId: 'old' }, { ...base, requestSeq: 0 }, { ...base, decision: 'feedback', feedback: '' }, { ...base, decision: 'nope' }, { ...base, v: 2 }, { ...base, ts: 'bad' }];
-    [...bad, base].forEach((v, i) => timers.push(setTimeout(() => writeFileAtomicSync(path.join(hive, 'human/response.json'), JSON.stringify(v)), i * 500)));
+    expected = [{}, ...bad].map(v => JSON.stringify(v)).sort();
+    pending = [...bad, base];
+    sendNext();
   } });
   assert.equal(run.result.status, 'partial');
-  assert.equal(fs.readdirSync(path.join(hive, 'human/archive')).filter((f) => f.startsWith('rejected-')).length, 7);
+  assert.deepEqual(run.events.filter(e => e.type === 'hitl_response').map(e => e.decision), ['skip']);
+  const archive = path.join(hive, 'human/archive');
+  const rejected = fs.readdirSync(archive).filter(f => f.startsWith('rejected-'));
+  assert.equal(rejected.length, 7);
+  assert.deepEqual(rejected.map(f => fs.readFileSync(path.join(archive, f), 'utf8')).sort(), expected);
 });
 
 for (const waiting of [false, true]) {
