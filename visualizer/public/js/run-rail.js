@@ -59,6 +59,7 @@ export function createRunRail({
     oDuration: $('rail-outcome-duration'), oDurationFig: $('rail-outcome-duration-fig'), oCost: $('rail-outcome-cost'),
     oFiles: $('rail-outcome-files'), oFilesText: $('rail-outcome-files-text'), oChanges: $('rail-outcome-changes'),
     board: $('rail-board'), boardSummary: $('rail-board-summary'), boardNotice: $('rail-board-notice'),
+    access: $('rail-access'), accessAside: $('rail-access-aside'), accessList: $('rail-access-list'), writesTitle: $('rail-writes-title'), writes: $('rail-writes'),
   };
   const usage = createUsage({ height: 132, id: 'rail-usage' });
   e.usage.append(usage.el);
@@ -164,6 +165,31 @@ export function createRunRail({
     e.usageMore.setAttribute('aria-expanded', String(open));
   }
 
+  // What the run was allowed outside the project, and what it wrote there. Drawn again only when it changed.
+  function drawAccess() {
+    const a = view.access ?? null;
+    e.access.hidden = !a;
+    const key = JSON.stringify(a);
+    if (e.access.dataset.key === key) return;
+    e.access.dataset.key = key;
+    if (!a) return;
+    say(e.accessAside, a.label);
+    e.accessList.hidden = !a.entries.length;
+    e.accessList.replaceChildren(...a.entries.map((x) => {
+      const li = el('li', 'access-item');
+      li.dataset.status = x.status;
+      if (x.protected) li.dataset.protected = x.protected;
+      li.append(el('span', 'access-path mono', x.path), el('span', 'access-line', x.line));
+      if (x.quote) li.append(el('q', 'access-quote', x.quote));
+      return li;
+    }));
+    const n = a.writeCount;
+    e.writesTitle.hidden = !n;
+    e.writes.hidden = !n;
+    say(e.writesTitle, n ? `${plural(n, 'file')} written outside the project, not covered by undo` : '');
+    e.writes.replaceChildren(...a.writes.map((p) => el('li', 'mono', p)));
+  }
+
   // Where the rail is, and what follows from it for the toggle, the drawer and the page.
   function sync() {
     if (overlay && (media.matches || viewMode() !== 'chat' || !view?.runId)) e.dialog.close();
@@ -193,6 +219,7 @@ export function createRunRail({
     if (m !== 'open' && m !== 'overlay') return;
     say(e.status, [view.live ? 'live' : 'ended', agentsSummary(view.agents)].filter(Boolean).join(' · '));
     drawOutcome();
+    drawAccess();
     drawAgents();
     usage.render(view.usage, { live: view.live });
     say(e.boardSummary, boardSummary(view.board));

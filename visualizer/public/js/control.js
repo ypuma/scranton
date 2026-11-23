@@ -5,6 +5,7 @@ import {
   normalizeExecution, normalizeWorkflow, workflowText, displayName, AGENT_IDS, GATE_ROLES, LEGACY_GATES, ROLE_ID_RE, ROLE_TITLES,
   breakerTitle,
 } from './state.js';
+import { PERMISSIONS, PERMISSION_DEFAULT, permissionOf } from './access.js';
 
 // Every control route answers 403 without it, GETs included (/api/auth carries the PKCE sign-in address).
 export const CLIENT_HEADERS = Object.freeze({ 'X-Scranton-Client': '1' });
@@ -50,7 +51,7 @@ export const EXECUTION_DEFAULTS = Object.freeze({
 const DISABLED = Object.freeze({
   enabled: false, workspace: '', scenarios: [], run: null, lastExit: null, pendingHuman: null,
   execution: null, configurationError: null, models: null, workflow: null, agents: null, thinkingLevels: null, instances: {}, recoveryRequired: false,
-  orphan: null,
+  orphan: null, permissions: null,
 });
 const MODEL_ROLES = AGENT_IDS;
 
@@ -281,6 +282,8 @@ export function parseControl(doc) {
     instances,
     recoveryRequired,
     orphan,
+    // the permission mode a run that sends none gets (config file or SCRANTON_PERMISSIONS); null = not reported
+    permissions: permissionOf(doc.defaults?.permissions) ?? permissionOf(doc.defaults?.execution?.permissions),
   };
 }
 
@@ -376,6 +379,11 @@ export function executionDefaults(control) {
   };
 }
 
+// The permission mode the drawer starts with: the configured one, else Ask.
+export function permissionsDefault(control) {
+  return permissionOf(control?.permissions) ?? PERMISSION_DEFAULT;
+}
+
 // The "Ask before" choice: { shell, files, timeout } as the inputs hold it. -> { approvals } (null: nothing asked)
 // or { error, field }
 export function buildApprovals({ shell = false, files = false, timeout = '' } = {}) {
@@ -402,7 +410,7 @@ function intIn(raw, min, max) {
 
 // form: { request, workspace, maxCycles, maxStalledCycles, milestoneTokenBudget, noPlan, demo, scenario, delayMs, maxParallel,
 //         sandbox: 'scranton' | 'docker' | 'host', trustedHost, sandboxImage, sandboxNetwork: 'allow' | 'none',
-//         approveShell, approveFiles, approvalTimeout } as read from the inputs,
+//         approveShell, approveFiles, approvalTimeout, permissions: 'ask' | 'auto' | 'bypass' } as read from the inputs,
 //         models: { role: { provider, model } } already checked against the catalog (accounts.js buildModels),
 //         workflow: { stages } (none: an older form, the engine default stays in charge).
 // Host execution is only ever sent with the explicit confirmation; a demo sends no sandbox or approval fields because
@@ -467,6 +475,12 @@ export function buildRunRequest(form, control = DISABLED) {
     const a = buildApprovals({ shell: form.approveShell, files: form.approveFiles, timeout: form.approvalTimeout });
     if (a.error) return a;
     if (a.approvals) body.approvals = a.approvals;
+  }
+
+  // like the sandbox: an older form without the choice leaves the engine default in charge
+  if (!demo && form.permissions !== undefined) {
+    if (!PERMISSIONS.includes(form.permissions)) return { error: 'Pick Ask, Auto-approve or Bypass for the permissions.', field: 'permissions' };
+    body.permissions = form.permissions;
   }
 
   // a demo replays its scripted agents, whatever gates are picked
@@ -684,7 +698,7 @@ const ERROR_FIELDS = {
   request: 'request', workspace: 'workspace', maxcycles: 'maxCycles', maxstalledcycles: 'maxStalledCycles',
   milestonetokenbudget: 'milestoneTokenBudget', scenario: 'scenario', delayms: 'delayMs',
   maxparallel: 'maxParallel', trustedhost: 'trustedHost', sandboximage: 'sandboxImage', sandboxnetwork: 'sandboxNetwork', sandbox: 'sandbox',
-  models: 'models', workflow: 'workflow', gates: 'workflow', approvals: 'approvals',
+  models: 'models', workflow: 'workflow', gates: 'workflow', approvals: 'approvals', permissions: 'permissions',
 };
 
 // "... requires an explicit provider and model for dwight, angela; ..." -> ['dwight', 'angela'].
@@ -702,7 +716,7 @@ export function errorField(message, roles = MODEL_ROLES) {
   if (role && roles.includes(role[1].toLowerCase())) return `models.${role[1].toLowerCase()}`;
   // "approvals.timeoutSeconds ..." is about the wait, not the boxes
   if (/\btimeoutseconds\b/i.test(text)) return 'approvalTimeout';
-  const m = /\b(request|workspace|maxcycles|maxstalledcycles|milestonetokenbudget|scenario|delayms|maxparallel|trustedhost|sandboximage|sandboxnetwork|sandbox|models|workflow|gates|approvals)\b/i.exec(text);
+  const m = /\b(request|workspace|maxcycles|maxstalledcycles|milestonetokenbudget|scenario|delayms|maxparallel|trustedhost|sandboximage|sandboxnetwork|sandbox|models|workflow|gates|approvals|permissions)\b/i.exec(text);
   return m ? ERROR_FIELDS[m[1].toLowerCase()] : null;
 }
 

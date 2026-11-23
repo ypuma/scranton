@@ -579,6 +579,12 @@ body[data-scope="none"] .conn { display: none; }
 .approval-args { margin: 0; max-height: 9em; overflow: auto; padding: var(--s2) var(--s3); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-s); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
 .approval-card[data-late="true"] .approval-left { color: var(--text); font-weight: 600; }
 .approval-card .hitl-actions[hidden] + .approval-status { color: var(--text); }
+/* request_access: the reason, and what the human should know before allowing it, set off by a hairline */
+.approval-asked { margin: 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
+.approval-reason { margin: 0; max-height: 6em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
+.approval-warnings { list-style: none; margin: 0; padding: 0 0 0 var(--s3); border-left: 2px solid var(--text); display: grid; gap: var(--s1); }
+.approval-warn { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.approval-card[data-protected="credentials"] .approval-args, .approval-card[data-protected="scranton-state"] .approval-args { border-color: var(--text); }
 
 /* what a release could not check (Docker unreachable); shown once, after the panel is gone */
 .release-note { flex: none; margin: var(--s3) var(--gutter) 0; font-size: var(--fs-s); color: var(--text-2); overflow-wrap: anywhere; }
@@ -2240,6 +2246,17 @@ body[data-side] .rail { display: none; }
 .outcome-conflicts { display: grid; gap: var(--s1); margin: 0; padding: 0 0 0 var(--s4); min-width: 0; justify-self: stretch; }
 .outcome-conflicts li { overflow-wrap: anywhere; }
 .outcome-conflicts .mono { color: var(--text); }
+/* access outside the project: one entry per request, then the files written there */
+.access-list, .access-writes { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); min-width: 0; }
+.access-item { display: grid; gap: 0.125rem; min-width: 0; font-size: var(--fs-s); }
+.access-path { color: var(--text); overflow-wrap: anywhere; }
+.access-line { color: var(--text-2); overflow-wrap: anywhere; }
+.access-item[data-status="pending"] .access-line { color: var(--text); font-weight: 600; }
+.access-item[data-status="denied"] .access-path { color: var(--text-3); text-decoration: line-through; }
+.access-quote { padding-left: var(--s2); border-left: 1px solid var(--line-strong); color: var(--text-2); overflow-wrap: anywhere; }
+.access-writes-title { margin: var(--s2) 0 0; font-size: var(--fs-s); color: var(--text); font-weight: 600; }
+.access-writes { gap: var(--s1); padding-left: var(--s3); border-left: 2px solid var(--text); }
+.access-writes li { font-size: var(--fs-s); color: var(--text); overflow-wrap: anywhere; }
 #rail-usage[data-chart="closed"] .usage > :not(.usage-figs) { display: none; }
 .rail-sec > .msg-more { justify-self: start; margin: 0; }
 /* in the drawer of a narrow window the drawer scrolls, not the rail's content */

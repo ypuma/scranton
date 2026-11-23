@@ -216,7 +216,7 @@ test('run panel: a run that is over says how it ended first; a run that is going
 
   const html = read('index.html');
   const rail = html.slice(html.indexOf('<div class="rail-body" id="rail-body">'), html.indexOf('<aside class="side" id="side-panel"'));
-  assert.deepEqual([...rail.matchAll(/<h3 id="rail-([a-z]+)-title">/g)].map((m) => m[1]), ['outcome', 'agents', 'usage', 'board']);
+  assert.deepEqual([...rail.matchAll(/<h3 id="rail-([a-z]+)-title">/g)].map((m) => m[1]), ['outcome', 'access', 'agents', 'usage', 'board']);
   assert.match(rail, /<section class="rail-sec rail-outcome" id="rail-outcome" aria-labelledby="rail-outcome-title" hidden>/);
   assert.match(rail, /<button type="button" class="msg-more" id="rail-usage-more" aria-controls="rail-usage" aria-expanded="true" hidden>Hide chart<\/button>/);
   const js = read('js/run-rail.js');

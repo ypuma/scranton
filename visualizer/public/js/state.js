@@ -47,6 +47,16 @@ const VERDICT_WORD = { progress: 'Progress', stalled: 'No progress' };
 const CHECK_HOW = { no_change: 'nothing changed', repeat: 'same failure again' };
 // what the breaker tile and a milestone card say a trip is
 export const TRIP_WORD = { stalled: 'No progress', budget: 'Budget used', limit: 'Cycle limit' };
+// Access outside the project (.enma/user-orders-contract.md section 4): the requests and decisions kept, and the
+// distinct paths written outside it, newest last.
+export const ACCESS_MAX = 200;
+export const OUTSIDE_WRITES_MAX = 200;
+const ACCESS_MODES = ['read', 'write'];
+const ACCESS_PROTECTED = ['credentials', 'scranton-state'];
+const ACCESS_BY = ['order', 'mode', 'human', 'timeout'];
+const RUN_PERMISSIONS = ['ask', 'auto', 'bypass'];
+const ACCESS_BY_WORD = { order: 'you asked for it', mode: 'permission mode', human: 'by you', timeout: 'no answer in time' };
+const QUOTE_MAX = 200;
 
 const NAMES = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela', human: 'Human' };
 // what a gate card says about its result for the cycle
@@ -63,6 +73,7 @@ const KNOWN_TYPES = new Set([
   'agent_finished', 'cycle_result', 'circuit_breaker', 'hitl_request', 'hitl_response',
   'milestone_finished', 'run_finished', 'log', 'instance_started', 'chat_message', 'chat_delivery', 'milestone_integrated',
   'chat_command_rejected', 'gate_result', 'agent_message', 'run_reply', 'agent_usage', 'progress_check',
+  'access_request', 'access_decision', 'outside_write',
 ]);
 
 const CATEGORY = {
@@ -82,6 +93,9 @@ const CATEGORY = {
   progress_check: 'results',
   hitl_request: 'results',
   hitl_response: 'results',
+  access_request: 'results',
+  access_decision: 'results',
+  outside_write: 'tools',
 };
 
 const RUN_STATUS_BY_RESULT = { success: 'finished', partial: 'finished', aborted: 'aborted', failed: 'failed' };
@@ -324,6 +338,14 @@ export function createState() {
     // the files the run's agents wrote or edited (writtenFile): how many, each once, and the last WRITTEN_MAX of them
     written: [],
     writtenCount: 0,
+    // null: not reported (a run from before the permission modes)
+    permissions: null,
+    // access_request / access_decision: { key, instanceId, agent, path, mode, reason, protected, status, grant, by,
+    // quote, permissions, seq, ts }; status 'pending' until its decision
+    access: [],
+    // the paths written outside the project, each once ({ path, instanceId, ts }), and how many there were
+    outsideWrites: [],
+    outsideWriteCount: 0,
   };
 }
 
@@ -471,7 +493,59 @@ function apply(s, e) {
       if (Number.isInteger(e.maxFailedCycles) && e.maxFailedCycles > 0) s.maxFailedCycles = e.maxFailedCycles;
       s.maxStalledCycles = posInt(e.maxStalledCycles);
       s.milestoneTokenBudget = count(e.milestoneTokenBudget);
+      s.permissions = RUN_PERMISSIONS.includes(e.permissions) ? e.permissions : null;
       break;
+
+    case 'access_request': {
+      const list = (s.access ??= []);
+      const instanceId = text(e.instanceId) || null;
+      list.push({
+        key: `seq-${e.seq}`, instanceId, agent: text(e.agent) || (instanceId ? roleOf(instanceId, s) : null) || null,
+        path: text(e.path), mode: ACCESS_MODES.includes(e.mode) ? e.mode : 'read', reason: clip(e.reason, FAILURE_TEXT_MAX),
+        protected: ACCESS_PROTECTED.includes(e.protected) ? e.protected : null,
+        status: 'pending', grant: null, by: null, quote: '', permissions: null, seq: e.seq, ts: e.ts ?? null,
+      });
+      if (list.length > ACCESS_MAX) list.splice(0, list.length - ACCESS_MAX);
+      break;
+    }
+
+    case 'access_decision': {
+      if (e.decision !== 'granted' && e.decision !== 'denied') break;
+      const list = (s.access ??= []);
+      const instanceId = text(e.instanceId) || null;
+      const path = text(e.path);
+      // the request it answers; a decision taken without one (an order granted at once) stands on its own
+      let r = list.findLast((x) => x.status === 'pending' && x.instanceId === instanceId && x.path === path);
+      if (!r) {
+        r = {
+          key: `seq-${e.seq}`, instanceId, agent: instanceId ? roleOf(instanceId, s) ?? null : null, path,
+          mode: ACCESS_MODES.includes(e.mode) ? e.mode : 'read', reason: '', protected: null, seq: e.seq,
+        };
+        list.push(r);
+        if (list.length > ACCESS_MAX) list.splice(0, list.length - ACCESS_MAX);
+      }
+      r.status = e.decision;
+      // a human may narrow a write request to read
+      r.grant = e.decision === 'granted' && ACCESS_MODES.includes(e.mode) ? e.mode : null;
+      r.by = ACCESS_BY.includes(e.by) ? e.by : null;
+      r.quote = clip(e.quote, QUOTE_MAX);
+      r.permissions = RUN_PERMISSIONS.includes(e.permissions) ? e.permissions : null;
+      r.ts = e.ts ?? null;
+      if (r.permissions && !s.permissions) s.permissions = r.permissions;
+      break;
+    }
+
+    case 'outside_write': {
+      const path = text(e.path);
+      if (!path) break;
+      const list = (s.outsideWrites ??= []);
+      const at = list.findIndex((w) => w.path === path);
+      if (at >= 0) list.splice(at, 1);
+      else s.outsideWriteCount = (Number.isInteger(s.outsideWriteCount) ? s.outsideWriteCount : list.length) + 1;
+      list.push({ path, instanceId: text(e.instanceId) || null, ts: e.ts ?? null });
+      if (list.length > OUTSIDE_WRITES_MAX) list.splice(0, list.length - OUTSIDE_WRITES_MAX);
+      break;
+    }
 
     case 'plan_ready':
       s.milestones = (Array.isArray(e.milestones) ? e.milestones : []).map((m) => ({
@@ -1190,6 +1264,20 @@ export function describe(e, state = null) {
     }
     case 'hitl_request':
       return { tone: 'bad', text: `Human input requested: ${clip(e.reason, 140)}` };
+    case 'access_request': {
+      const mode = e.mode === 'write' ? 'write' : 'read';
+      const prot = ACCESS_PROTECTED.includes(e.protected) ? ` (protected: ${e.protected})` : '';
+      return { tone: 'warn', text: `${displayName(e.agent, state)} asks to ${mode} outside the project: ${clip(e.path, 240)}${prot}${e.reason ? ` - ${clip(e.reason, 140)}` : ''}` };
+    }
+    case 'access_decision': {
+      const granted = e.decision === 'granted';
+      const refused = !granted && e.by === 'mode';
+      const by = !refused && ACCESS_BY_WORD[e.by] ? ` (${ACCESS_BY_WORD[e.by]})` : '';
+      return { tone: granted ? 'good' : 'warn',
+        text: `Access ${granted ? 'granted' : refused ? 'refused' : 'denied'}: ${e.mode === 'write' ? 'write' : 'read'} ${clip(e.path, 240)}${by}${e.quote ? ` · "${clip(e.quote, 120)}"` : ''}` };
+    }
+    case 'outside_write':
+      return { tone: 'warn', text: `Wrote outside the project, not covered by undo: ${clip(e.path, 240)}` };
     case 'hitl_response':
       return { tone: 'warn', text: `Decision: ${e.decision}${e.feedback ? ` - ${clip(e.feedback, 120)}` : ''}` };
     case 'milestone_finished':

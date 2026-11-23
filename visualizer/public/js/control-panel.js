@@ -4,7 +4,7 @@ import {
   CLIENT_HEADERS, CONTROL_HEADERS, DECISION_LABEL, CONFIRM_DECISIONS, REQUEST_MAX, FEEDBACK_MAX,
   parseControl, buildRunRequest, buildHitlRequest, responseError, answeredInState, sentOutcome, hitlPhase,
   hitlAnnouncement, hitlTitle, openPending, exitToShow, exitSettleLeft, exitKey, runInterrupted, notificationFor, documentTitle, humanWhere,
-  errorField, modelErrorRoles, controlGates, clip, executionDefaults, exitHint, runModeOf,
+  errorField, modelErrorRoles, controlGates, clip, executionDefaults, permissionsDefault, exitHint, runModeOf,
   WORKFLOW_KEY, WORKFLOW_DEFAULT, WORKFLOW_ERROR, parseStoredWorkflow, workflowGates, buildWorkflow, configuredChoice, workflowNote,
   gateCatalog, roleIds, customNames, stagesOf, canReleaseOrphan, releaseOffered, recoveryText, recoveryTimes, startBlock,
 } from './control.js';
@@ -21,6 +21,8 @@ const DISMISS_KEY = 'scranton.exitDismissed';
 const REFRESH_ON = new Set(['run_started', 'run_finished', 'hitl_request', 'hitl_response']);
 const MOVED = 'Another chat is on screen now. Nothing was sent.';
 const SANDBOX_TEXT = { scranton: 'Scranton sandbox', docker: 'Docker sandbox', host: 'no sandbox' };
+// what the closed Options fold says about a permission mode other than Ask
+const PERMISSIONS_TEXT = { auto: 'auto-approves access', bypass: 'bypasses permissions' };
 
 const $ = (id) => document.getElementById(id);
 
@@ -86,6 +88,7 @@ export function createControlPanel({
     exec: $('exec-fields'), fParallel: $('f-parallel'), fScranton: $('f-sandbox-scranton'), fDocker: $('f-sandbox-docker'), fHost: $('f-sandbox-host'),
     trustRow: $('f-trust-row'), fTrusted: $('f-trusted'), dockerFields: $('docker-fields'), fImage: $('f-image'), fNetwork: $('f-network'),
     fApproveShell: $('f-approve-shell'), fApproveFiles: $('f-approve-files'), fApproveTimeout: $('f-approve-timeout'), approveWait: $('f-approve-wait'),
+    fPermAsk: $('f-permissions-ask'), fPermAuto: $('f-permissions-auto'), fPermBypass: $('f-permissions-bypass'),
     execNote: $('exec-note'), exitHint: $('exit-hint'), configError: $('config-error'),
     fModelMichael: $('f-model-michael'), fModelDwight: $('f-model-dwight'), fModelOscar: $('f-model-oscar'), fModelHank: $('f-model-hank'),
     fModelAngela: $('f-model-angela'),
@@ -120,6 +123,7 @@ export function createControlPanel({
   let parallelTouched = false;
   // the human picked a sandbox; the configured default no longer moves the radio buttons
   let sandboxTouched = false;
+  let permissionsTouched = false;
   let recoveryKey = '';
   // the orphan and its owner status: a heartbeat moving on is not news worth announcing
   let recoveryNews = '';
@@ -819,6 +823,7 @@ export function createControlPanel({
   }
 
   const sandboxPick = () => (e.fHost.checked ? 'host' : e.fDocker.checked ? 'docker' : 'scranton');
+  const permissionsPick = () => (e.fPermBypass.checked ? 'bypass' : e.fPermAuto.checked ? 'auto' : 'ask');
 
   function syncSandbox() {
     const demo = e.fDemo.checked;
@@ -831,6 +836,7 @@ export function createControlPanel({
     e.dockerFields.dataset.disabled = String(e.fImage.disabled);
     // the trusted host has no boundary that could hold the network back
     e.fNetwork.disabled = demo || host;
+    for (const r of [e.fPermAsk, e.fPermAuto, e.fPermBypass]) r.disabled = demo;
     e.fApproveShell.disabled = demo;
     e.fApproveFiles.disabled = demo;
     e.fApproveTimeout.disabled = demo || !(e.fApproveShell.checked || e.fApproveFiles.checked);
@@ -870,7 +876,7 @@ export function createControlPanel({
     const n = Number(e.fParallel.value.trim() || e.fParallel.placeholder);
     const ask = [e.fApproveShell.checked && 'commands', e.fApproveFiles.checked && 'file changes'].filter(Boolean).join(' and ');
     e.optionsSummary.textContent = gatesText === null ? `Demo with scripted agents${e.fScenario.value ? `: ${e.fScenario.value}` : ''}` : [
-      gatesText, SANDBOX_TEXT[sandboxPick()], !e.fHost.checked && e.fNetwork.checked && 'no network', ask && `asks before ${ask}`,
+      gatesText, SANDBOX_TEXT[sandboxPick()], !e.fHost.checked && e.fNetwork.checked && 'no network', PERMISSIONS_TEXT[permissionsPick()], ask && `asks before ${ask}`,
       n > 1 ? `up to ${n} milestones at once` : 'one milestone at a time', e.fNoPlan.checked && 'no planning',
     ].filter(Boolean).join(' \u00b7 ');
   }
@@ -890,6 +896,12 @@ export function createControlPanel({
       e.fScranton.checked = !e.fHost.checked && !e.fDocker.checked;
       // the acknowledgement belongs to a host the human sees; it is never given here
       if (!e.fHost.checked) e.fTrusted.checked = false;
+    }
+    if (!permissionsTouched) {
+      const p = permissionsDefault(control);
+      e.fPermAuto.checked = p === 'auto';
+      e.fPermBypass.checked = p === 'bypass';
+      e.fPermAsk.checked = p === 'ask';
     }
     // asked once per chat: a chat that already ran on the trusted host does not ask again
     keptTrust = isTrusted(store, key);
@@ -930,7 +942,7 @@ export function createControlPanel({
     request: 'fRequest', workspace: 'fWorkspace', maxCycles: 'fCycles', maxStalledCycles: 'fStalled', milestoneTokenBudget: 'fBudget',
     scenario: 'fScenario', delayMs: 'fDelay',
     maxParallel: 'fParallel', sandbox: 'fScranton', trustedHost: 'fTrusted', sandboxImage: 'fImage', sandboxNetwork: 'fNetwork',
-    approvals: 'fApproveShell', approvalTimeout: 'fApproveTimeout',
+    approvals: 'fApproveShell', approvalTimeout: 'fApproveTimeout', permissions: 'fPermAsk',
     models: 'fModelMichael', 'models.michael': 'fModelMichael', 'models.dwight': 'fModelDwight', 'models.oscar': 'fModelOscar',
     'models.hank': 'fModelHank', 'models.angela': 'fModelAngela',
   };
@@ -1035,6 +1047,12 @@ export function createControlPanel({
     syncOptions();
   });
   for (const box of [e.fApproveShell, e.fApproveFiles]) box.addEventListener('change', syncSandbox);
+  for (const r of [e.fPermAsk, e.fPermAuto, e.fPermBypass]) {
+    r.addEventListener('change', () => {
+      permissionsTouched = true;
+      syncOptions();
+    });
+  }
   e.fDemo.addEventListener('change', syncDemo);
   e.fNoPlan.addEventListener('change', syncSandbox);
   for (const r of [e.fScranton, e.fDocker]) {
@@ -1065,6 +1083,7 @@ export function createControlPanel({
       sandbox: sandboxPick(), trustedHost: e.fTrusted.checked,
       sandboxImage: e.fImage.value, sandboxNetwork: e.fNetwork.checked ? 'none' : 'allow', workflow: workflowChoice(),
       approveShell: e.fApproveShell.checked, approveFiles: e.fApproveFiles.checked, approvalTimeout: e.fApproveTimeout.value,
+      permissions: permissionsPick(),
     };
   }
 

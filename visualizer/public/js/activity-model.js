@@ -8,6 +8,7 @@ import {
 } from './state.js';
 import { stripBidi, formatDuration, runElapsed } from './format.js';
 import { ROLE_LABEL, TERMINAL, lastWorkNode, stepper } from './pipeline-model.js';
+import { accessView } from './access.js';
 
 // a /live answer older than this is no longer what the model is producing now
 export const LIVE_STALE_MS = 5000;
@@ -529,14 +530,14 @@ export function pipelineUsage(run, list = null) {
 
 // state: the reducer state (or its interrupted view). live: { doc, at } of the /live poll, or null.
 // runs: the chat's run list. -> { runId, live, agents, board, usage, outcome, written (how many files the agents
-// wrote or edited) }
+// wrote or edited), access (access.js accessView: the grants and the writes outside the project, or null) }
 export function teamRunView({ state, live = null, runs = [], now = Date.now() } = {}) {
   const going = ['planning', 'running', 'paused'].includes(state?.status);
   const agents = teamAgents(state, going ? liveTails(live, state?.runId, now) : null);
   const board = teamBoard(state, agents);
   return {
     runId: state?.runId ?? null, live: going, agents, board, usage: teamUsage(state, runs), outcome: going ? null : teamOutcome(state, board),
-    written: countWritten(state),
+    written: countWritten(state), access: accessView(state),
   };
 }
 

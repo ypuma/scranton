@@ -4,6 +4,7 @@
 import { stripBidi } from './format.js';
 import { responseError } from './control.js';
 import { displayName } from './state.js';
+import { ACCESS_TOOL, accessTitle, protectedOf } from './access.js';
 
 export const APPROVALS_POLL_MS = 1000;
 export const APPROVALS_RETRY_MS = 5000;
@@ -25,8 +26,9 @@ const clip = (t, max = ARGS_MAX) => (t.length > max ? `${t.slice(0, max - 3)}...
 // repeat across turns, so the durable position (or, from an older server, the deadline) tells two such calls apart.
 export const approvalKey = (a) => JSON.stringify([a.workflowId, a.step ?? a.deadline ?? null, a.callId]);
 
-// GET .../approvals -> [{ key, workflowId, step, runId, instanceId, agent, callId, tool, args, timeoutSeconds, deadline }],
-// or null for anything that is no approvals document.
+// GET .../approvals -> [{ key, workflowId, step, runId, instanceId, agent, callId, tool, args, timeoutSeconds, deadline,
+// protected }], or null for anything that is no approvals document. protected: a request_access path the server
+// flags (credentials | scranton-state), else null; the access_request event says it too.
 export function parseApprovals(doc) {
   const list = obj(doc)?.approvals;
   if (!Array.isArray(list)) return null;
@@ -39,6 +41,7 @@ export function parseApprovals(doc) {
       agent: clean(a.agent) || null, tool: clean(a.tool), args: obj(a.args) ?? {},
       timeoutSeconds: Number.isFinite(a.timeoutSeconds) && a.timeoutSeconds > 0 ? a.timeoutSeconds : null,
       deadline: Number.isFinite(Date.parse(str(a.deadline))) ? a.deadline : null,
+      protected: protectedOf(a.protected),
     };
     item.key = approvalKey(item);
     if (!out.some((x) => x.key === item.key)) out.push(item);
@@ -57,6 +60,7 @@ function pathsOf(args) {
 export function callView(a) {
   const tool = a?.tool ?? '';
   const args = obj(a?.args) ?? {};
+  if (tool === ACCESS_TOOL) return { title: accessTitle(args.mode), label: 'Path', text: clip(clean(args.path)) || '(no path given)' };
   const title = TOOL_TEXT[tool] ?? `Use ${tool || 'a tool'}`;
   if (SHELL.has(tool)) return { title, label: 'Command', text: clip(clean(args.command) || clean(args.cmd)) || '(no command given)' };
   if (FILES.has(tool)) {
@@ -101,13 +105,19 @@ export function askedText(a, state = null) {
   return `Approval needed: ${whoText(a, state)} wants to ${v.title.charAt(0).toLowerCase()}${v.title.slice(1)}: ${clip(v.text.split('\n')[0], 120)}`;
 }
 
-// POST .../approvals -> { body }
-export function buildVerdict(a, approved) {
-  return { body: { workflowId: a.workflowId, callId: a.callId, approved: approved === true } };
+// POST .../approvals -> { body }. grant: what an allowed request_access gets, 'read' | 'write'; write only when
+// write was asked, so anything else narrows to read. Other tools never send one.
+export function buildVerdict(a, approved, grant = null) {
+  const body = { workflowId: a.workflowId, callId: a.callId, approved: approved === true };
+  if (body.approved && a.tool === ACCESS_TOOL) body.grant = grant === 'write' && a.args?.mode === 'write' ? 'write' : 'read';
+  return { body };
 }
 
-export function verdictText(approved) {
-  return approved ? 'Approved - the agent goes on' : 'Denied - the agent is told so';
+// verdict: true / false, or the grant of an allowed request_access
+export function verdictText(verdict) {
+  if (verdict === 'read') return 'Read access allowed - the agent goes on';
+  if (verdict === 'write') return 'Write access allowed - the agent goes on';
+  return verdict ? 'Approved - the agent goes on' : 'Denied - the agent is told so';
 }
 
 export function verdictError(status, data) {

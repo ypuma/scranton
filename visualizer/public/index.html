@@ -430,6 +430,15 @@
           <button type="button" class="btn btn-small" id="rail-undo-force" aria-haspopup="dialog" hidden>Overwrite the later changes</button>
         </div>
       </section>
+      <section class="rail-sec rail-access" id="rail-access" aria-labelledby="rail-access-title" hidden>
+        <header class="rail-sec-head">
+          <h3 id="rail-access-title">Access</h3>
+          <span class="section-aside" id="rail-access-aside"></span>
+        </header>
+        <ul class="access-list" id="rail-access-list" aria-label="Access outside the project"></ul>
+        <p class="access-writes-title" id="rail-writes-title" hidden></p>
+        <ul class="access-writes" id="rail-writes" aria-labelledby="rail-writes-title" hidden></ul>
+      </section>
       <section class="rail-sec" aria-labelledby="rail-agents-title">
         <header class="rail-sec-head">
           <h3 id="rail-agents-title">Agents now</h3>
@@ -679,6 +688,13 @@
           <div class="field">
             <label class="check"><input type="checkbox" id="f-network" name="sandboxNetwork" aria-describedby="f-network-note"><span>Block network <span class="hint">agent commands get no network access</span></span></label>
             <span class="hint" id="f-network-note">On Windows the default Scranton sandbox cannot block the network: a run that asks for it does not start there. Docker can block it.</span>
+          </div>
+          <div class="field" role="radiogroup" aria-labelledby="f-permissions-label" aria-describedby="f-permissions-note" id="f-permissions">
+            <span class="field-label" id="f-permissions-label">Permissions</span>
+            <label class="check"><input type="radio" name="permissions" value="ask" id="f-permissions-ask" checked><span>Ask <span class="hint">default: reads of paths you named are allowed; other reads, writes and protected paths wait for your click</span></span></label>
+            <label class="check"><input type="radio" name="permissions" value="auto" id="f-permissions-auto"><span>Auto-approve <span class="hint">reads outside the project and tool approvals are allowed; writes and protected paths wait for your click</span></span></label>
+            <label class="check"><input type="radio" name="permissions" value="bypass" id="f-permissions-bypass"><span>Bypass <span class="hint">reads, writes and tool approvals are allowed; protected paths still wait for your click</span></span></label>
+            <span class="hint" id="f-permissions-note">Access outside the project. Changes there are not covered by undo. Credentials and Scranton's own state always need your click.</span>
           </div>
           <div class="field" role="group" aria-labelledby="f-approve-label" id="f-approve">
             <span class="field-label" id="f-approve-label">Ask before</span>
