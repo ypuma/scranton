@@ -1,6 +1,6 @@
 {
   "name": "project-scranton",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Multi-agent harness with Scranton's own durable agent runtime, deterministic tools and isolated execution.",
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,7 @@
     "app:prepare": "node scripts/prepare-desktop.mjs",
     "app:dev": "tauri dev",
     "app:build": "tauri build",
+    "app:release": "node scripts/release-updater.mjs",
     "app:icon": "node scripts/generate-desktop-icon.mjs && tauri icon src-tauri/icons/source.png",
     "test:packaging": "node --test \"test/packaging/*.test.js\""
   },

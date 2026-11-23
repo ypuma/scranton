@@ -8,7 +8,9 @@ const readJson = async (file) => JSON.parse(await read(file));
 
 test('desktop explicitly activates the narrowly scoped folder-picker capability', async () => {
   const config = await readJson('tauri.conf.json');
-  assert.deepEqual(config.app.security.capabilities, ['dashboard-notifications', 'dashboard-folder-picker', 'dashboard-window-controls']);
+  assert.deepEqual(config.app.security.capabilities, [
+    'dashboard-notifications', 'dashboard-folder-picker', 'dashboard-window-controls', 'dashboard-updates',
+  ]);
   const capability = await readJson('capabilities/dashboard-folder-picker.json');
   assert.equal(capability.identifier, 'dashboard-folder-picker');
   assert.equal(capability.local, false);
@@ -26,6 +28,13 @@ test('active desktop capabilities grant no unrelated dialog or filesystem comman
     permissions.push(...capability.permissions);
   }
   assert.deepEqual(permissions.sort(), [
+    'allow-update-check',
+    'allow-update-download',
+    'allow-update-install',
+    'allow-update-set-settings',
+    'allow-update-status',
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
     'core:window:allow-close',
     'core:window:allow-is-maximized',
     'core:window:allow-minimize',

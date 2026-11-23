@@ -32,7 +32,7 @@ test('desktop main window uses an undecorated, resizable, shadowed title bar', a
 test('desktop activates only the scoped title-bar capability with the exact window permissions', async () => {
   const config = await readJson('tauri.conf.json');
   assert.deepEqual(config.app.security.capabilities, [
-    'dashboard-notifications', 'dashboard-folder-picker', 'dashboard-window-controls',
+    'dashboard-notifications', 'dashboard-folder-picker', 'dashboard-window-controls', 'dashboard-updates',
   ], 'window-controls capability must be explicitly activated');
   const capability = await readJson('capabilities/dashboard-window-controls.json');
   assert.equal(capability.identifier, 'dashboard-window-controls');
@@ -42,13 +42,37 @@ test('desktop activates only the scoped title-bar capability with the exact wind
   assert.equal(capability.platforms, undefined);
   assert.deepEqual(capability.remote, { urls: ['http://127.0.0.1:*', 'http://localhost:*'] });
   assert.deepEqual(capability.permissions, permissions, 'only the five pinned window permissions are allowed');
-  const activeWindowPermissions = [];
+  const activeCorePermissions = [];
   for (const identifier of config.app.security.capabilities) {
     const active = await readJson(`capabilities/${identifier}.json`);
-    activeWindowPermissions.push(...active.permissions.filter((permission) =>
+    activeCorePermissions.push(...active.permissions.filter((permission) =>
       typeof permission !== 'string' || permission.startsWith('core:')));
   }
-  assert.deepEqual(activeWindowPermissions.sort(), [...permissions].sort());
+  assert.deepEqual(activeCorePermissions.sort(), [
+    ...permissions, 'core:event:allow-listen', 'core:event:allow-unlisten',
+  ].sort());
+});
+
+test('desktop updater capability exposes only app update commands and status events to the main loopback window', async () => {
+  const capability = await readJson('capabilities/dashboard-updates.json');
+  assert.equal(capability.identifier, 'dashboard-updates');
+  assert.equal(capability.local, false);
+  assert.deepEqual(capability.windows, ['main']);
+  assert.equal(capability.webviews, undefined);
+  assert.equal(capability.platforms, undefined);
+  assert.deepEqual(capability.remote, { urls: ['http://127.0.0.1:*'] });
+  assert.ok(!capability.permissions.some((permission) =>
+    (typeof permission === 'string' ? permission : permission.identifier)?.startsWith('updater:')),
+  'the webview must not receive updater plugin permissions');
+  assert.deepEqual([...capability.permissions].sort(), [
+    'allow-update-check',
+    'allow-update-download',
+    'allow-update-install',
+    'allow-update-set-settings',
+    'allow-update-status',
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
+  ]);
 });
 
 test('desktop keeps graceful close interception and maximized-state persistence', async () => {

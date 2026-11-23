@@ -7,6 +7,7 @@ import { desktopPlatform, assertNativeBuild, launchManifest, validateNodeDistrib
 import { bootstrap, runtimeFiles, validateRuntimeLock, runtimeCacheKey, runtimeFingerprint, runtimeCacheValid, lockedWheels } from './desktop-runtime.mjs';
 import { extractionScript } from './desktop-extract.mjs';
 import { stageTools } from './desktop-tools.mjs';
+import { cargoMetadata, licenseStager, pipelineLicenses, rustManifests, stageCrateLicenses, stageNodeLicense } from './desktop-licenses.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tauri = path.join(root, 'src-tauri');
@@ -180,7 +181,7 @@ export async function prepareDesktop() {
   if (process.env.SCRANTON_DESKTOP_STUB) throw new Error('Desktop stub builds are not distributable; unset SCRANTON_DESKTOP_STUB.');
   const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
     'tools/pipeline-complete.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
-    'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
+    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
   for (const input of inputs) {
     try { await fs.access(path.join(root, input)); }
     catch { throw new Error(`Required desktop input is missing: ${input}`); }
@@ -224,7 +225,13 @@ export async function prepareDesktop() {
   const helperBytes = await fs.readFile(path.join(cargoTarget, host.target, 'release', `scranton-sandbox-helper${host.platform === 'win32' ? '.exe' : ''}`));
   await fs.writeFile(path.join(tauri, 'binaries', helperFile), helperBytes, { mode: 0o755 });
   const sandboxHelper = { file: helperFile, sha256: sha256(helperBytes) };
-  const tools = await stageTools(root, app, host);
+  const stageLicense = licenseStager(app);
+  const nodeLicense = await stageNodeLicense(root, host, process.version, nodeDistribution.sha256, stageLicense);
+  const rust = {};
+  for (const manifest of rustManifests) {
+    rust[manifest] = await stageCrateLicenses(cargoMetadata(cargo, root, manifest, host.target), stageLicense);
+  }
+  const tools = await stageTools(root, app, host, stageLicense);
   const profile = path.join(root, '.scratch', 'packaging', 'empty-profile');
   await fs.mkdir(profile, { recursive: true });
   await run(node, [path.join(app, 'scripts/runtime-smoke.mjs')], {
@@ -232,8 +239,14 @@ export async function prepareDesktop() {
     env: { SystemRoot: process.env.SystemRoot, PATH: '', HOME: profile, USERPROFILE: profile, SCRANTON_CREDENTIALS_DIR: profile }
   });
   const pipeline = await preparePipeline(host);
+  const licenseIndex = 'licenses/index.json';
+  await fs.writeFile(path.join(app, licenseIndex), JSON.stringify({
+    target: host.target, node: nodeLicense, rust,
+    tools: Object.fromEntries(Object.entries(tools).map(([name, { version, licenses }]) => [name, { version, files: licenses }])),
+    pipeline: pipeline ? await pipelineLicenses(app, host, pipeline.pythonVersion, stageLicense) : null,
+  }, null, 2) + '\n');
   await fs.writeFile(path.join(app, 'packaging-manifest.json'), JSON.stringify({
-    platform: host.platform, arch: host.arch, target: host.target, pipeline,
+    platform: host.platform, arch: host.arch, target: host.target, pipeline, licenseIndex,
     node: process.version, nodeDistribution, runtime: { engine: 'scranton', smoke: 'scripts/runtime-smoke.mjs' }, sandboxHelper, tools,
     lockSha256: createHash('sha256').update(await fs.readFile(path.join(app, 'package-lock.json'))).digest('hex'),
     verification: 'Own runtime scripted completion smoke with bundled Node, empty PATH and isolated profile; no network or credentials'
