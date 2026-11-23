@@ -25,8 +25,8 @@ set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 npm.cmd run app:build
 ```
 
-Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.7.0 liegt der NSIS-Installer anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.7.0_x64-setup.exe`.
+Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.8.0 liegt der NSIS-Installer anschließend unter
+`src-tauri\target\release\bundle\nsis\Scranton_0.8.0_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
 
 ## Desktop-Updates
@@ -142,6 +142,23 @@ Prüfgrenze: Konfiguration, enge Capability und Rust-Kompilierung werden automat
 - Notification-Anzeige hängt von Windows-Berechtigungen/Benachrichtigungseinstellungen ab. In der Entwicklungsumgebung kann Windows PowerShell-Identität/Icons anzeigen; für die endgültige Anwendungsidentität den installierten Build verwenden.
 
 Capability-Syntax geprüft gegen die [Tauri-v2-Capabilities-Dokumentation](https://v2.tauri.app/security/capabilities/) (Abschnitt Remote API Access) und die beim Build generierten Schemas. Die Kennung `dev.scranton.desktop` vermeidet die macOS-Warnung zum `.app`-Suffix.
+
+## Lokales Diktieren
+
+Das Windows-x64-Paket enthält [whisper.cpp](https://github.com/ggml-org/whisper.cpp) 1.9.5 aus dem offiziellen Windows-x64-CPU-Build `b5454` (`whisper-bin-x64.zip`). `tools-lock.json` pinnt Version und SHA-256; `scripts/desktop-tools.mjs` prüft den Download für die Paketierung. Die MIT-Lizenz liegt im Paket unter `app/licenses/`. Scranton kompiliert whisper.cpp nicht selbst und benötigt dafür keine neuen npm- oder Rust-Abhängigkeiten.
+
+Die beiden ggml-Sprachmodelle stammen aus `ggerganov/whisper.cpp` auf Hugging Face. `voice-models.lock.json` pinnt für jedes Modell die unveränderliche Hugging-Face-Revision, die Dateigröße und den SHA-256-Hash. Scranton lädt das gewählte Modell bei Bedarf herunter, prüft Größe und Hash und übernimmt die fertige Datei atomar in den lokalen Cache `%LOCALAPPDATA%\dev.scranton.desktop\models\`. Die Modelle liegen nicht in den Roaming-App-Daten; mit installiertem Modell funktioniert die Transkription offline.
+
+Gemessen mit 10 Sekunden synthetischem deutschem Audio (Median aus drei CLI-Aufrufen mit jeweils neuem Prozess inklusive Modellladen; AMD Ryzen 7 5800X, acht Threads):
+
+| Modell | Downloadgröße | Laufzeit | Ergebnis |
+| --- | --- | --- | --- |
+| `small-q5_1` (schnell, Standard) | 190.085.487 Bytes (ca. 190 MB) | 3,67 s | Ein Wort falsch erkannt |
+| `large-v3-turbo-q5_0` (präzise) | 574.041.195 Bytes (ca. 574 MB) | 11,14 s | Alle Wörter korrekt erkannt |
+
+Für jede Transkription startet der Node-App-Server einen eigenen CPU-only-`whisper-cli`-Prozess **außerhalb der Agenten-Sandbox**. Es gibt keinen dauerhaft laufenden Whisper-Server. Die Prozessargumente legt ausschließlich Scranton fest; Agentenmodelle geben keine Argumente vor. Beim Beenden der App wird der Hilfsprozess mit dem Prozessbaum des Node-Servers beendet. Audio bleibt auf dem Rechner und wird nicht protokolliert. Die WAV-Datei liegt nur vorübergehend in einem privaten temporären Verzeichnis und wird in `finally` gelöscht. Die Transkription geht nur an den Aufrufer zurück.
+
+Die Desktop-Hülle erlaubt Mikrofonzugriff über das WebView2-Berechtigungsereignis ausschließlich für das Hauptfenster und dessen eigenen Serverursprung `http://127.0.0.1:<port>` mit dem tatsächlich verwendeten Port. Andere Ursprünge und andere Berechtigungsanfragen werden abgewiesen. Unter macOS und Linux ist das Diktieren noch nicht verfügbar. Die HTTP-Schnittstelle steht in [CONTROL.md](CONTROL.md#voice-dictation-api).
 
 ## Paketierung und Wartung
 

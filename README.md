@@ -338,6 +338,16 @@ Session-IDs identifizieren Instanzen, laden aber keine Pi-Sessiondateien. Kanoni
 
 `agent_chat({to,text})` ist ein eigenes Tool für exakte Instanz-IDs. Menschen verwenden den Instanz-Chat bzw. `POST /api/chat`. `queued` heißt nicht gesendet, `delivered` bestätigt die dauerhafte Steering-Queue, nicht Modellverarbeitung; `rejected` ist definitive Ablehnung, `unknown` bleibt unklar und wird nicht automatisch wiederholt. Kein eigenständiger `message`-CLI-Befehl. Details: [CONTROL.md](docs/CONTROL.md).
 
+## Diktieren
+
+In der Desktop-App hat jedes Freitextfeld eine Mikrofontaste. Klicke darauf, sprich und klicke erneut, um die Aufnahme zu beenden. Mit **Esc** brichst du ab. Nach spätestens **5 Minuten** stoppt die Aufnahme von selbst. Scranton fügt den erkannten Text in das Feld ein. Nichts wird automatisch gesendet: Prüfe den Text und sende ihn selbst ab.
+
+Beim ersten Diktieren bietet Scranton einen einmaligen Download für das gewählte Sprachmodell an. Du siehst den Fortschritt und kannst den Download abbrechen. Das schnelle Modell (Standard) ist etwa **190 MB** groß. Das präzise Modell ist etwa **574 MB** groß und merklich langsamer: Auf dem Testrechner brauchte es rund **11 Sekunden** für 10 Sekunden Sprache. Sobald das gewählte Modell geladen ist, funktioniert das Diktieren auch ohne Internet. Die Aufnahme verlässt deinen PC nicht und wird nicht dauerhaft gespeichert.
+
+Unter **Settings → Voice** kannst du **Auto** (Sprache automatisch erkennen, Standard), **Deutsch** oder **English** wählen, Modelle laden oder löschen und das Mikrofon testen. Diktieren gibt es derzeit unter **Windows (x64)**; **macOS und Linux** folgen später.
+
+Wenn Windows das Mikrofon blockiert, aktiviere unter **Windows-Einstellungen → Datenschutz → Mikrofon** die Option **„Desktop-Apps den Zugriff auf das Mikrofon erlauben“**.
+
 ## Circuit Breaker und Oberflächen
 
 Ein Meilenstein läuft weiter, solange er Fortschritt macht. Nach jedem fehlgeschlagenen Zyklus prüft Scranton zuerst ohne Modellaufruf: Hat Dwight nichts am gelieferten Dateistand geändert (`no_change`)? Oder ist der vollständige Fehlerbericht derselbe wie zuvor (`repeat`, ohne Unterschiede bei Groß-/Kleinschreibung und Leerraum)? Zahlen bleiben beim Vergleich erhalten: „5 Tests fehlgeschlagen“ und „3 Tests fehlgeschlagen“ sind nicht derselbe Fehlerbericht. Trifft eine Regel zu, zählt der Zyklus als ohne Fortschritt. Sonst beurteilt Michael anhand der letzten höchstens vier Zyklen und der Abnahmekriterien, ob der vorige Fehler behoben oder klar eingegrenzt wurde. Wiederholte oder wechselnde Varianten desselben Problems zählen nicht als Fortschritt; auch eine fehlgeschlagene Fortschrittsprüfung zählt als Stillstand.

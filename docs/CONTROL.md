@@ -40,6 +40,26 @@ HTML responses use a strict same-origin Content-Security-Policy (no inline scrip
 
 `runner` has the Node `spawn(executable, argv, options)` interface and returns a ChildProcess-compatible object (pid, stdout/stderr streams, error/close events).
 
+### Voice dictation API
+
+All `/api/voice/*` routes require a loopback TCP peer, a local Host header and `X-Scranton-Client: 1`. If `Origin` is present, it must match the server's own origin. The transcription route is an exception to the JSON content type and body limit above: it takes raw WAV audio with the limit below.
+
+- `GET /api/voice/status` → `{ available, reason?, engine: { installed, version }, models: [{ id, label, bytes, installed, download?: { received, total } }], model, language }`. `model` is the selected model ID. `language` is `auto`, `de` or `en`. `reason` is set when unavailable (e.g. `unsupported_platform`, `engine_missing`).
+- `POST /api/voice/settings` with JSON `{ model?, language? }` → the same status object. Settings are persisted in `<data>/voice.json`.
+- `POST /api/voice/models/:id/download` → `202`. Download progress is visible through the status route.
+- `DELETE /api/voice/models/:id/download` → `204`. Cancels a download or removes the model.
+- `POST /api/voice/transcribe?language=auto|de|en` takes an `audio/wav` body (16 kHz mono PCM16, at most 10 MB) and returns `{ text, language, durationMs, model }`.
+
+Transcription errors:
+
+| Status | Meaning |
+|---|---|
+| 409 `model_missing` | No model installed. |
+| 413 | Body too large. |
+| 415 | Not a 16 kHz mono PCM16 WAV. |
+| 503 `engine_unavailable` | No engine for this platform or engine not usable. |
+| 429 `busy` | Only one transcription at a time. |
+
 ## 4. App server (used by the Tauri shell)
 
 `scranton app-server [--port N (default 0)] [--data DIR | --hive DIR --workspace DIR]` starts the server with control enabled on 127.0.0.1, then prints exactly one line to stdout: `{"ready":true,"url":"http://127.0.0.1:<port>","pid":<pid>,"hive":"<abs>","workspace":"<abs>"}`. Die Ready-Felder `hive` und `workspace` sind auch im Registry-Modus nur die CLI-Konfigurationswerte, keine Auswahl eines Threads; Projekte/Chats über `/api/projects` abfragen. It exits cleanly (closing the server, stopping active child runs) on SIGINT/SIGTERM, on stdin EOF (the parent died) and on a line `quit` on stdin.
