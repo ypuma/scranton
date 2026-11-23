@@ -113,7 +113,8 @@ export function createCredentialStore({ env = process.env, dir = credentialsDire
           break;
         } catch (error) {
           if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error;
-          if (fs.existsSync(lock) && fs.lstatSync(lock).isSymbolicLink()) throw Error();
+          // A writer may release the lock between our failed mkdir and inspection.
+          if (fs.lstatSync(lock, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error();
           // Only remove the exact dead owner's claim. A competing reaper cannot remove a new claim.
           let entries;
           try { entries = fs.readdirSync(lock); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }

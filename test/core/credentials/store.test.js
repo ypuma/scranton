@@ -112,3 +112,22 @@ test('source override alone never permits a default credential directory', async
   await store.initialize({ env: f.env });
   assert.equal(store.dir, f.target);
 });
+
+test('a writer can acquire the lock after it disappears during inspection', async t => {
+  const f = fixture(t), c = await f.create();
+  const lock = path.join(f.target, '.lock');
+  fs.mkdirSync(lock);
+  const lstat = fs.lstatSync;
+  let released = false;
+  t.mock.method(fs, 'lstatSync', (file, ...args) => {
+    if (file === lock && !released) {
+      released = true;
+      fs.rmdirSync(lock); // The competing writer finished after mkdir returned EEXIST.
+    }
+    return lstat(file, ...args);
+  });
+  await c.store.transaction(data => { data.count = 1; });
+  assert.equal(released, true);
+  assert.equal(c.store.read().count, 1);
+  await c.close();
+});
