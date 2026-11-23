@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(any(windows, test))]
+mod permissions;
 mod platform;
 mod process_group;
 mod updater;
@@ -289,6 +291,11 @@ fn main() {
         ])
         .manage(Arc::new(Sidecar::default()))
         .setup(|app| {
+            #[cfg(windows)]
+            {
+                let window = app.get_webview_window("main").ok_or("Missing main webview")?;
+                permissions::install(&window, app.state::<Arc<Sidecar>>().inner().clone())?;
+            }
             app.manage(updater::Updates::new(app.handle())?);
             #[cfg(target_os = "macos")]
             app.set_menu(Menu::default(app.handle())?)?;

@@ -1,6 +1,6 @@
 [package]
 name = "scranton-desktop"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.90"
 
@@ -21,3 +21,7 @@ time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["time"] }
 reqwest = { version = "0.13", default-features = false }
 uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
