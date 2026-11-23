@@ -93,7 +93,7 @@ export function stateLine(s) {
     }
     case 'ready': return { text: readyText(s), tone: '' };
     case 'installing': return { text: `Installing ${named(s)}. Scranton restarts when it is done.`, tone: 'busy' };
-    case 'unsupported': return { text: 'No update for this platform yet', tone: '' };
+    case 'unsupported': return { text: 'No automatic update for this install type. Update manually from the releases page.', tone: '' };
     case 'error': return { text: s.error ? `Update failed: ${s.error}` : 'Update failed', tone: 'error' };
     default: return { text: 'Not checked yet', tone: '' };
   }

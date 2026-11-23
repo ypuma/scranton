@@ -4,7 +4,7 @@ use std::{
     fs, io::{self, Read, Write}, path::{Path, PathBuf}, sync::Mutex,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{utils::config::BundleType, AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_updater::{Error as PluginError, Update, UpdaterExt};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -124,6 +124,7 @@ impl Updates {
             status.settings.auto_install = false;
             status.failure("Could not read update settings.");
         }
+        if !supports_auto_update() { status.change(Phase::Unsupported); }
         Ok(Self { inner: Mutex::new(Inner { status, update: None }), settings_path, cache })
     }
 }
@@ -222,8 +223,24 @@ fn cached_bytes(app: &AppHandle, update: &Update) -> Option<Vec<u8>> {
     }
 }
 
+// Use the same bundle marker as the locked updater plugin. A Linux DEB (or unmarked
+// binary) is manual-only even if a future feed accidentally includes a bare Linux key.
+fn supports_install_type(os: &str, bundle: Option<BundleType>) -> bool {
+    os != "linux" || matches!(bundle, Some(BundleType::AppImage))
+}
+fn supports_auto_update() -> bool {
+    supports_install_type(std::env::consts::OS, tauri::utils::platform::bundle_type())
+}
+
 enum Checked { Available(Box<Update>), UpToDate, Unsupported, Failed(&'static str) }
+fn check_error(error: PluginError) -> Checked {
+    match error {
+        PluginError::TargetNotFound(_) | PluginError::TargetsNotFound(_) | PluginError::UnsupportedOs | PluginError::UnsupportedArch => Checked::Unsupported,
+        _ => Checked::Failed("Could not check for updates. Check your connection and try again."),
+    }
+}
 async fn check_release(app: &AppHandle, timeout: Duration) -> Checked {
+    if !supports_auto_update() { return Checked::Unsupported; }
     let updater = app.updater_builder().timeout(timeout)
         // Ask the plugin to resolve the target even for an equal/older release; enforce precedence below.
         .version_comparator(|_, _| true)
@@ -241,8 +258,7 @@ async fn check_release(app: &AppHandle, timeout: Duration) -> Checked {
         Ok(Some(update)) if update.download_url.scheme() != "https" => Checked::Failed("The update download URL must use HTTPS."),
         Ok(Some(update)) => Checked::Available(Box::new(update)),
         Ok(None) => Checked::UpToDate,
-        Err(PluginError::TargetNotFound(_) | PluginError::TargetsNotFound(_) | PluginError::UnsupportedOs | PluginError::UnsupportedArch) => Checked::Unsupported,
-        Err(_) => Checked::Failed("Could not check for updates. Check your connection and try again."),
+        Err(error) => check_error(error),
     }
 }
 
@@ -325,6 +341,7 @@ fn spawn_download(app: AppHandle, mut update: Update) {
 }
 
 pub(crate) async fn periodic(app: AppHandle) {
+    if !supports_auto_update() { return; }
     tokio::time::sleep(Duration::from_secs(30)).await;
     let mut interval = tokio::time::interval(Duration::from_secs(6 * 60 * 60));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -457,6 +474,23 @@ mod tests {
 
     fn status() -> Status {
         Status { current: "1.0.0".into(), settings: Settings::default(), state: Phase::Idle, available: None, progress: None, last_check: None, error: None, busy: None }
+    }
+
+    #[test]
+    fn linux_only_appimage_can_auto_update() {
+        for bundle in [None, Some(BundleType::Deb), Some(BundleType::Rpm)] {
+            assert!(!supports_install_type("linux", bundle));
+        }
+        assert!(supports_install_type("linux", Some(BundleType::AppImage)));
+        assert!(supports_install_type("windows", Some(BundleType::Nsis)));
+        assert!(supports_install_type("macos", Some(BundleType::App)));
+    }
+
+    #[test]
+    fn missing_installer_targets_are_unsupported_not_errors() {
+        let result = check_error(PluginError::TargetsNotFound(vec!["linux-x86_64-deb".into(), "linux-x86_64".into()]));
+        assert!(matches!(result, Checked::Unsupported));
+        assert!(matches!(check_error(PluginError::TargetNotFound("darwin-aarch64".into())), Checked::Unsupported));
     }
 
     #[test]

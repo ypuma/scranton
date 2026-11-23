@@ -61,7 +61,7 @@ test('status: every state has its line, and a status object is read tolerantly',
     downloading: { text: 'Downloading Scranton 0.7.0', tone: 'busy' },
     ready: { text: 'Scranton 0.7.0 is ready - installs at the next start', tone: '' },
     installing: { text: 'Installing Scranton 0.7.0. Scranton restarts when it is done.', tone: 'busy' },
-    unsupported: { text: 'No update for this platform yet', tone: '' },
+    unsupported: { text: 'No automatic update for this install type. Update manually from the releases page.', tone: '' },
     error: { text: 'Update failed: offline', tone: 'error' },
   });
   assert.equal(stateLine(parseStatus(offer('downloading', { progress: { downloaded: 450, total: 1000 } }))).text, 'Downloading Scranton 0.7.0: 45%');
@@ -221,6 +221,17 @@ test('panel: a refused command keeps the saved setting and says why; one command
   assert.deepEqual([$off('prefs-update-state').textContent, $off('prefs-update-state').dataset.tone], ['Update failed: Could not check for updates. Check your connection and try again.', 'error']);
   assert.equal($off('prefs-update-action').textContent, '');
   assert.equal($off('prefs-update-check').disabled, false, 'the next check can be asked for');
+});
+
+test('panel: unsupported installs get manual guidance, not a failed check', async () => {
+  const shell = fakeShell({ update_status: status(), update_check: () => status({ state: 'unsupported' }) });
+  const { $ } = await panel(shell);
+  await $('prefs-update-check').fire('click');
+  assert.match($('prefs-update-state').textContent, /Update manually from the releases page/);
+  assert.equal($('prefs-update-state').dataset.tone, '');
+  assert.equal($('prefs-update-action').textContent, '');
+  assert.equal($('prefs-update-download').hidden, true);
+  assert.equal($('prefs-update-install').hidden, true);
 });
 
 test('events: update-status re-renders whatever state it carries; a malformed payload is ignored', async () => {

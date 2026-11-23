@@ -102,6 +102,13 @@ test('latest.json includes notes, an ISO date and the signed Windows platform on
   });
 });
 
+test('manifest encodes asset basenames and rejects duplicate updater keys', () => {
+  const artifact = { platform: 'windows-x86_64', filename: 'Scranton + 0.8.2.exe', signature: 'signature' };
+  assert.equal(latestManifest({ version: '0.8.2', artifacts: [artifact] }).platforms[artifact.platform].url,
+    'https://github.com/ypuma/scranton/releases/download/v0.8.2/Scranton%20%2B%200.8.2.exe');
+  assert.throws(() => latestManifest({ version: '0.8.2', artifacts: [artifact, artifact] }), /Duplicate updater platform key/);
+});
+
 test('release refuses version mismatches, including a matching version outside [package]', async t => {
   const directory = await fixtureDirectory(t);
   const desktop = path.join(directory, 'src-tauri');
@@ -120,7 +127,7 @@ test('release refuses version mismatches, including a matching version outside [
 });
 
 test('inherited signing variables are stripped regardless of Windows env casing', () => {
-  assert.deepEqual(withoutSigningEnv({ tauri_signing_private_key: 'ignored', TAURI_SIGNING_PRIVATE_KEY_PATH: 'ignored', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'ignored', Path: 'kept' }), { Path: 'kept' });
+  assert.deepEqual(withoutSigningEnv({ tauri_signing_private_key: 'ignored', TAURI_SIGNING_PRIVATE_KEY_PATH: 'ignored', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'ignored', tauri_private_key: 'ignored', TaUrI_PrIvAtE_KeY_PaSsWoRd: 'ignored', Path: 'kept' }), { Path: 'kept' });
 });
 
 test('verifier accepts a file signed with the installed Tauri CLI', async t => {
