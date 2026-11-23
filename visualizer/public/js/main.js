@@ -33,6 +33,7 @@ import { createSidePanel } from './side-panel.js';
 import { renderPlan, renderPlanBrief } from './plan-render.js';
 import { createViewBar } from './viewbar.js';
 import { createSettings } from './settings-panel.js';
+import { createDictation } from './dictation.js';
 import { createUsage } from './usage-chart.js';
 import { createRunRail } from './run-rail.js';
 import { createLivePoll } from './live-poll.js';
@@ -243,7 +244,8 @@ function renderThinking(rv) {
   thinking.render({ runId: rv.runId, columns, off: !saved, live: rv.live });
 }
 createFolds($('dash'));
-createSettings();
+// the control panel comes later; without one a model is deleted without asking
+createSettings({ voice: createDictation(), confirm: (opts) => (control ? control.confirm(opts) : opts.action()) });
 createViewBar();
 const side = createSidePanel({ onChange: () => renderActivity() });
 const boards = {

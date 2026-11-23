@@ -189,6 +189,27 @@ h1, h2, h3 { margin: 0; }
 }
 .field > label .hint, .hitl-feedback > label .hint, .provider-manual-label .hint, .login-code > label .hint { margin-left: var(--s2); }
 .field-count { justify-self: end; font-size: var(--fs-xs); }
+.field-foot { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.field-foot .field-count { margin-left: auto; }
+
+/* Dictation (dictation.js): the mic of a text field, inverted while it records, with a level and the time; one
+   line of news that is cut short rather than wrapped, the whole of it in its title */
+.dictate { display: inline-flex; align-items: center; gap: var(--s2); flex: 0 1 auto; min-width: 0; }
+.dictate-mic { width: 1.75rem; height: 1.75rem; }
+.dictate-mic[aria-pressed="true"], .dictate-mic[aria-pressed="true"]:hover { background: var(--text); color: var(--bg); }
+.dictate-live { display: inline-flex; align-items: center; gap: var(--s2); flex: none; }
+.dictate-meter { display: inline-grid; grid-template-columns: repeat(6, 0.1875rem); align-items: end; gap: 0.125rem; height: 0.875rem; }
+.dictate-meter i { display: block; border-radius: 1px; background: var(--line-strong); }
+.dictate-meter i:nth-child(1) { height: 30%; }
+.dictate-meter i:nth-child(2) { height: 44%; }
+.dictate-meter i:nth-child(3) { height: 58%; }
+.dictate-meter i:nth-child(4) { height: 72%; }
+.dictate-meter i:nth-child(5) { height: 86%; }
+.dictate-meter i:nth-child(6) { height: 100%; }
+.dictate-meter i[data-fill="full"] { background: var(--text); }
+.dictate-time { min-width: 2.25rem; font-size: var(--fs-xs); color: var(--text); }
+.dictate .dictate-note { min-width: 0; max-width: 20rem; margin: 0; font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.dictate-offer, .dictate-cancel { flex: none; font-size: var(--fs-xs); }
 textarea, input[type="text"], input[type="password"], input[type="number"], select {
   width: 100%;
   min-width: 0;
@@ -675,7 +696,7 @@ body[data-run="none"] .followup:not([data-off="true"]) textarea { min-height: 6.
 .followup[data-off="true"] .composer { grid-column: 2; grid-row: 1; padding: 0; border: 0; background: none; }
 .followup[data-off="true"] .followup-hint { grid-column: 1; grid-row: 1; padding: 0; }
 .followup[data-off="true"] > .hitl-status, .followup[data-off="true"] > .context-line { grid-column: 1 / -1; }
-.followup[data-off="true"] :is(textarea, #followup-count, #followup-options) { display: none; }
+.followup[data-off="true"] :is(textarea, #followup-count, #followup-options, .dictate) { display: none; }
 
 /* the guidance line when there is no run; a chat's composer already says it */
 .empty { flex: none; margin: var(--s4) var(--gutter) 0; color: var(--text-2); }
@@ -1320,8 +1341,8 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .chat-form {
   flex: none;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "to sel count" "text text send" "hint hint hint";
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "to sel mic count" "text text text send" "hint hint hint hint";
   align-items: end;
   gap: var(--s1) var(--s2);
   padding: var(--s2) var(--s3);
@@ -1335,11 +1356,12 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 #chat-send { grid-area: send; height: 2rem; }
 #chat-block { grid-area: hint; margin: 0; }
 #chat-count { grid-area: count; justify-self: end; font-size: var(--fs-xs); }
+.chat-form .dictate { grid-area: mic; align-self: center; }
 .chat-form:focus-within textarea { height: 5.5rem; resize: vertical; }
 /* Ctrl+Enter and the counter matter while typing */
 .chat-form:not(:focus-within):not([data-off="true"]) :is(#chat-block, #chat-count) { display: none; }
 /* folded to its reason only while nobody is using it: focus or a draft keeps the fields where they are */
-.chat-form[data-off="true"]:not(:focus-within):has(textarea:placeholder-shown) :is(.chat-to-label, select, textarea, #chat-send, #chat-count) { display: none; }
+.chat-form[data-off="true"]:not(:focus-within):has(textarea:placeholder-shown) :is(.chat-to-label, select, textarea, #chat-send, #chat-count, .dictate) { display: none; }
 
 /* news about a sent message sits outside the tab panels, so it is seen and announced from any tab.
    Never display:none: a live region that is not rendered announces nothing. On another tab it shows
@@ -1645,6 +1667,7 @@ dialog[open]::backdrop { opacity: 1; }
 .agent-tools .check { align-items: baseline; }
 .agent-instruction-foot { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); }
 .agent-instruction-foot .field-count { margin-left: auto; }
+.agent-instruction-foot .dictate { align-self: center; }
 .agent-instruction-foot .link-btn { font-size: var(--fs-s); }
 .agent-form .field-count[data-tone="error"] { color: var(--bad); font-weight: 600; }
 #create-id-hint[data-tone="error"] { color: var(--bad); font-weight: 600; }
@@ -2218,6 +2241,23 @@ body[data-side] .rail { display: none; }
 .update-notes { max-height: 14rem; overflow: auto; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text-2); font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; }
 .update-link { justify-self: start; color: var(--text); font-weight: 600; text-underline-offset: 2px; }
 .update-link:hover { color: var(--text-2); }
+/* Voice: the state of the local speech engine, one row per model, the level of the microphone test */
+.voice-app { display: grid; gap: var(--s3); min-width: 0; }
+.voice-state { margin: 0; color: var(--text); }
+.voice-models { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.voice-model { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); }
+.voice-model:has(input:checked) { border-color: var(--text-3); }
+.voice-model .check { flex: 1 1 12rem; min-width: 0; }
+.voice-model-name { font-weight: 600; }
+.voice-model-actions { display: flex; align-items: center; gap: var(--s2); flex: none; }
+.voice-progress { display: inline-flex; align-items: center; gap: var(--s2); }
+.voice-progress-text { min-width: 2.5rem; font-size: var(--fs-xs); color: var(--text-2); text-align: right; }
+.voice-meter { display: inline-grid; grid-template-columns: repeat(20, 0.3125rem); gap: 0.125rem; }
+.voice-meter i { display: block; height: 0.375rem; border-radius: 1px; background: var(--line-strong); }
+.voice-meter i[data-fill="full"] { background: var(--text-2); }
+.voice-test { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.voice-test .voice-meter i { height: 0.5rem; }
+.voice-test .voice-meter i[data-fill="full"] { background: var(--text); }
 
 /* ------------------------------------------------------------ live activity: the run rail, lanes, usage */
 /* The rail of the Chat view: a third column beside the transcript, with a scroll of its own. Where it is comes

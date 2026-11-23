@@ -675,7 +675,11 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
       text.disabled = deciding?.gate === 'plan' && !deciding.error;
       label.htmlFor = text.id;
       text.addEventListener('input', () => { comment = text.value; });
-      field.append(label, text);
+      // dictation.js fills it in once it is on the page
+      const mic = el('span', 'dictate');
+      mic.dataset.dictate = text.id;
+      mic.hidden = true;
+      field.append(label, text, mic);
       const revised = gate.revision > 0;
       const detail = revised && gate.replanReason ? [el('p', 'pv-text pv-reason', `Why: ${gate.replanReason}`), flags, field] : [flags, field];
       root.append(gateBox('plan', revised ? `Revised plan (revision ${gate.revision}) waits for your approval` : 'The plan waits for your approval', detail, [

@@ -1,11 +1,12 @@
 // The Settings drawer: appearance, notifications and what the New run form starts with, all kept on this
-// computer and applied as they change, and the desktop app's updates. Accounts and agents keep their own drawers;
-// Settings opens them.
+// computer and applied as they change, voice dictation, and the desktop app's updates. Accounts and agents keep
+// their own drawers; Settings opens them.
 import { store } from './control-panel.js';
 import { WORKFLOW_KEY, parseStoredWorkflow } from './control.js';
 import { PREFS_KEY, RUN_DEFAULTS_KEY, parsePrefs, applyPrefs, parseParallel, parseRunDefaults } from './prefs.js';
 import { relayTarget, relayCommands, mayBeRelay, relayPaired } from './phone-relay.js';
 import { createUpdates } from './update-panel.js';
+import { createVoiceSettings } from './voice-panel.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -16,7 +17,8 @@ export function loadPrefs() {
   return prefs;
 }
 
-export function createSettings() {
+// voice: the dictation of the page (dictation.js); confirm: the shared confirm dialog
+export function createSettings({ voice = null, confirm = null } = {}) {
   const e = {
     dialog: $('prefs-dialog'), open: $('bar-settings'),
     density: $('prefs-density'), motion: $('prefs-motion'), color: $('prefs-color'),
@@ -52,6 +54,8 @@ export function createSettings() {
     });
   }
   const updates = createUpdates();
+  const voicePrefs = voice ? createVoiceSettings({ voice, confirm }) : null;
+  $('prefs-voice').hidden = !voicePrefs;
   let prefs = loadPrefs();
   const PARALLEL_HINT = e.parallelHint.textContent;
 
@@ -142,13 +146,17 @@ export function createSettings() {
     fill();
     checkPaired();
     updates.refresh();
+    voicePrefs?.refresh();
     e.dialog.showModal();
     e.dialog.querySelector('[data-close]').focus();
   });
   for (const b of e.dialog.querySelectorAll('[data-close]')) b.addEventListener('click', () => e.dialog.close());
   // a press on the scrim beside the drawer closes it
   e.dialog.addEventListener('click', (event) => { if (event.target === e.dialog) e.dialog.close(); });
-  e.dialog.addEventListener('close', () => e.open.focus());
+  e.dialog.addEventListener('close', () => {
+    voicePrefs?.stop();
+    e.open.focus();
+  });
   fill();
 
   return { prefs: () => prefs };

@@ -208,6 +208,7 @@
       <label for="hitl-text">Feedback for Dwight <span class="hint">sent to his inbox, then the milestone continues</span></label>
       <textarea id="hitl-text" rows="4" maxlength="16000" aria-describedby="hitl-count"></textarea>
       <div class="form-foot">
+        <span class="dictate" data-dictate="hitl-text" hidden></span>
         <span class="hint mono" id="hitl-count">0 / 16000</span>
         <button type="button" class="btn" id="hitl-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary" id="hitl-send">Send feedback</button>
@@ -260,6 +261,7 @@
     <div class="composer">
       <textarea id="followup-text" rows="2" maxlength="32768" aria-describedby="followup-hint followup-count" placeholder="Ask a question or describe a task..."></textarea>
       <div class="followup-actions">
+        <span class="dictate" data-dictate="followup-text" hidden></span>
         <span class="hint mono" id="followup-count">0 / 32768</span>
         <button type="button" class="btn btn-small" id="followup-options" aria-haspopup="dialog">Options</button>
         <button type="submit" class="btn btn-primary btn-small" id="followup-send">Follow up</button>
@@ -283,6 +285,7 @@
         <label class="steer-to" for="chat-view-to">To</label>
         <select id="chat-view-to" class="mono" aria-describedby="chat-view-block"></select>
         <span class="hint mono" id="chat-view-count">0 / 16000</span>
+        <span class="dictate" data-dictate="chat-view-input" hidden></span>
         <button type="submit" class="btn btn-primary btn-small" id="chat-view-send">Send</button>
       </div>
     </div>
@@ -385,6 +388,7 @@
           <div class="chat-to-row">
             <label class="chat-to-label" for="chat-to">To</label>
             <select id="chat-to" class="mono" aria-describedby="chat-block"></select>
+            <span class="dictate" data-dictate="chat-text" hidden></span>
             <span class="hint mono" id="chat-count">0 / 16000</span>
           </div>
           <label class="sr-only" for="chat-text">Message</label>
@@ -605,6 +609,36 @@
           </div>
           <p class="hint prefs-note" id="prefs-links-note" hidden>Accounts and agents can be changed where this page controls runs: the desktop app or the app server.</p>
         </fieldset>
+        <fieldset class="exec" id="prefs-voice" hidden>
+          <legend>Voice</legend>
+          <p class="form-status voice-state" id="prefs-voice-state" role="status" aria-live="polite"></p>
+          <div class="voice-app" id="prefs-voice-app" hidden>
+            <div class="field">
+              <span class="field-label" id="prefs-voice-language-label">Language</span>
+              <div class="segmented prefs-seg" role="group" aria-labelledby="prefs-voice-language-label" aria-describedby="prefs-voice-language-hint" id="prefs-voice-language">
+                <button type="button" class="seg" data-value="auto" aria-pressed="true">Auto</button>
+                <button type="button" class="seg" data-value="de" aria-pressed="false" lang="de">Deutsch</button>
+                <button type="button" class="seg" data-value="en" aria-pressed="false">English</button>
+              </div>
+              <span class="hint" id="prefs-voice-language-hint">Auto recognizes the language of each dictation.</span>
+            </div>
+            <div class="field" role="radiogroup" aria-labelledby="prefs-voice-models-label">
+              <span class="field-label" id="prefs-voice-models-label">Speech model</span>
+              <ul class="voice-models" id="prefs-voice-models"></ul>
+            </div>
+            <p class="form-status prefs-note" id="prefs-voice-action" role="status" aria-live="polite"></p>
+            <div class="field">
+              <span class="field-label">Microphone test</span>
+              <div class="voice-test">
+                <button type="button" class="btn btn-small" id="prefs-voice-test" aria-pressed="false" aria-describedby="prefs-voice-test-hint">Test microphone</button>
+                <span class="voice-meter" id="prefs-voice-test-meter" aria-hidden="true"></span>
+              </div>
+              <span class="form-status" id="prefs-voice-test-note" role="status" aria-live="polite"></span>
+              <span class="hint" id="prefs-voice-test-hint">Shows the input level only. Nothing is recorded or sent.</span>
+            </div>
+            <p class="hint prefs-note">Speech becomes text on this computer. The audio never leaves it and is not kept; after the one download, dictation works offline.</p>
+          </div>
+        </fieldset>
         <fieldset class="exec" id="prefs-updates">
           <legend>Updates</legend>
           <div class="update-app" id="prefs-update-app" hidden>
@@ -677,7 +711,10 @@
         <div class="field team-only">
           <label for="f-request">Request <span class="hint" id="f-request-opt" hidden>optional for a demo</span></label>
           <textarea id="f-request" name="request" rows="5" maxlength="32768" aria-describedby="f-request-count" placeholder="What should the agents build?"></textarea>
-          <span class="hint mono field-count" id="f-request-count">0 / 32768</span>
+          <div class="field-foot">
+            <span class="dictate" data-dictate="f-request" hidden></span>
+            <span class="hint mono field-count" id="f-request-count">0 / 32768</span>
+          </div>
         </div>
         <details class="run-options team-only" id="run-options">
           <summary><span class="run-options-title">Options</span> <span class="hint" id="run-options-summary"></span></summary>
@@ -816,7 +853,10 @@
           <div class="field">
             <label for="pf-task">Task <span class="hint" id="pf-task-opt" hidden>optional for the demo</span></label>
             <textarea id="pf-task" rows="7" maxlength="32768" aria-describedby="pf-task-count" placeholder="What should change in the project?"></textarea>
-            <span class="hint mono field-count" id="pf-task-count">0 bytes</span>
+            <div class="field-foot">
+              <span class="dictate" data-dictate="pf-task" hidden></span>
+              <span class="hint mono field-count" id="pf-task-count">0 bytes</span>
+            </div>
           </div>
           <label class="check"><input type="checkbox" id="pf-demo"><span>Demo run (sample project, no model) <span class="hint">the engine fixes a bundled sample project with scripted models; it stops at every approval point</span></span></label>
           <div class="field pf-scenario" id="pf-scenario-row" hidden>
@@ -1126,7 +1166,10 @@
           <div class="field">
             <label for="create-instruction">Handoff instruction <span class="hint">what the agent checks</span></label>
             <textarea id="create-instruction" rows="4" maxlength="1000" aria-describedby="create-instruction-count"></textarea>
-            <span class="hint mono field-count" id="create-instruction-count">0 / 1000</span>
+            <div class="field-foot">
+              <span class="dictate" data-dictate="create-instruction" hidden></span>
+              <span class="hint mono field-count" id="create-instruction-count">0 / 1000</span>
+            </div>
           </div>
           <fieldset class="agent-tools" id="create-tools">
             <legend class="field-label">Tools <span class="hint">read only; at least one</span></legend>
@@ -1201,6 +1244,7 @@
             <label for="settings-instruction">Handoff instruction <span class="hint">how Dwight's work is checked</span></label>
             <textarea id="settings-instruction" rows="5" maxlength="1000" aria-describedby="settings-instruction-count"></textarea>
             <div class="agent-instruction-foot">
+              <span class="dictate" data-dictate="settings-instruction" hidden></span>
               <button type="button" class="link-btn" id="settings-instruction-reset" hidden>Reset to default</button>
               <span class="hint mono field-count" id="settings-instruction-count"></span>
             </div>
@@ -1224,6 +1268,7 @@
           <p class="prompt-warning" id="prompt-warning" hidden></p>
           <p class="form-error" id="prompt-error" role="alert" hidden></p>
           <div class="keyform-actions">
+            <span class="dictate" data-dictate="prompt-text" hidden></span>
             <span class="hint form-status" id="prompt-status" role="status" aria-live="polite"></span>
             <button type="button" class="btn btn-small" id="prompt-reset" hidden>Reset to built-in</button>
             <button type="button" class="btn btn-small" id="prompt-cancel">Cancel</button>
@@ -1481,7 +1526,10 @@
             <div class="field">
               <label for="context-notes">Project notes <span class="hint">standing preferences for every chat of this project</span></label>
               <textarea id="context-notes" rows="6" maxlength="16000" aria-describedby="context-notes-hint context-notes-count"></textarea>
-              <span class="hint field-count" id="context-notes-count">0 / 16,000 · ≈0 tokens</span>
+              <div class="field-foot">
+                <span class="dictate" data-dictate="context-notes" hidden></span>
+                <span class="hint field-count" id="context-notes-count">0 / 16,000 · ≈0 tokens</span>
+              </div>
               <span class="hint" id="context-notes-hint">The Team planner gets them in full while they fit in half of its budget, below the request it comes with; other roles and Pipeline chats get a shortened copy. Empty clears them.</span>
             </div>
             <p class="form-error" id="context-notes-error" role="alert" hidden></p>
