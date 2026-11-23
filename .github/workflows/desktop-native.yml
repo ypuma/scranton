@@ -2,6 +2,16 @@ name: Native desktop builds
 
 on:
   workflow_dispatch:
+    inputs:
+      targets:
+        description: Native builders to run (Windows release normally builds locally)
+        type: choice
+        required: true
+        default: posix
+        options:
+          - posix
+          - all
+          - windows
 
 permissions:
   contents: read
@@ -11,47 +21,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select-targets:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        env:
+          TARGETS: ${{ inputs.targets }}
+        shell: bash
+        run: |
+          case "$TARGETS" in
+            posix|all|windows) ;;
+            *) echo 'Unexpected desktop targets input' >&2; exit 1 ;;
+          esac
+          matrix=$(jq -c --arg targets "$TARGETS" '{"include": map(select(
+            $targets == "all" or ($targets == "posix" and .platform != "win32")
+            or ($targets == "windows" and .platform == "win32")))}' <<'JSON'
+          [
+            {"runner":"windows-2022","platform":"win32","arch":"x64","target":"x86_64-pc-windows-msvc"},
+            {"runner":"macos-15","platform":"darwin","arch":"arm64","target":"aarch64-apple-darwin"},
+            {"runner":"ubuntu-22.04","platform":"linux","arch":"x64","target":"x86_64-unknown-linux-gnu"},
+            {"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64","target":"aarch64-unknown-linux-gnu"}
+          ]
+          JSON
+          )
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
   desktop:
-    name: ${{ matrix.platform }}-${{ matrix.arch }} (unsigned)
+    needs: select-targets
+    name: ${{ matrix.platform }}-${{ matrix.arch }} (native)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { runner: windows-2022, platform: win32, arch: x64, target: x86_64-pc-windows-msvc }
-          - { runner: macos-15, platform: darwin, arch: arm64, target: aarch64-apple-darwin }
-          - { runner: macos-15-intel, platform: darwin, arch: x64, target: x86_64-apple-darwin }
-          - { runner: ubuntu-22.04, platform: linux, arch: x64, target: x86_64-unknown-linux-gnu }
-          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
     defaults:
       run:
         shell: bash
     env:
+      EXPECTED_TARGET: ${{ matrix.target }}
+      ARTIFACT_DIR: .scratch/ci-platform/artifacts
+      SCRANTON_CREDENTIALS_DIR: ${{ github.workspace }}/.scratch/ci-platform/credentials
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/.scratch/ci-platform/pi
       CARGO_TERM_COLOR: always
       MACOSX_DEPLOYMENT_TARGET: '13.5'
       APPIMAGE_EXTRACT_AND_RUN: '1'
       SCRANTON_SKIP_PIPELINE: '0'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           architecture: ${{ matrix.arch }}
           cache: npm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.14'
           architecture: ${{ matrix.arch }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Assert native host and target
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}
           EXPECTED_ARCH: ${{ matrix.arch }}
-          EXPECTED_TARGET: ${{ matrix.target }}
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
@@ -64,7 +99,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file desktop-file-utils xdg-utils
+          sudo apt-get install -y build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file desktop-file-utils xdg-utils bubblewrap xvfb xauth dbus-x11 lsof
       - name: Project-local Python scratch
         run: |
           mkdir -p .scratch/pipeline/tmp .scratch/pipeline/pip-cache .scratch/ci-platform
@@ -98,45 +133,58 @@ jobs:
           JS
       - name: Packaging gates (serial, no platform-wide skips)
         run: node --test --test-concurrency=1 "test/packaging/*.test.js"
+      - name: Native sandbox checks (require host backend)
+        env:
+          SCRANTON_REQUIRE_POSIX_SANDBOX: '1'
+        run: |
+          log=.scratch/ci-platform/sandbox.tap
+          status=0
+          node --test --test-concurrency=1 --test-reporter=tap test/core/sandbox-native/sandbox.test.js | tee "$log" || status=$?
+          {
+            echo '### Native sandbox test results'
+            echo '```text'
+            grep -Ei 'Seatbelt execution matrix|bubblewrap execution matrix|# skip' "$log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Build unsigned native bundles
+      - name: Build native bundles (no updater signing keys)
         run: npm run app:build
-      - name: Archive macOS app preserving permissions and links
+      - name: Verify ad-hoc macOS signature and archive app
         if: runner.os == 'macOS'
-        run: tar -czf ".scratch/ci-platform/Scranton-macos-${{ matrix.arch }}.app.tar.gz" -C src-tauri/target/release/bundle/macos Scranton.app
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
+        run: |
+          bundle=src-tauri/target/release/bundle/macos
+          version=$(node --input-type=module -e 'import { readDesktopVersion } from "./scripts/desktop-artifact-receipt.mjs"; console.log(await readDesktopVersion())')
+          codesign --verify --deep --strict --verbose=2 "$bundle/Scranton.app"
+          COPYFILE_DISABLE=1 tar -czf "$bundle/Scranton_${version}_aarch64.app.tar.gz" -C "$bundle" Scranton.app
+      - name: Stage final payloads and build receipt
+        run: node scripts/desktop-artifact-receipt.mjs "$EXPECTED_TARGET" "$ARTIFACT_DIR"
+      - name: Enforce packaged POSIX sidecar and Pipeline smoke
+        if: runner.os != 'Windows'
+        run: |
+          node scripts/desktop-package-smoke.mjs "$EXPECTED_TARGET" "$ARTIFACT_DIR"
+          echo 'Enforced: packaged Node app-server returned dashboard HTTP 200 and exited cleanly; packaged Pipeline passed version, graph, and native extension imports.' >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            echo 'Enforced: mounted the DMG read-only, verified the signature of Scranton.app with codesign --deep --strict, and detached the DMG.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Try GUI launch from unpacked app or DEB (best effort)
+        if: runner.os != 'Windows'
+        run: |
+          command=(node scripts/desktop-package-smoke.mjs "$EXPECTED_TARGET" "$ARTIFACT_DIR" --gui)
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            command=(xvfb-run -a dbus-run-session -- "${command[@]}")
+          fi
+          if "${command[@]}"; then
+            echo 'GUI smoke (best effort): GUI-launched packaged server answered HTTP 200.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::warning::Best-effort GUI smoke did not observe HTTP 200; see step logs.'
+            echo 'GUI smoke (best effort): **not verified**; see step logs.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Scranton-windows-${{ matrix.arch }}-unsigned-nsis
-          path: src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'macOS'
-        with:
-          name: Scranton-macos-${{ matrix.arch }}-unsigned-app
-          path: .scratch/ci-platform/*.app.tar.gz
-          if-no-files-found: error
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'macOS'
-        with:
-          name: Scranton-macos-${{ matrix.arch }}-unsigned-dmg
-          path: src-tauri/target/release/bundle/dmg/*.dmg
-          if-no-files-found: error
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Linux'
-        with:
-          name: Scranton-linux-${{ matrix.arch }}-unsigned-deb
-          path: src-tauri/target/release/bundle/deb/*.deb
-          if-no-files-found: error
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Linux'
-        with:
-          name: Scranton-linux-${{ matrix.arch }}-unsigned-appimage
-          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          name: scranton-${{ matrix.target }}
+          path: ${{ env.ARTIFACT_DIR }}/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

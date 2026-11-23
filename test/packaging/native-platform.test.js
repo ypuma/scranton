@@ -19,7 +19,7 @@ test('native platform overlays preserve staging and least-privilege window capab
   assert.deepEqual(json('tauri.windows.conf.json').bundle.targets, ['nsis']);
   assert.deepEqual(json('tauri.macos.conf.json').bundle.targets, ['app', 'dmg']);
   assert.equal(json('tauri.macos.conf.json').bundle.macOS.minimumSystemVersion, '13.5');
-  assert.equal(json('tauri.macos.conf.json').bundle.macOS.signingIdentity, null);
+  assert.equal(json('tauri.macos.conf.json').bundle.macOS.signingIdentity, '-');
   assert.deepEqual(json('tauri.linux.conf.json').bundle.targets, ['deb', 'appimage']);
   assert.match(base.app.security.csp, /connect-src 'self' ipc: http:\/\/ipc\.localhost/);
   assert.equal(base.app.windows[0].decorations, false);

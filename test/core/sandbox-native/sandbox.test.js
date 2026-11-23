@@ -151,7 +151,11 @@ test('prepare refuses unowned directories and credential overlap; dispose forbid
 for (const [platform, label] of [['darwin', 'Seatbelt'], ['linux', 'bubblewrap']]) {
   test(`${label} execution matrix`, { skip: process.platform !== platform && `Host is ${process.platform}; execution needs a ${platform} validation host` }, async (t) => {
     const diagnostic = await available();
-    if (!diagnostic.available) { t.skip(diagnostic.reason); return; }
+    if (!diagnostic.available) {
+      assert.notEqual(process.env.SCRANTON_REQUIRE_POSIX_SANDBOX, '1', diagnostic.reason);
+      t.skip(diagnostic.reason);
+      return;
+    }
     const f = fixture(); const sandbox = createSandbox({ ...f, network: false }); sandbox.prepare(); t.after(() => sandbox.dispose());
     const write = (file, isolated) => collect((isolated ? sandbox.spawn : spawn)('/bin/sh', ['-c', 'printf sandbox-data > "$1"', 'sh', file], options(f)));
     assert.equal((await write(path.join(f.worktree, 'inside'), true)).code, 0);
