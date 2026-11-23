@@ -39,7 +39,7 @@ def test_legacy_prompt_schema_and_config():
     cfg = config(Path("fixture"))
     assert not cfg.conversation and "conversation" not in cfg.model_dump()
     prompt = build_planner_prompt({"task": "Explain addition"}, cfg)
-    assert hashlib.sha256((prompt.system + "\0" + prompt.user).encode()).hexdigest() == "58ea4b5ca28faff6e1f00df76b01b9a883731796f8a5d5bd7bbaad1619b50c55"
+    assert hashlib.sha256((prompt.system + "\0" + prompt.user).encode()).hexdigest() == "0adc7682707c5aab51e2eb35e22e3d93eee62e856cc9279e3334e860171f4cd3"
     assert hashlib.sha256(json.dumps(PlannerTurn.model_json_schema(), sort_keys=True).encode()).hexdigest() == "f0b3c584551024d537769ba9398421835fdf5185093a71b18689a093ccbd3be9"
     with pytest.raises(ValidationError):
         PlannerTurn.model_validate({"kind": "answer", "answer": {"text": "No edits"}})

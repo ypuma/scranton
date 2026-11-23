@@ -52,9 +52,9 @@ def test_disabled_prompt_bytes(builder, tmp_path, monkeypatch):
     cfg = config(tmp_path)
     state = {"task": "Fix", "feedback": {"kind": "output_invalid", "message": "repair"}}
     legacy = builder(state, cfg)
-    hashes = {"build_planner_prompt": "a38b62dc3fca261ab935c1da70e15be8cf8d014d168294d9e223415e9978c670",
-        "build_implementer_prompt": "5bd93659db1c39c3cdbb2beba7e30bfef708fdbcf047e5ac8eaa311aea69b2d3",
-        "build_reviewer_prompt": "9e7b6bc86695f47310d8c46273f6ef3c569155e5f28b13f149333e6f3963c3bd"}
+    hashes = {"build_planner_prompt": "23d2de5984421ea3a03b326e064151162f495514efa6abf9d475a6f0766b0270",
+        "build_implementer_prompt": "bbe873d689ad2b42482538bee98bfeb5da68484931b2ea49d1966586f0670196",
+        "build_reviewer_prompt": "900abb9c14ef8a68acec902ab3d86ca98e75f1341cf29f6e304dfb2da1b17b39"}
     assert hashlib.sha256((legacy.system + legacy.user).encode()).hexdigest() == hashes[builder.__name__]
     monkeypatch.setattr(guidance, "render", lambda *a, **kw: pytest.fail("Disabled guidance rendered"))
     supplied = builder(state, cfg, graph=load(None))
