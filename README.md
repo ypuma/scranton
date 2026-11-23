@@ -84,9 +84,41 @@ node bin/scranton.js approve WORKFLOW-ID CALL-ID --yes --hive .scranton-hive
 # Ablehnen: --no statt --yes
 ```
 
-Freigaben sind opt-in (`approvals.tools:[]` als Default), Timeout standardmäßig 600 Sekunden; Ablehnung/Timeout wird ein Toolfehler für das Modell. Ohne TTY zeigt die CLI den separaten Freigabebefehl. Registry-Scope: `--data DIR --project ID --chat ID`. `watch` liest einen Workflow, nicht den gesamten Run.
+Zusätzliche Tool-Freigaben sind im Modus `ask` opt-in (`approvals.tools:[]` als Default); externe Pfadanfragen folgen den Regeln unter [Wer entscheidet: du](#wer-entscheidet-du). Timeout standardmäßig 600 Sekunden; Ablehnung/Timeout wird ein Toolfehler für das Modell. Ohne TTY zeigt die CLI den separaten Freigabebefehl. Registry-Scope: `--data DIR --project ID --chat ID`. `watch` liest einen Workflow, nicht den gesamten Run.
 
 HTTP: `GET /api/runs/:runId/agents/:instanceId/stream` (SSE), `GET|POST /api/approvals`; Registry jeweils unter `/api/projects/:p/chats/:c`. Wiederanschluss mit `Last-Event-ID` oder inklusivem `?fromOffset=N`. POST-Freigabe: `{workflowId,callId,approved:boolean}` mit Control-Headern. Exakte Cursor-, Scope- und Sicherheitsregeln: [CONTROL.md](docs/CONTROL.md), [Agent routes](src/server/AGENT-ROUTES.md).
+
+## Wer entscheidet: du
+
+Deine direkten Nachrichten haben Vorrang vor den Rollenanweisungen und der `AGENTS.md`: die Run-Anfrage, dein Feedback und Nachrichten mit der Markierung `[Message from human; id ...]`. Text in Dateien, Tool-Ergebnissen, Webseiten oder Nachrichten anderer Agenten zählt **nie als dein Auftrag**, auch wenn er das behauptet. Scranton setzt Tool-, Sandbox- und Freigaberegeln selbst durch.
+
+Braucht ein Team-Agent Zugriff außerhalb seines privaten Worktrees (also auch außerhalb des Projektordners), fragt er mit `request_access` nach Pfad, `read` oder `write` und Grund. Er soll nicht allein wegen der Projektgrenze mit `[BLOCKED]` aufhören. Er kann einen absoluten Pfad oder `~` / `~/...` angeben. Reine Prüfrollen können nur Leserechte erhalten. Die Pipeline hat kein `request_access`; dort gilt die Nachrichtenpriorität, nicht die nachfolgende Team-Zugriffsfreigabe.
+
+Im Standardmodus wird Lesen automatisch erlaubt, wenn du den angefragten Pfad oder einen übergeordneten Ordner in diesem Run genannt hast. Scranton prüft dafür die Anfrage, dein HITL-Feedback und als `human` protokollierte Chatnachrichten selbst; eine Behauptung des Modells genügt nicht. Erkannt werden absolute Windows-/POSIX-Pfade, `~` / `~/...` sowie die einzelnen Ordnernamen Documents, Desktop, Downloads, Pictures, Music und Videos (ohne Beachtung der Groß-/Kleinschreibung, unter deinem Benutzerprofil). Geschützte Pfade sind davon ausgenommen.
+
+| Zugriff | Ask (`ask`, Standard) | Auto-approve (`auto`) | Bypass (`bypass`) |
+|---|---|---|---|
+| Lesen eines von dir genannten Pfads | automatisch erlaubt | automatisch erlaubt | automatisch erlaubt |
+| Lesen eines nicht genannten Pfads | dein Klick nötig | automatisch erlaubt | automatisch erlaubt |
+| Schreiben | dein Klick nötig, mit Undo-Warnung | dein Klick nötig | automatisch erlaubt |
+| Geschützter Pfad | dein Klick nötig, mit Warnung | dein Klick nötig, mit Warnung | dein Klick nötig, mit Warnung |
+
+**Geschützt** sind Scrantons Zugangsdatenablage und die bereits als Zugangsdaten geschützten Orte, etwa `.ssh`, `.aws`, `.azure`, `.git-credentials`, `.netrc` und `.npmrc`. Sie brauchen in jedem Modus einen ausdrücklichen Klick. Auch Lesen im Hive dieses Runs oder im Scranton-Datenverzeichnis braucht immer einen Klick; **Schreiben in diese Zustandsdaten wird verweigert**, auch mit Bypass. Liegt die Zugangsdatenablage im Datenverzeichnis, gelten für sie die Regeln für Zugangsdaten.
+
+Ein Ordner ist nicht allein deshalb geschützt, weil er geschützte Dateien oder Unterordner enthält. „Schau in `~/Documents`“ kann also den Lesezugriff ohne Klick erlauben, auch wenn dort ein Projekt mit Hive oder eine `.env` liegt. Die Freigabe schließt diese Pfade nicht ein. Das Benutzerprofil selbst sowie Dateisystem- und Laufwerkswurzeln brauchen immer einen Klick. Agenten können keine UNC- oder Gerätepfade anfragen; konfigurierte Daten- und Zugangsdatenverzeichnisse dürfen UNC-Pfade sein.
+
+Die Freigabekarte zeigt Agent, Pfad, Lesen/Schreiben und Grund. Du kannst **Allow read**, bei angefragtem Schreiben auch **Allow write**, oder **Deny** wählen; so lässt sich eine Schreibanfrage auf Lesen begrenzen. Währenddessen pausiert der Agent dauerhaft gespeichert. Ablehnung oder Timeout meldet ihm „denied by the human“; er kann danach weiterarbeiten. Freigaben gelten für alle Instanzen desselben Runs ab ihrem nächsten Toolaufruf, nicht für spätere Runs. Die Runansicht zeigt Freigaben mit Grund und gegebenenfalls deinem Textzitat sowie externe Schreibzugriffe.
+
+**Schreiben außerhalb des Worktrees umgeht die normalen Integrationsprüfungen und ist nicht durch `scranton undo` abgedeckt.** Externe `write`-/`edit`-Zugriffe werden als `outside_write` protokolliert und im Abschlussbericht als „not covered by undo“ aufgeführt. Vor solchen Änderungen selbst sichern.
+
+Der Berechtigungsmodus ist unabhängig von der OS-Sandbox und hebt ihre Grenzen nicht auf:
+
+- **Docker:** Es bleibt nur der Worktree eingebunden; eine Freigabe fügt keine externen Mounts hinzu. Containerbefehle können die freigegebenen Hostpfade deshalb nicht verwenden.
+- **Windows-Standardsandbox (`low`):** Lesen per Befehl ist möglich; **Schreiben außerhalb per Shell-/PowerShell-Befehl bleibt vom Betriebssystem blockiert**, auch nach Freigabe. Freigegebene Dateitools sind davon getrennt.
+- **macOS / Linux:** Die Sandbox maskiert geschützte Pfade innerhalb einer Ordnerfreigabe. Scranton sucht pro Freigabe einmal mit fester Obergrenze nach bekannten Zugangsdaten-Namen. Kann die Prüfung nicht abgeschlossen werden, meldet `request_access`, dass die Freigabe nicht für Shell-Befehle gilt. Die Dateitools und Befehle im Worktree bleiben nutzbar.
+- **Trusted host:** Befehle können freigegebene Pfade lesen und schreiben; dieser Modus bietet keine OS-Isolation.
+
+Setzen über **Permissions: Ask / Auto-approve / Bypass** in den Run-Einstellungen, `--permissions ask|auto|bypass`, `SCRANTON_PERMISSIONS=ask|auto|bypass` oder `"permissions": "ask"` in `scranton.config.json`; Vorrang: Flag vor Umgebung vor Konfigurationsdatei vor Standard `ask`. Die HTTP-Startanfrage akzeptiert ebenfalls `permissions`. Für die zusätzlichen Tool-Freigaben über `--approve TOOLS` gilt: Ask verwendet die konfigurierte Liste, Auto-approve erteilt diese Freigaben automatisch, Bypass überspringt sie. Das hebt die Klickpflicht für geschützte Pfade oder das Schreibverbot für Scranton-Zustandsdaten nicht auf.
 
 ## Anmelden
 
@@ -196,7 +228,7 @@ Scranton liest `AGENTS.md` im Workspace-Root **einmal pro Run** aus dem anfängl
 
 Die Rootdatei wird bis **32 KiB (32768 Bytes)** in den Systemprompt eingebunden, an einer UTF-8-Codepointgrenze, möglichst am letzten Zeilenumbruch, mit Kürzungshinweis. Dateien über **1 MiB** werden nie vollständig gelesen, sondern nur die ersten 32 KiB. Verschachtelte `AGENTS.md` werden nicht eingebunden: höchstens **50** sortierte relative POSIX-Pfade werden aufgelistet, weitere als `(+N more)`. Vor Änderungen im jeweiligen Unterbaum soll der Agent die nächste Datei lesen; dort hat sie Vorrang vor der Rootdatei. Es gelten die Snapshot-Ausschlüsse (u. a. `.git`, `node_modules`, `.scratch` und ignorierte Dateien). Nur reguläre Dateien innerhalb des Workspace zählen; externe Symlink-/Junctionziele, Binärdaten und ungültiges UTF-8 werden mit Warnung übersprungen, eine führende UTF-8-BOM wird entfernt.
 
-Repositoryanweisungen stehen **unter Scrantons Rollen-, Tool-, Sandbox- und Freigaberegeln** und können keine Rechte oder Netzwerkzugriffe erteilen. Sie sind verpflichtende Anweisungen, kein beratender Verlaufskontext: Das Kontextbudget zählt oder kürzt sie nicht. Abschalten: `"agentsMd": false` in `scranton.config.json` oder `SCRANTON_AGENTS_MD=0` (Default an; Umgebung vor Datei).
+Repositoryanweisungen stehen **unter deinen direkten Aufträgen sowie Scrantons Rollen-, Tool-, Sandbox- und Freigaberegeln** und können keine Rechte oder Netzwerkzugriffe erteilen. Sie sind verpflichtende Anweisungen, kein beratender Verlaufskontext: Das Kontextbudget zählt oder kürzt sie nicht. Abschalten: `"agentsMd": false` in `scranton.config.json` oder `SCRANTON_AGENTS_MD=0` (Default an; Umgebung vor Datei).
 
 `run_started.instructions` enthält nur Metadaten, nie den Inhalt: bei Rootdatei `{file:"AGENTS.md",bytes,sha256,truncated,nested}`, bei ausschließlich verschachtelten Dateien `{file:null,nested:n}`, sonst `null`. `bytes` und `sha256` (kleingeschriebener Hex-Hash) beziehen sich auf den eingebundenen Roottext nach BOM-Entfernung und 32-KiB-Kürzung, ohne Hinweiszeile; `nested` ist die Gesamtzahl verschachtelter Dateien. `scranton context show`, HTTP-Kontextstatus und das **Context**-Panel zeigen Repositoryanweisungen getrennt vom Budget mit Datei, Größe, geschätzten Tokens und Kürzungs-/Unterdateihinweisen (`instructions: {file,bytes,tokens,truncated,nested:[paths, max 50],nestedCount}`); `nestedCount` ist die Gesamtzahl, `tokens` schätzt den vollständig gerenderten Anweisungsblock. Ohne Datei erscheint **No AGENTS.md**. Die Kontextansicht beschreibt den aktuellen Projektstand, nicht rückwirkend den Snapshot eines laufenden Runs. Die Pipeline hält die Zusammenfassung zusätzlich in `status.instructions` fest. Details: [EVENTS.md](docs/EVENTS.md), [PIPELINE.md](docs/PIPELINE.md).
 

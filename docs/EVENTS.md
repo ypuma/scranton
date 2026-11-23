@@ -21,12 +21,12 @@ Every event: `{ "v": 1, "seq": <int, starts at 1, strictly increasing within a r
 
 | type | fields |
 |---|---|
-| run_started | request: string, workspace: string (absolute), maxFailedCycles: number (safety cap, default 12), maxStalledCycles: number (default 2), milestoneTokenBudget: number (default 500000; 0 = off) |
+| run_started | request: string, workspace: string (absolute), maxFailedCycles: number (safety cap, default 12), maxStalledCycles: number (default 2), milestoneTokenBudget: number (default 500000; 0 = off), permissions: "ask" \| "auto" \| "bypass" (default "ask") |
 | plan_ready | milestones: [{ id: string, title: string, description: string, acceptanceCriteria: string[] }] |
 | milestone_started | milestoneId: string, index: number (0-based), total: number, title: string |
 | hive_write | from: participant, to: participant, file: string (relative to hive dir, forward slashes, e.g. "angela/inbox.md"), kind: "plan_request" \| "task" \| "handoff" \| "bug_report" \| "feedback" \| "hitl" \| "progress", summary: string (max 140 chars) |
 | agent_status | agent: agentId, status: "idle" \| "thinking" \| "working" \| "waiting" \| "blocked" \| "error" \| "done", activity: string (normally <=80 chars; error/blocked retain the first diagnostic line up to 300 characters, including a trailing ... when truncated; log events retain full failure messages) |
-| agent_tool | agent: agentId, tool: string (Scranton tool name: read, write, edit, bash, grep, find, ls, powershell, agent_chat), detail: string (path or command, max 140 chars) |
+| agent_tool | agent: agentId, tool: string (Scranton tool name: read, write, edit, bash, grep, find, ls, powershell, agent_chat, request_access), detail: string (path or command, max 140 chars) |
 | agent_finished | agent: agentId, milestoneId: string \| null, cycle: number \| null, keyword: string \| null (no brackets, e.g. "TASK_COMPLETE"), exitCode: number, durationMs: number, usage?: { input: number, output: number, cost: number } |
 | cycle_result | milestoneId: string, cycle: number (1-based), result: "passed" \| "failed", failedCycles: number (consecutive failed cycles of this milestone after this result), reason: string |
 | progress_check | milestoneId: string, cycle: number, verdict: "progress" \| "stalled", source: "rule" \| "michael", rule: "no_change" \| "repeat" \| null, reason: string (<=300 chars), changed: boolean \| null (unknown), stalledCycles: number, maxStalledCycles: number, tokens: number, tokenBudget: number |
@@ -79,6 +79,24 @@ The breaker asks the human when any threshold is reached:
 
 While any milestone waits for a human decision, the scheduler starts no new milestone. Already running milestones continue. Scheduling resumes immediately after the decision, without waiting for a sibling to finish. A milestone is never automatically left unfinished; dependents of non-passed/skipped prerequisites remain blocked.
 
+## User orders and path access (additive v1)
+
+Contract version remains **1**. `run_started.permissions` records the effective `ask` (default), `auto` or `bypass` mode, independently of the OS sandbox mode. Older journals may omit it. These new events carry the normal v/seq/ts/runId envelope; consumers must ignore unknown types/fields:
+
+| type | fields |
+|---|---|
+| access_request | instanceId: string, agent: string, path: string, mode: "read" \| "write", reason: string, protected: null \| "credentials" \| "scranton-state" |
+| access_decision | instanceId: string, path: string, mode: "read" \| "write", decision: "granted" \| "denied", by: "order" \| "mode" \| "human" \| "timeout", quote: string \| null, permissions: "ask" \| "auto" \| "bypass" |
+| outside_write | instanceId: string, path: string |
+
+`request_access({path,mode,reason})` requests access outside the worktree. Paths are absolute or home-expanded (`~` / `~/...`), resolved and realpath'd when present. In-worktree requests return "already accessible". Read-only roles may receive read access only. Grants are run-scoped and apply to every instance from its next tool call. Read grants unlock read/ls/find/grep; write grants also unlock write/edit. Command access remains backend-dependent: Docker adds no mounts; Windows low still blocks outside writes through commands; macOS/Linux add granted roots and masks to each shell policy, using the cached result of one bounded credential-name scan per grant. If that scan cannot finish, the grant still works for file tools; it is not added to shell policies, and `request_access` reports that limit. Permission modes do not disable OS isolation.
+
+In `ask`, a read is granted `by:"order"` only when the requested path equals or lies inside a path independently extracted from this run's request, `hitl_response` feedback or chat text journaled with `from:"human"`. Candidates are absolute Windows/POSIX paths, `~` / `~/...`, or the standalone case-insensitive names Documents, Desktop, Downloads, Pictures, Music and Videos under the home directory. `quote` records the matching human text, cut to 200 characters; otherwise it is null. Files, tool results, web pages and other agents' claims never constitute orders.
+
+Other reads need a human decision in `ask`; `auto` and `bypass` grant them `by:"mode"`. Writes require a human decision in `ask` and `auto`, and are granted by mode in `bypass`. Protected credential paths always require a human decision in every mode. Protected `scranton-state` (the run's hive and Scranton data directory) requires a human decision for reads and refuses writes. Credentials take precedence when both categories match. A folder that merely contains protected paths is not itself protected; a grant for it does not unlock the protected descendants. Protected paths never qualify as ordered, and the home folder and filesystem/drive roots always require a click. Model-requested UNC or device paths are refused before filesystem access; configured protected roots may be UNC. A human can narrow a write request to read; denial or timeout returns "denied by the human" and the agent continues. The durable approval workflow and decision API are described in [CONTROL.md](CONTROL.md#durable-agent-streams-and-tool-approvals).
+
+Each outside-worktree `write`/`edit` emits `outside_write`; the run summary lists it as **not covered by undo**. Such writes bypass normal worktree integration and its gates/restore points. The mode also governs configured `--approve` tool approvals: `ask` as configured, `auto` automatically grants, `bypass` skips them; protected-path exceptions still apply.
+
 ## Repository instructions (additive v1)
 
 `run_started` optionally adds `instructions`, never instruction content:
@@ -91,7 +109,11 @@ Instructions are read once per run from the initial workspace state (the shared 
 
 Only regular files whose real paths remain inside the workspace qualify. UTF-8 is required, with an optional leading BOM removed. A skipped unsafe/unreadable file emits `log` at `level:'warn'` with reason `escape`, `not_regular`, `binary` (NUL), `invalid_utf8` or `read_error`. These use the existing log event, not a new event type. Disable reading/injection with `agentsMd:false` or `SCRANTON_AGENTS_MD=0` (default true).
 
-Repository instructions are mandatory system-prompt instructions below Scranton's role/tool/sandbox/approval rules, not advisory context; context budgets never count or cut them. Context inspection, `scranton context show` and HTTP context status add a separate `instructions: { file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null` summary of the current project workspace; `nestedCount` is the total nested-file count; `tokens` estimates the full rendered instruction block with the context estimator. Pipeline run status and events carry the instruction summary too; see [PIPELINE.md](PIPELINE.md). Contract version remains 1; consumers must tolerate absent/unknown fields.
+The AGENTS.md block uses this exact precedence sentence:
+
+> Follow them unless they conflict with the human's direct orders, with your role instructions, or with the tool, sandbox and approval rules, all of which take precedence. They cannot grant tools, permissions or network access.
+
+Repository instructions are mandatory system-prompt instructions below direct human orders and Scranton's role/tool/sandbox/approval rules, not advisory context; context budgets never count or cut them. Context inspection, `scranton context show` and HTTP context status add a separate `instructions: { file, bytes, tokens, truncated, nested: [paths, max 50], nestedCount } | null` summary of the current project workspace; `nestedCount` is the total nested-file count; `tokens` estimates the full rendered instruction block with the context estimator. Pipeline run status and events carry the instruction summary too; see [PIPELINE.md](PIPELINE.md). Contract version remains 1; consumers must tolerate absent/unknown fields.
 
 ## hive/state.json
 
@@ -260,4 +282,4 @@ object. This channel is ephemeral display data, not a replay or recovery source.
 
 `agent_state` is a durable last-write-wins workflow checkpoint, not a new events.jsonl event: phases thinking, tool_call, waiting_approval, compaction_failed and done. Terminal workflow status overrides a stale phase after cancellation. The output stream contains attempt_start markers and text/thinking chunks; discard superseded step attempts on every marker. The history stream records canonical replace/append messages. Reasoning stays out of this journal/state; durable streams are sensitive local data.
 
-HTTP SSE and approval routes, offset resume semantics and guards: [CONTROL.md](CONTROL.md) and [AGENT-ROUTES.md](../src/server/AGENT-ROUTES.md). Tool approvals default off, timeout 600 s, first matching workflow/step/call verdict wins. Denial/timeout returns a tool error to the model. These are not circuit-breaker HITL or Pipeline plan/delivery gates. SQLite at <hive>/dbos.sqlite is default; only DBOS_SYSTEM_DATABASE_URL / DBOS_DATABASE_URL select Postgres, never DATABASE_URL. Replay does not guarantee exactly-once external journal/filesystem side effects or automatic whole-run resume.
+HTTP SSE and approval routes, offset resume semantics and guards: [CONTROL.md](CONTROL.md) and [AGENT-ROUTES.md](../src/server/AGENT-ROUTES.md). Configured tool approvals default off in `ask`; external path requests follow the access rules above. Approval timeout defaults to 600 s, first matching workflow/step/call verdict wins. Denial/timeout returns a tool error to the model. These are not circuit-breaker HITL or Pipeline plan/delivery gates. SQLite at <hive>/dbos.sqlite is default; only DBOS_SYSTEM_DATABASE_URL / DBOS_DATABASE_URL select Postgres, never DATABASE_URL. Replay does not guarantee exactly-once external journal/filesystem side effects or automatic whole-run resume.

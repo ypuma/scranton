@@ -3,6 +3,17 @@
 Written through codemap_write. One entry per --- block; values are JSON. Freshness is computed when read, never stored here.
 
 ---
+file: "src/core/access.js"
+kind: "where"
+text: "\"User orders win\" access layer (spec .enma/user-orders-contract.md). accessPath: model-requested path (absolute or ~), UNC/device refused before any fs call, existing ancestors realpath'd. configuredPaths: protected roots from config/env (UNC allowed, lexical fallback, never throws). protectedPath: credentials win over scranton-state; a request is protected only when INSIDE a protected root or credential-named (containing one is not). orderedPath: order match ONLY against the runtime's own human texts (request, hitl_response feedback, chat from:'human'); bare / \\ ~ ignored; isBroad (fs root, drive root, home) never by order. createAccess -> prepare (classify, refuse writes inside state roots / read-only roles) and decide (mode table ask/auto/bypass); grants are run-wide and consumed by src/core/tools/path.js resolveToolPath (per-path protection, link/8.3 checks) and src/core/sandbox-native (seatbelt allow+deny, bwrap binds + masks from a once-per-grant bounded scan re-stat'd per spawn)."
+see_also: ".scratch/user-orders-runtime/REPORT.md; tests test/core/user-orders.test.js (real-layout ~/Documents regression), test/visualizer/user-orders.test.js"
+hash: "shape:1df0a49194081a47"
+written: "2026-11-23"
+commit: "77f81b0"
+by: "core"
+---
+
+---
 file: "src/core/agents-config.js"
 kind: "where"
 text: "The persistent agent settings store, `<settingsDir>/agents.json` (v:1). settingsDir is dataDir in registry/desktop mode and hiveDir in single mode; env SCRANTON_SETTINGS_DIR passes it to child runs.\n\nWhat it holds:\n- model and thinking for every agent;\n- full definitions of custom GATE agents: id, name, title, pass/fail keywords, read-only tools, instruction. At most 12.\n\nHow it behaves:\n- It is re-validated on every load. Invalid entries are skipped and reported as `warnings` in GET /api/agents and in `doctor`.\n- Model precedence: per-run request > env SCRANTON_<ID>_* > config agents.<id> > agents.json > pi default. Fields set by env or config are reported as pinned.\n- A custom agent without `<promptsDir>/<id>.md` uses a starter prompt generated from its definition.\n\nSpec: .enma/custom-agents-contract.md; §10 and §11 override earlier sections."
