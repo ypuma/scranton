@@ -1,3 +1,4 @@
+import '../core/isolation-test-root.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -91,6 +92,20 @@ test('Pipeline concurrency cap counts live invocations, not approval gates; canc
   await f.wait(id, 'cancelled');
   const other = await f.start(undefined, 1); await f.wait(other, 'awaiting_approval', 1);
   const next = await f.start(); await f.wait(next, 'awaiting_approval');
+  assert.deepEqual((await f.req('/api/app/busy')).value, { running: 0, waitingForHuman: 2 });
+  assert.equal((await f.req(`${f.route(2)}/runs`, { demo: { scenario: 'happy', delayMs: 5000 } })).code, 202);
+  assert.deepEqual((await f.req('/api/app/busy')).value, { running: 1, waitingForHuman: 2 });
+  assert.equal((await f.req(`${f.route(2)}/runs/stop`, {})).code, 202);
+  const deadline = Date.now() + 30000;
+  let team;
+  do {
+    team = (await f.req(`${f.route(2)}/control`)).value;
+    if (!team.run && team.lastExit) break;
+    await sleep(30);
+  } while (Date.now() < deadline);
+  assert.equal(team.run, null);
+  assert.equal(team.lastExit?.exitCode, 130, team.lastExit?.outputTail ?? 'Team demo did not exit');
+  assert.deepEqual((await f.req('/api/app/busy')).value, { running: 0, waitingForHuman: 2 });
   assert.equal((await f.req(f.runRoute(next) + '/cancel', {})).code, 202); await f.wait(next, 'cancelled');
   assert.equal((await f.req(f.runRoute(other, 1) + '/cancel', {})).code, 202); await f.wait(other, 'cancelled', 1);
 });

@@ -1,10 +1,11 @@
 import { readLive } from '../core/live-activity.js';
 // Visualizer HTTP/SSE server: static UI, /events (tail of hive/events.jsonl) and /api/state.
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { isLoopbackAddress } from '../core/network.js';
 import { createControl, json } from './control.js';
 import { createModelWindows } from '../core/model-windows.js';
-import { createRegistryRouter } from './registry-router.js';
+import { authorize, createRegistryRouter } from './registry-router.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -336,6 +337,19 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
   if (!hiveDir && !dataDir) throw new TypeError('startVisualizerServer: hiveDir is required');
   if (!publicDir) throw new TypeError('startVisualizerServer: publicDir is required');
 
+  const updateGuard = Buffer.from(process.env.SCRANTON_DESKTOP_UPDATE_GUARD ?? '', 'utf8');
+  delete process.env.SCRANTON_DESKTOP_UPDATE_GUARD;
+  let reserveUntil = 0, inFlightStarts = 0;
+  function reserveUpdate(guard, counts) {
+    const supplied = Buffer.from(guard, 'latin1');
+    if (!updateGuard.length || supplied.length !== updateGuard.length || !timingSafeEqual(supplied, updateGuard)) {
+      throw Object.assign(new Error('Forbidden'), { status: 403 });
+    }
+    if (inFlightStarts) return { ...counts, running: Math.max(counts.running, inFlightStarts) };
+    if (!counts.running && !counts.waitingForHuman) reserveUntil = performance.now() + 30_000;
+    return counts;
+  }
+
   const modelWindows = dataDir ? control?.modelWindows ?? createModelWindows() : undefined;
   if (modelWindows) {
     modelWindows.warm();
@@ -344,13 +358,13 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
   const root = path.resolve(publicDir);
   const single = dataDir ? null : createHiveContext({ hive: path.resolve(hiveDir), control });
   const registryRouter = createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace,
-    contextFactory: createHiveContext, single, modelWindows });
+    contextFactory: createHiveContext, single, modelWindows, reserveUpdate });
   const controller = single?.controller ?? registryRouter.authController;
   let realRootPromise = null;
   const realRoot = () => (realRootPromise ??= fsp.realpath(root));
   let closed = false;
   const checkHost = isLoopbackHost(host);
-  const server = http.createServer(async (req, res) => {
+  async function handleRequest(req, res) {
     if (checkHost && !hostHeaderIsLocal(req.headers.host)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Forbidden');
@@ -400,6 +414,21 @@ export async function startVisualizerServer({ hiveDir, publicDir, port = DEFAULT
       return single.handleState(req, res).catch(() => res.destroy());
     }
     serveStatic(req, res, root, realRoot, pathname).catch(() => res.destroy());
+  }
+  const server = http.createServer(async (req, res) => {
+    const pathname = req.url.split(/[?#]/, 1)[0];
+    const startsWork = updateGuard.length && req.method === 'POST' && (pathname === '/api/runs' ||
+      /^\/api\/projects\/[^/]+\/chats\/[^/]+\/(?:runs|undo|pipeline\/runs(?:\/[^/]+\/(?:decision|resume|cancel))?)$/.test(pathname));
+    if (!startsWork) return handleRequest(req, res);
+    // An idle native probe reserves the sidecar until quit, closing the gap before stdin is read.
+    if (performance.now() < reserveUntil) {
+      try { authorize(req); }
+      catch (err) { return json(res, err.status, { error: err.message }); }
+      return json(res, 409, { error: 'Scranton is restarting to install an update' });
+    }
+    inFlightStarts++;
+    try { await handleRequest(req, res); }
+    finally { inFlightStarts--; }
   });
   server.on('clientError', (err, socket) => socket.destroy());
 

@@ -2,12 +2,13 @@
 
 mod platform;
 mod process_group;
+mod updater;
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpStream},
     process::{Child, Command, Stdio},
-    sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex},
+    sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -20,6 +21,9 @@ use std::os::windows::process::CommandExt;
 #[derive(Default)]
 struct Sidecar {
     child: Mutex<Option<Child>>,
+    url: Mutex<Option<tauri::Url>>,
+    updater_scheduled: AtomicBool,
+    update_guard: OnceLock<uuid::Uuid>,
     stopping: AtomicBool,
 }
 
@@ -48,23 +52,46 @@ fn stop_tree(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn shutdown(app: &tauri::AppHandle) {
+fn server_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
     let state = app.state::<Arc<Sidecar>>();
-    if state.stopping.swap(true, Ordering::SeqCst) { return; }
-    let state = state.inner().clone();
+    let url = state.url.lock().unwrap().clone();
+    url
+}
+
+fn update_guard(app: &tauri::AppHandle) -> Option<uuid::Uuid> {
+    app.state::<Arc<Sidecar>>().update_guard.get().copied()
+}
+
+fn claim_shutdown(app: &tauri::AppHandle) -> bool {
+    !app.state::<Arc<Sidecar>>().stopping.swap(true, Ordering::SeqCst)
+}
+
+fn release_shutdown(app: &tauri::AppHandle) {
+    app.state::<Arc<Sidecar>>().stopping.store(false, Ordering::SeqCst);
+}
+
+fn shutdown_sidecar(app: &tauri::AppHandle) {
+    let state = app.state::<Arc<Sidecar>>();
+    let mut slot = state.child.lock().unwrap();
+    state.url.lock().unwrap().take();
+    if let Some(mut child) = slot.take() {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(b"quit\n");
+            let _ = stdin.flush();
+        }
+        let until = Instant::now() + Duration::from_secs(5);
+        while matches!(child.try_wait(), Ok(None)) && Instant::now() < until {
+            thread::sleep(Duration::from_millis(50));
+        }
+        if !matches!(child.try_wait(), Ok(Some(_))) { stop_tree(&mut child); }
+    }
+}
+
+fn shutdown(app: &tauri::AppHandle) {
+    if !claim_shutdown(app) { return; }
     let app = app.clone();
     thread::spawn(move || {
-        if let Some(mut child) = state.child.lock().unwrap().take() {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(b"quit\n");
-                let _ = stdin.flush();
-            }
-            let until = Instant::now() + Duration::from_secs(5);
-            while matches!(child.try_wait(), Ok(None)) && Instant::now() < until {
-                thread::sleep(Duration::from_millis(50));
-            }
-            if !matches!(child.try_wait(), Ok(Some(_))) { stop_tree(&mut child); }
-        }
+        shutdown_sidecar(&app);
         app.exit(0);
     });
 }
@@ -125,6 +152,7 @@ fn startup(app: &tauri::AppHandle) -> Result<(tauri::Url, Arc<Mutex<Vec<u8>>>), 
     let mut slot = state.child.lock().unwrap();
     if state.stopping.load(Ordering::SeqCst) { return Err("Startup cancelled".into()); }
     process_group::isolate(&mut command);
+    command.env("SCRANTON_DESKTOP_UPDATE_GUARD", state.update_guard.get_or_init(uuid::Uuid::new_v4).to_string());
     let mut child = hidden(&mut command).spawn().map_err(|e| format!("Cannot start bundled Node: {e}"))?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -179,6 +207,69 @@ fn startup(app: &tauri::AppHandle) -> Result<(tauri::Url, Arc<Mutex<Vec<u8>>>), 
     }
 }
 
+fn supervise(handle: tauri::AppHandle) {
+    thread::spawn(move || loop {
+        let (url, tail) = match startup(&handle) {
+            Ok(ready) => ready,
+            Err(error) => {
+                if handle.state::<Arc<Sidecar>>().stopping.load(Ordering::SeqCst) { return; }
+                handle.dialog().message(error).title("Scranton startup failed")
+                    .kind(MessageDialogKind::Error).blocking_show();
+                shutdown(&handle);
+                return;
+            }
+        };
+        let state = handle.state::<Arc<Sidecar>>();
+        {
+            let _slot = state.child.lock().unwrap();
+            if state.stopping.load(Ordering::SeqCst) { return; }
+            *state.url.lock().unwrap() = Some(url.clone());
+        }
+        if !state.updater_scheduled.swap(true, Ordering::SeqCst) {
+            tauri::async_runtime::spawn(updater::periodic(handle.clone()));
+        }
+        if let Some(window) = handle.get_webview_window("main") {
+            if let Err(error) = window.navigate(url.clone()) {
+                handle.dialog().message(error.to_string()).title("Scranton startup failed")
+                    .kind(MessageDialogKind::Error).blocking_show();
+                shutdown(&handle);
+                return;
+            } else { let _ = window.show(); }
+        }
+        let failure = loop {
+            thread::sleep(Duration::from_secs(1));
+            if state.stopping.load(Ordering::SeqCst) { return; }
+            let exited = {
+                let mut slot = state.child.lock().unwrap();
+                if state.stopping.load(Ordering::SeqCst) || state.url.lock().unwrap().as_ref() != Some(&url) { return; }
+                let exited = match slot.as_mut().map(Child::try_wait) {
+                    Some(Ok(None)) => None,
+                    Some(Ok(Some(status))) => { slot.take(); Some(format!("App server exited unexpectedly ({status}).")) },
+                    Some(Err(error)) => {
+                        if let Some(mut child) = slot.take() { stop_tree(&mut child); }
+                        Some(format!("Cannot monitor app server: {error}"))
+                    },
+                    None => return,
+                };
+                if exited.is_some() { state.url.lock().unwrap().take(); }
+                exited
+            };
+            let paused = exited.is_none() && pending_human(&url).unwrap_or(false);
+            if let Some(tray) = handle.tray_by_id("main") {
+                let _ = tray.set_tooltip(Some(if paused { "Scranton — Human needed" } else { "Scranton" }));
+            }
+            if let Some(error) = exited { break error; }
+        };
+        if state.stopping.load(Ordering::SeqCst) { return; }
+        let stderr = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
+        let restart = handle.dialog().message(format!("{failure}\n\n{stderr}\n\nRestart the app server?"))
+            .title("Scranton app server stopped").kind(MessageDialogKind::Error)
+            .buttons(MessageDialogButtons::OkCancelCustom("Restart".into(), "Quit".into()))
+            .blocking_show();
+        if !restart { shutdown(&handle); return; }
+    });
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -191,8 +282,14 @@ fn main() {
             .build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            updater::update_status, updater::update_check, updater::update_download,
+            updater::update_set_settings, updater::update_install,
+        ])
         .manage(Arc::new(Sidecar::default()))
         .setup(|app| {
+            app.manage(updater::Updates::new(app.handle())?);
             #[cfg(target_os = "macos")]
             app.set_menu(Menu::default(app.handle())?)?;
             let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
@@ -210,54 +307,9 @@ fn main() {
                     _ => {}
                 }).build(app)?;
             let handle = app.handle().clone();
-            thread::spawn(move || loop {
-                let (url, tail) = match startup(&handle) {
-                    Ok(ready) => ready,
-                    Err(error) => {
-                        if handle.state::<Arc<Sidecar>>().stopping.load(Ordering::SeqCst) { return; }
-                        handle.dialog().message(error).title("Scranton startup failed")
-                            .kind(MessageDialogKind::Error).blocking_show();
-                        shutdown(&handle);
-                        return;
-                    }
-                };
-                if let Some(window) = handle.get_webview_window("main") {
-                    if let Err(error) = window.navigate(url.clone()) {
-                        handle.dialog().message(error.to_string()).title("Scranton startup failed")
-                            .kind(MessageDialogKind::Error).blocking_show();
-                        shutdown(&handle);
-                        return;
-                    } else { let _ = window.show(); }
-                }
-                let state = handle.state::<Arc<Sidecar>>();
-                let failure = loop {
-                    thread::sleep(Duration::from_secs(1));
-                    if state.stopping.load(Ordering::SeqCst) { return; }
-                    let exited = {
-                        let mut slot = state.child.lock().unwrap();
-                        match slot.as_mut().map(Child::try_wait) {
-                            Some(Ok(None)) => None,
-                            Some(Ok(Some(status))) => { slot.take(); Some(format!("App server exited unexpectedly ({status}).")) },
-                            Some(Err(error)) => {
-                                if let Some(mut child) = slot.take() { stop_tree(&mut child); }
-                                Some(format!("Cannot monitor app server: {error}"))
-                            },
-                            None => return,
-                        }
-                    };
-                    let paused = exited.is_none() && pending_human(&url).unwrap_or(false);
-                    if let Some(tray) = handle.tray_by_id("main") {
-                        let _ = tray.set_tooltip(Some(if paused { "Scranton — Human needed" } else { "Scranton" }));
-                    }
-                    if let Some(error) = exited { break error; }
-                };
-                if state.stopping.load(Ordering::SeqCst) { return; }
-                let stderr = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
-                let restart = handle.dialog().message(format!("{failure}\n\n{stderr}\n\nRestart the app server?"))
-                    .title("Scranton app server stopped").kind(MessageDialogKind::Error)
-                    .buttons(MessageDialogButtons::OkCancelCustom("Restart".into(), "Quit".into()))
-                    .blocking_show();
-                if !restart { shutdown(&handle); return; }
+            thread::spawn(move || {
+                tauri::async_runtime::block_on(updater::before_start(&handle));
+                supervise(handle);
             });
             Ok(())
         })
@@ -269,8 +321,8 @@ fn main() {
         })
         .build(tauri::generate_context!()).expect("Cannot initialize Scranton desktop");
     app.run(|app, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            if !app.state::<Arc<Sidecar>>().stopping.load(Ordering::SeqCst) {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            if code.is_none() || !app.state::<Arc<Sidecar>>().stopping.load(Ordering::SeqCst) {
                 api.prevent_exit(); shutdown(app);
             }
         }

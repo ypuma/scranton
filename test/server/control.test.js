@@ -10,6 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { tempDir } from '../core/helpers.js';
 import { cleanup } from '../core/fixture-cleanup.js';
 import { startVisualizerServer } from '../../src/server/visualizer-server.js';
+import { readRunLease, releaseRunLease } from '../../src/core/run-lease.js';
 
 async function setup(t, control = {}) {
   const root = path.resolve('.scratch/suite-hang3/control');
@@ -43,6 +44,54 @@ test('read-only control discovery and disabled POST routes', async (t) => {
   const { srv } = await setup(t, false);
   assert.deepEqual((await request(srv, '/api/control')).value, { v: 1, enabled: false });
   for (const route of ['/api/runs', '/api/hitl', '/api/runs/stop']) assert.equal((await request(srv, route, {})).status, 404);
+});
+
+test('app busy is protected in single mode and counts active Team questions', async (t) => {
+  const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, stdout: new PassThrough(), stderr: new PassThrough() });
+  const { srv, hive } = await setup(t, { runner: () => child });
+  const idle = { running: 0, waitingForHuman: 0 };
+  const busy = () => request(srv, '/api/app/busy');
+  assert.deepEqual((await busy()).value, idle);
+  for (const headers of [{ 'X-Scranton-Client': '' }, { Host: 'foreign.test' }, { Origin: 'https://foreign.test' }, { 'X-Scranton-Update-Guard': 'invalid' }]) {
+    assert.equal((await request(srv, '/api/app/busy', undefined, headers)).status, 403);
+  }
+  assert.equal((await request(srv, '/api/app/busy', {})).status, 405);
+  assert.equal((await request(srv, '/api/runs', { request: 'Count this run' })).status, 202);
+  try {
+    const { run } = (await request(srv, '/api/control')).value;
+    assert.deepEqual((await busy()).value, { running: 1, waitingForHuman: 0 });
+    const events = path.join(hive, 'events.jsonl');
+    fs.appendFileSync(events, `${JSON.stringify({ runId: run.runId, type: 'hitl_request', seq: 2 })}\n`);
+    assert.deepEqual((await busy()).value, { running: 1, waitingForHuman: 1 });
+  } finally {
+    releaseRunLease(hive, readRunLease(hive).token);
+    child.exitCode = 0;
+    child.emit('close', 0);
+  }
+  assert.deepEqual((await busy()).value, idle);
+});
+
+test('native idle probe reserves the sidecar, but public reads and busy probes do not', async (t) => {
+  const guard = 'test-desktop-update-guard';
+  process.env.SCRANTON_DESKTOP_UPDATE_GUARD = guard;
+  const { srv } = await setup(t);
+  assert.equal(process.env.SCRANTON_DESKTOP_UPDATE_GUARD, undefined);
+  const headers = { 'X-Scranton-Update-Guard': guard };
+  const probe = () => request(srv, '/api/app/busy', undefined, headers);
+  const held = http.request(`${srv.url}/api/runs`, {
+    method: 'POST', headers: { 'X-Scranton-Client': '1', 'Content-Type': 'application/json' },
+  });
+  held.on('error', () => {});
+  try {
+    held.write('{');
+    const pending = await until(probe, (reply) => reply.value.running === 1, 3000);
+    assert.deepEqual(pending.value, { running: 1, waitingForHuman: 0 });
+    assert.deepEqual((await request(srv, '/api/app/busy')).value, { running: 0, waitingForHuman: 0 });
+    assert.equal((await request(srv, '/api/runs', {})).status, 400);
+  } finally { held.destroy(); }
+  const reserved = await until(probe, (reply) => reply.value.running === 0, 3000);
+  assert.equal(reserved.status, 200);
+  assert.equal((await request(srv, '/api/runs', {})).status, 409);
 });
 
 test('control request hardening', async (t) => {

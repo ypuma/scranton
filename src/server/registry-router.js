@@ -19,7 +19,7 @@ import { UNKNOWN_RECIPIENT } from '../core/context/limits.js';
 import { createAgentRoutes } from './agent-routes.js';
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
-function authorize(req) {
+export function authorize(req) {
   const host = String(req.headers.host ?? '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
   if (!isLoopbackAddress(req.socket.remoteAddress) || !(host === 'localhost' || isLoopbackAddress(host)) || req.headers['x-scranton-client'] !== '1') throw fail(403, 'Forbidden');
   if (req.headers.origin !== undefined && req.headers.origin !== `http://${host.includes(':') ? `[${host}]` : host}:${req.socket.localPort}`) throw fail(403, 'Forbidden origin');
@@ -45,7 +45,7 @@ function replay(hive, runId) {
   } catch (err) { if (err.code === 'ENOENT') throw fail(404, 'Run archive not found'); throw err; }
 }
 
-export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace, contextFactory, single, completeReflection = control?.completeReflection, modelWindows = control?.modelWindows ?? (dataDir ? createModelWindows() : undefined) }) {
+export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentRuns, projectsRoot, legacyWorkspace, contextFactory, single, reserveUpdate, completeReflection = control?.completeReflection, modelWindows = control?.modelWindows ?? (dataDir ? createModelWindows() : undefined) }) {
   if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1) throw fail(400, 'Invalid maxConcurrentRuns');
   const registry = dataDir ? createProjectRegistry({ dataDir, projectsRoot }) : null;
   if (legacyWorkspace) registry?.importLegacy(legacyWorkspace);
@@ -293,7 +293,8 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       const dreamPath = /^\/api\/projects\/([^/]+)\/dreaming(?:\/(preview|sweep|settings|rollback|proposal|propose|proposal\/apply|proposal\/reject|cancel))?$/.exec(pathname);
       const contextPath = /^\/api\/projects\/([^/]+)\/context(?:\/(.*))?$/.exec(pathname);
       const detectPath = /^\/api\/projects\/([^/]+)\/pipeline\/detect$/.exec(pathname);
-      if (!scopedPath && !chatRoute && !projectsRoute && !alias && !agentPath && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath && !dreamPath && !contextPath) return false;
+      const busyPath = pathname === '/api/app/busy';
+      if (!busyPath && !scopedPath && !chatRoute && !projectsRoute && !alias && !agentPath && !['/api/runs', '/api/pipeline', '/api/pipeline/sandbox/build'].includes(pathname) && !detectPath && !dreamPath && !contextPath) return false;
       if (!registry && (contextPath || scopedPath?.[3] === '/context' || scopedPath?.[3].startsWith('/context/'))) throw fail(404, 'Not found');
       if (!registry && !scopedPath && !chatRoute && !projectsRoute && pathname === '/api/runs' && req.method !== 'GET') return false;
       authorize(req);
@@ -301,6 +302,19 @@ export function createRegistryRouter({ dataDir, hiveDir, control, maxConcurrentR
       if (!registry && agentPath) { await scoped(req, res, defaultProject(), defaultChat(), pathname.slice(4)); return true; }
       if (closing) throw fail(409, 'Server is closing');
       recoverGone();
+      if (busyPath) {
+        if (req.method !== 'GET') throw fail(405, 'Method not allowed');
+        const chats = registry ? allChats() : [defaultChat()];
+        let running = 0, waitingForHuman = 0;
+        for (const chat of chats) {
+          const s = snapshot(chat);
+          if (s.run || (chat.engine === 'pipeline' ? s.last?.status === 'running' : s.recoveryRequired || readRunLease(chat.hiveDir))) running++;
+          if (s.pendingHuman) waitingForHuman++;
+        }
+        const counts = { running, waitingForHuman };
+        const guard = req.headers['x-scranton-update-guard'];
+        json(res, 200, guard === undefined ? counts : reserveUpdate(guard, counts)); return true;
+      }
       if (contextPath) {
         const projectId = contextPath[1], action = contextPath[2];
         registry.getProject(projectId);

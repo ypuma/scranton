@@ -1,0 +1,24 @@
+[[permission]]
+identifier = "allow-update-status"
+description = "Read Scranton's update status."
+commands.allow = ["update_status"]
+
+[[permission]]
+identifier = "allow-update-check"
+description = "Check the configured release endpoint for updates."
+commands.allow = ["update_check"]
+
+[[permission]]
+identifier = "allow-update-download"
+description = "Download the offered update into Scranton's cache."
+commands.allow = ["update_download"]
+
+[[permission]]
+identifier = "allow-update-set-settings"
+description = "Change Scranton's automatic update preferences."
+commands.allow = ["update_set_settings"]
+
+[[permission]]
+identifier = "allow-update-install"
+description = "Install the verified cached update if the sidecar is idle."
+commands.allow = ["update_install"]
