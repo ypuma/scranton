@@ -1,9 +1,11 @@
 // The Settings drawer: appearance, notifications and what the New run form starts with, all kept on this
-// computer and applied as they change. Accounts and agents keep their own drawers; Settings opens them.
+// computer and applied as they change, and the desktop app's updates. Accounts and agents keep their own drawers;
+// Settings opens them.
 import { store } from './control-panel.js';
 import { WORKFLOW_KEY, parseStoredWorkflow } from './control.js';
 import { PREFS_KEY, RUN_DEFAULTS_KEY, parsePrefs, applyPrefs, parseParallel, parseRunDefaults } from './prefs.js';
 import { relayTarget, relayCommands, mayBeRelay, relayPaired } from './phone-relay.js';
+import { createUpdates } from './update-panel.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -49,6 +51,7 @@ export function createSettings() {
       relay.box.hidden = false;
     });
   }
+  const updates = createUpdates();
   let prefs = loadPrefs();
   const PARALLEL_HINT = e.parallelHint.textContent;
 
@@ -138,6 +141,7 @@ export function createSettings() {
     if (e.dialog.open) return;
     fill();
     checkPaired();
+    updates.refresh();
     e.dialog.showModal();
     e.dialog.querySelector('[data-close]').focus();
   });

@@ -17,6 +17,7 @@
       </button>
       <span class="wordmark" title="Scranton - Agent Orchestration">SCRANTON</span>
     </div>
+    <p class="update-ready" id="update-ready" role="status" hidden><span class="update-ready-text" id="update-ready-text"></span><span class="hint" id="update-ready-busy" hidden></span><button type="button" class="link-btn" id="update-ready-restart" aria-describedby="update-ready-busy">Restart now</button></p>
     <div class="top-actions">
       <div class="run-actions" id="run-actions" hidden>
         <button type="button" class="icon-btn" id="notify-toggle" aria-pressed="false" aria-label="Desktop notifications" hidden>
@@ -603,6 +604,33 @@
             <button type="button" class="btn" id="prefs-agents" aria-haspopup="dialog">Agents and prompts</button>
           </div>
           <p class="hint prefs-note" id="prefs-links-note" hidden>Accounts and agents can be changed where this page controls runs: the desktop app or the app server.</p>
+        </fieldset>
+        <fieldset class="exec" id="prefs-updates">
+          <legend>Updates</legend>
+          <div class="update-app" id="prefs-update-app" hidden>
+            <div class="update-head">
+              <span class="field-label">Version <span class="update-version" id="prefs-update-version"></span></span>
+              <span class="hint" id="prefs-update-checked"></span>
+            </div>
+            <p class="form-status update-state" id="prefs-update-state" role="status" aria-live="polite"></p>
+            <div class="prefs-links">
+              <button type="button" class="btn" id="prefs-update-check" hidden>Check now</button>
+              <button type="button" class="btn" id="prefs-update-download" hidden>Download</button>
+              <button type="button" class="btn btn-primary" id="prefs-update-install" aria-describedby="prefs-update-busy" hidden>Restart and update</button>
+            </div>
+            <span class="hint" id="prefs-update-busy" hidden></span>
+            <p class="form-status prefs-note" id="prefs-update-action" role="status" aria-live="polite"></p>
+            <label class="check"><input type="checkbox" id="prefs-update-auto-check" disabled><span>Check for updates automatically <span class="hint">30 seconds after the app starts, then every 6 hours</span></span></label>
+            <label class="check"><input type="checkbox" id="prefs-update-auto-install" disabled><span>Install updates automatically at the next start <span class="hint">downloads in the background and installs before Scranton starts next, never during a run</span></span></label>
+            <div class="field" id="prefs-update-notes-box" hidden>
+              <span class="field-label" id="prefs-update-notes-title"></span>
+              <div class="update-notes" id="prefs-update-notes" role="region" aria-labelledby="prefs-update-notes-title" tabindex="0"></div>
+            </div>
+          </div>
+          <div class="field" id="prefs-update-browser" hidden>
+            <p class="hint prefs-note" id="prefs-update-browser-text"></p>
+            <a class="update-link" href="https://github.com/ypuma/scranton/releases" target="_blank" rel="noopener noreferrer">Scranton releases on GitHub</a>
+          </div>
         </fieldset>
       </div>
       <footer class="drawer-foot">

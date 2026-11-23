@@ -279,6 +279,11 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outlin
 .wordmark { padding-left: var(--s2); font: 600 var(--fs-s) var(--sans); letter-spacing: 0.16em; color: var(--text-2); }
 
 .top-actions, .run-actions { display: flex; align-items: center; gap: var(--s2); flex: none; }
+/* a quiet line, not a banner: the bar keeps its height and the view does not move */
+.update-ready { flex: 0 1 auto; min-width: 0; margin: 0; display: flex; align-items: center; gap: var(--s2); font-size: var(--fs-s); color: var(--text-2); }
+.update-ready-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.update-ready .link-btn { flex: none; }
+.update-ready .link-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .run-actions #accounts-open {
   width: 2rem;
   padding: 0;
@@ -2204,6 +2209,15 @@ body[data-side] .rail { display: none; }
 /* a whole command is one selection, wrapped rather than scrolled */
 .relay-cmd { display: block; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
 .relay-logout { margin: 0; }
+/* Updates: what the desktop shell reports; release notes are plain text, kept as the release wrote them */
+.update-app { display: grid; gap: var(--s3); min-width: 0; }
+.update-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s1) var(--s3); }
+.update-version { margin-left: var(--s2); color: var(--text); font-weight: 600; }
+.update-state { margin: 0; color: var(--text); }
+.update-app .prefs-links:not(:has(> :not([hidden]))) { display: none; }
+.update-notes { max-height: 14rem; overflow: auto; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text-2); font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-link { justify-self: start; color: var(--text); font-weight: 600; text-underline-offset: 2px; }
+.update-link:hover { color: var(--text-2); }
 
 /* ------------------------------------------------------------ live activity: the run rail, lanes, usage */
 /* The rail of the Chat view: a third column beside the transcript, with a scroll of its own. Where it is comes
