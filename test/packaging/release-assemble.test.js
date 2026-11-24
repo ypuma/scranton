@@ -86,19 +86,43 @@ async function fixture(t, { lanes = plans.slice(0, 1), signed = false, signVersi
   return { root, stage, windows, winDir, winReceipt, winDoc, saveWindows, imports, run, refuse };
 }
 
-test('assemble signs all POSIX updaters, preserves Windows signature, and stages one verified feed', async t => {
-  const f = await fixture(t, { lanes: plans, signed: true });
-  const provenance = Object.fromEntries(f.imports.map(({ doc }, i) => [doc.platform.startsWith('linux-') ? `${doc.platform}-appimage` : doc.platform, {
+function laneProvenance(imports) {
+  return Object.fromEntries(imports.map(({ doc }, i) => [doc.platform.startsWith('linux-') ? `${doc.platform}-appimage` : doc.platform, {
     run_id: 123, head_sha: commit, workflow_path: '.github/workflows/desktop-native.yml', event: 'workflow_dispatch', conclusion: 'success',
     artifact: { name: `scranton-${doc.target}`, id: i + 1, digest: `sha256:${'a'.repeat(64)}` },
   }]));
+}
+
+test('production assemble requires provenance when importing a CI lane', async t => {
+  const f = await fixture(t, { signed: true });
+  await f.refuse(/--provenance is required when assembling CI lanes for production/, { testKey: false });
+  const provenance = path.join(f.root, 'provenance.json');
+  await fs.writeFile(provenance, JSON.stringify(laneProvenance(f.imports)));
+  // Valid provenance clears the gate without accessing the production key store.
+  await f.refuse(/Cannot import Windows test-key output/, { testKey: false, provenance });
+});
+
+for (const [label, mutate, error] of [
+  ['missing provenance lane', doc => { delete doc['darwin-aarch64']; }, /Provenance must identify each included Actions lane/],
+  ['extra provenance lane', doc => { doc['linux-x86_64-appimage'] = doc['darwin-aarch64']; }, /Provenance must identify each included Actions lane/],
+  ['mismatched provenance artifact', doc => { doc['darwin-aarch64'].artifact.name = 'scranton-x86_64-unknown-linux-gnu'; }, /Invalid Actions provenance for darwin-aarch64/],
+  ['mismatched provenance commit', doc => { doc['darwin-aarch64'].head_sha = 'a'.repeat(40); }, /Provenance head_sha mismatch for darwin-aarch64/],
+]) {
+  test(`assemble rejects ${label}`, async t => {
+    const f = await fixture(t, { signed: true });
+    const doc = laneProvenance(f.imports);
+    mutate(doc);
+    const provenance = path.join(f.root, 'provenance.json');
+    await fs.writeFile(provenance, JSON.stringify(doc));
+    await f.refuse(error, { provenance });
+  });
+}
+
+test('assemble signs all POSIX updaters, preserves Windows signature, and stages one verified feed', async t => {
+  const f = await fixture(t, { lanes: plans, signed: true });
+  const provenance = laneProvenance(f.imports);
   const provenanceFile = path.join(f.root, 'provenance.json');
-  const save = () => fs.writeFile(provenanceFile, JSON.stringify(provenance));
-  provenance['darwin-aarch64'].head_sha = 'a'.repeat(40);
-  await save();
-  await f.refuse(/Provenance head_sha mismatch/, { provenance: provenanceFile });
-  provenance['darwin-aarch64'].head_sha = commit;
-  await save();
+  await fs.writeFile(provenanceFile, JSON.stringify(provenance));
   const run = f.run({ provenance: provenanceFile });
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /TEST KEY - DO NOT PUBLISH/);
@@ -260,8 +284,8 @@ test('assemble refuses a Windows signature bound to the wrong version', async t 
   await f.refuse(/signature must bind the exact release version/);
 });
 
-test('production assemble rejects test-key output even if its marker is stripped', async t => {
-  const f = await fixture(t, { signed: true });
+test('Windows-only production assemble rejects test-key output even if its marker is stripped', async t => {
+  const f = await fixture(t, { lanes: [], signed: true });
   await f.refuse(/Cannot import Windows test-key output/, { testKey: false });
   await fs.unlink(path.join(f.winDir, 'TEST-KEY.json'));
   await f.refuse(/Minisign key ID mismatch/, { testKey: false });

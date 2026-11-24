@@ -96,7 +96,7 @@ test('readDesktopVersion follows repository files and refuses a mismatch', async
   await assert.rejects(readDesktopVersion(root), /version or product name mismatch/);
 });
 
-test('Windows receipt allows untracked files but refuses unstaged and staged tracked edits', async t => {
+async function windowsFixture(t) {
   const f = await fixture(t);
   const output = path.join(f.root, 'windows');
   const target = 'x86_64-pc-windows-msvc';
@@ -105,6 +105,22 @@ test('Windows receipt allows untracked files but refuses unstaged and staged tra
   await fs.writeFile(path.join(output, name), 'Built NSIS');
   const opts = { output, target, version, commit: f.commit, repo: f.repo };
   const receiptFile = path.join(output, `desktop-receipt-${target}.json`);
+  return { ...f, opts, receiptFile };
+}
+
+async function addFixtureFile(root, file, content = 'fixture') {
+  const destination = path.join(root, file);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.writeFile(destination, content);
+}
+
+test('Windows receipt allows nonpackaged extras but refuses unstaged and staged tracked edits', async t => {
+  const f = await windowsFixture(t);
+  const { opts, receiptFile } = f;
+  for (const file of ['.claude/settings.json', 'hive/live.json', 'src/node_modules/local/dependency.js', 'docs/.env.local',
+    'engine/src/scranton_pipeline/demo/__pycache__/fixture.pyc', 'engine/src/scranton_pipeline.egg-info/PKG-INFO']) {
+    await addFixtureFile(f.root, file);
+  }
   await fs.writeFile(path.join(f.root, 'source.txt'), 'modified');
   await assert.rejects(writeDesktopReceipt(opts), /clean tracked working tree and index/);
   f.git('add', 'source.txt');
@@ -116,3 +132,28 @@ test('Windows receipt allows untracked files but refuses unstaged and staged tra
   assert.equal(receipt.commit, f.commit);
   assert.equal(receipt.files[0].sha256, createHash('sha256').update('Built NSIS').digest('hex'));
 });
+
+for (const [state, file] of [
+  ['untracked', 'visualizer/public/local asset.js'],
+  ['ignored', 'docs/generated/local asset.md'],
+  ['untracked Pipeline', 'engine/src/scranton_pipeline/local.py'],
+]) {
+  test(`Windows receipt refuses ${state} packaged files and names the path`, async t => {
+    if (state === 'untracked Pipeline' && process.env.SCRANTON_SKIP_PIPELINE === '1') {
+      delete process.env.SCRANTON_SKIP_PIPELINE;
+      t.after(() => { process.env.SCRANTON_SKIP_PIPELINE = '1'; });
+    }
+    const f = await windowsFixture(t);
+    await addFixtureFile(f.root, file);
+    if (state === 'ignored') {
+      await addFixtureFile(f.root, '.git/info/exclude', '/docs/generated/\n');
+      assert.equal(f.git('check-ignore', '--', file), file);
+    }
+    await assert.rejects(writeDesktopReceipt(f.opts), error => {
+      assert.match(error.message, /untracked or ignored packaged inputs/);
+      assert.ok(error.message.includes(file), error.message);
+      return true;
+    });
+    await assert.rejects(fs.access(f.receiptFile), { code: 'ENOENT' });
+  });
+}

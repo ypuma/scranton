@@ -23,6 +23,13 @@ function run(exe, args, options) {
 }
 
 const sha256 = (content) => createHash('sha256').update(content).digest('hex');
+
+export const desktopInputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
+  'tools/pipeline-complete.js', 'tools/pipeline-sandbox.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
+  'LICENSE', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'voice-models.lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
+export const desktopForbidden = /^(?:node_modules|hive|sessions|\.git|\.pi|\.env(?:\..*)?|auth\.json|credentials\.json|.*\.(?:pem|key|p12|pfx))$/i;
+export const pipelineSource = 'engine/src/scranton_pipeline';
+export { pipelineForbidden };
 const pipelineForbidden = /^(?:node_modules|hive|sessions|\.git|\.pi|\.scratch|\.env(?:\..*)?|auth\.json|credentials\.json|.*\.(?:pem|key|p12|pfx|pyc|pyo)|__pycache__|\.(?:pytest|ruff|mypy)_cache|tests?|(?:_?pytest|ruff|mypy|pip|setuptools|wheel)(?:[-_.].*)?|bin|Scripts)$/i;
 
 export async function prunePipeline(directory, packageRoot = directory) {
@@ -135,7 +142,7 @@ async function preparePipeline(host) {
     }
     const source = path.join(runtime, 'site-packages', 'scranton_pipeline');
     await fs.rm(source, { recursive: true, force: true });
-    await fs.cp(path.join(root, 'engine', 'src', 'scranton_pipeline'), source, { recursive: true, filter: async (file) => {
+    await fs.cp(path.join(root, pipelineSource), source, { recursive: true, filter: async (file) => {
       if ((await fs.lstat(file)).isSymbolicLink()) throw new Error(`Pipeline source link not allowed: ${file}`);
       return !pipelineForbidden.test(path.basename(file));
     } });
@@ -179,10 +186,7 @@ export async function prepareDesktop() {
   try {
   const host = assertNativeBuild(desktopPlatform());
   if (process.env.SCRANTON_DESKTOP_STUB) throw new Error('Desktop stub builds are not distributable; unset SCRANTON_DESKTOP_STUB.');
-  const inputs = ['bin', 'src', 'agents', 'visualizer/public', 'docs', 'sandbox/Dockerfile', 'sandbox/.dockerignore',
-    'tools/pipeline-complete.js', 'tools/pipeline-sandbox.js', 'tools/dreaming-complete.js', 'tools/completion-client.js', 'scripts/runtime-smoke.mjs',
-    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'tools-lock.json', 'voice-models.lock.json', 'scranton.config.json', 'package.json', 'package-lock.json'];
-  for (const input of inputs) {
+  for (const input of desktopInputs) {
     try { await fs.access(path.join(root, input)); }
     catch { throw new Error(`Required desktop input is missing: ${input}`); }
   }
@@ -200,14 +204,13 @@ export async function prepareDesktop() {
   for (const entry of await fs.readdir(app)) {
     if (entry !== 'node_modules' && entry !== 'engine-runtime') await fs.rm(path.join(app, entry), { recursive: true, force: true });
   }
-  const forbidden = /^(?:node_modules|hive|sessions|\.git|\.pi|\.env(?:\..*)?|auth\.json|credentials\.json|.*\.(?:pem|key|p12|pfx))$/i;
-  for (const input of inputs) {
+  for (const input of desktopInputs) {
     const target = path.join(app, input);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.cp(path.join(root, input), target, { recursive: true, filter: async (source) => {
       const stat = await fs.lstat(source);
       if (stat.isSymbolicLink()) throw new Error(`Source link not allowed: ${source}`);
-      return !forbidden.test(path.basename(source));
+      return !desktopForbidden.test(path.basename(source));
     } });
   }
   // npm ci recreates node_modules: never distribute files left by a previous staged run.

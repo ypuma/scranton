@@ -4,6 +4,7 @@
 //   --lane <dir> [--lane <dir> ...] --stage <new directory> --notes-file <file>
 // All four updater platforms are required unless explicitly excluded with --omit <platform-key>.
 // --provenance <json file> records Actions metadata keyed by included POSIX updater platform.
+// Required when including any POSIX lane in a production assembly.
 // Test assembly: --test-key without --windows builds NSIS with the same throwaway key.
 // With --windows, test assembly verifies the existing test build's public-key marker
 // and uses another throwaway key for POSIX. Both modes mark output as not for release.
@@ -387,6 +388,7 @@ async function assemble(options) {
   const missing = [...platformSet].filter(key => !platformKeys.has(key) && !omitted.has(key));
   if (missing.length) throw new Error(`Missing required updater platform(s): ${missing.join(', ')}. Use --omit to exclude deliberately.`);
   if (!platformKeys.size) throw new Error('Assembly requires at least one platform.');
+  if (!test && lanes.length && !options.provenance) throw new Error('--provenance is required when assembling CI lanes for production.');
   const provenance = await readProvenance(options.provenance, lanes, commit);
 
   // A fixed sibling lock excludes concurrent assembler invocations; the final rename only exposes complete stages.

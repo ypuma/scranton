@@ -4,6 +4,7 @@ import { constants, createReadStream } from 'node:fs';
 import { copyFile, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { desktopForbidden, desktopInputs, pipelineForbidden, pipelineSource } from './prepare-desktop.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 // Names are from the locked Tauri CLI 2.12.4 bundler (NSIS, DMG, Debian, linuxdeploy).
@@ -58,12 +59,27 @@ async function fingerprint(file) {
   return { size: stat.size, sha256: hash.digest('hex') };
 }
 
+export function untrackedDesktopInputs(repo = root) {
+  const includePipeline = process.env.SCRANTON_SKIP_PIPELINE !== '1';
+  const inputs = includePipeline ? [...desktopInputs, pipelineSource] : desktopInputs;
+  // With no exclude rules, --others lists ignored files too. Match the copy filter on every traversed component.
+  return execFileSync('git', ['ls-files', '--others', '-z', '--', ...inputs], { cwd: repo, encoding: 'utf8' })
+    .split('\0').filter(file => {
+      const input = inputs.find(input => file === input || file.startsWith(`${input}/`));
+      if (!input) return false;
+      const forbidden = input === pipelineSource ? pipelineForbidden : desktopForbidden;
+      return !file.slice(input.lastIndexOf('/') + 1).split('/').some(name => forbidden.test(name));
+    });
+}
+
 export function cleanBuildCommit(repo = root, expected, githubSha) {
   const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
   const head = git(['rev-parse', 'HEAD']);
   if (git(['status', '--porcelain=v1', '--untracked-files=no', '--ignore-submodules=none'])) {
     throw Error('Desktop receipt requires a clean tracked working tree and index');
   }
+  const extra = untrackedDesktopInputs(repo);
+  if (extra.length) throw Error(`Desktop receipt refuses untracked or ignored packaged inputs:\n${extra.map(file => JSON.stringify(file)).join('\n')}`);
   return verifyBuildCommit(expected ?? head, head, githubSha);
 }
 
