@@ -118,6 +118,77 @@ test('hostile text only ever becomes text nodes', () => {
   assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|srcdoc|DOMParser/);
 });
 
+test('what a run hands over can be copied: the reply, an agent\'s final message and every code block, as they were written', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = viewHarness();
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (s) => { copied.push(s); } } } });
+  const fence = '`'.repeat(3);
+  const final = `Run it:\n\n${fence}sh\nnpm test\n  --watch=false\n${fence}`;
+  const report = '## Done\nAll **green**.';
+  h.add(START,
+    msg('dwight', 'Thinking aloud.', { instanceId: 'dwight-m1', milestoneId: 'm1', cycle: 1 }),
+    msg('dwight', `${final}\n\n[TASK_COMPLETE]`, { instanceId: 'dwight-m2', milestoneId: 'm2', cycle: 1, final: true }),
+    ['run_reply', { from: 'michael', kind: 'report', text: report }],
+    ['run_finished', { status: 'success', summary: 'Done' }]);
+  const [note, done, reply] = [h.item('agent', 0), h.item('agent', 1), h.item('reply')];
+  // thinking aloud and what the human asked are not what one takes along
+  assert.deepEqual([note.className, note.querySelector('.copy-btn'), h.item('request').querySelector('.copy-btn')], ['chat-entry', null, null]);
+  assert.equal(done.className, 'chat-entry copy-host');
+  const own = done.querySelector('.chat-head').children.at(-1);
+  assert.deepEqual([own.className, own.getAttribute('aria-label')], ['copy-btn', 'Copy this message']);
+  await own.click();
+  assert.deepEqual(copied, [final], 'the message without its keyword line, Markdown and all');
+  // the code block: a line per element with its indent, and its own button
+  const pre = done.querySelector('pre');
+  assert.deepEqual([pre.className, pre.dataset.lang, pre.querySelector('code').textContent], ['code-block copy-host', 'sh', 'npm test\n  --watch=false']);
+  assert.deepEqual(pre.querySelectorAll('.code-line').map((l) => l.style['--indent']), [undefined, '2']);
+  await pre.querySelector('.copy-btn').click();
+  assert.equal(copied.at(-1), 'npm test\n  --watch=false');
+  const last = reply.querySelector('.chat-head').children.at(-1);
+  assert.equal(last.getAttribute('aria-label'), 'Copy the report');
+  await last.click();
+  assert.equal(copied.at(-1), report);
+  assert.equal(last.dataset.state, 'copied');
+  const css = read('styles.css');
+  assert.match(css, /\.chat-body:not\(\.md\), \.chat-body > :is\(p, ul, ol, h3, h4, h5\) \{ max-width: 72ch; \}/, 'prose keeps a readable line when the conversation has the whole width');
+  assert.match(css, /\.md pre \{[^}]*padding: var\(--s3\) var\(--s4\);/);
+});
+
+test('continuation finals keep whole-message copy reachable without repeating speaker labels', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (s) => { copied.push(s); } } } });
+  const css = read('styles.css');
+  for (const keyword of ['', '\n\n[TASK_COMPLETE]']) {
+    const h = viewHarness();
+    const common = { instanceId: 'dwight-m1', milestoneId: 'm1', cycle: 1 };
+    h.add(START, msg('dwight', 'Checking the existing files.', common));
+    h.add(['agent_tool', { agent: 'dwight', ...common, tool: 'read', detail: 'src/a.js' }]);
+    h.add(msg('dwight', `Finished the implementation.${keyword}`, { ...common, final: true }));
+    const final = h.item('agent', 1);
+    assert.equal(final.dataset.cont, 'true', 'the actual team adapter keeps the same speaker/context across tools');
+    const head = final.querySelector('.chat-head');
+    const copy = head.querySelector('.copy-btn');
+    assert.equal(final.querySelectorAll('.copy-btn').length, 1, 'one whole-message action, in the existing header');
+    assert.deepEqual([copy.tagName, copy.type, copy.getAttribute('aria-label')], ['BUTTON', 'button', 'Copy this message']);
+    assert.equal(copy.hidden, false);
+    copy.focus();
+    assert.equal(document.activeElement, copy);
+    await copy.click();
+    assert.equal(copied.at(-1), 'Finished the implementation.');
+    assert.equal(Boolean(head.querySelector('.badge')), Boolean(keyword));
+  }
+  // The fake DOM cannot lay out CSS: assert both structural hiding rules, not just the button's presence.
+  assert.match(css, /\.chat-entry\[data-cont="true"\] \.chat-head > :not\(\.badge, \.copy-btn\) \{ display: none; \}/,
+    'continuation name, role, context and time stay suppressed, but not the copy action');
+  assert.match(css, /\.chat-entry\[data-cont="true"\] \.chat-head:not\(:has\(\.badge, \.copy-btn\)\) \{ display: none; \}/,
+    'a final without a keyword badge still keeps its action header');
+  assert.doesNotMatch(css, /\.chat-entry\[data-cont="true"\] \.chat-head(?: > :not\(\.badge\)|:not\(:has\(\.badge\)\)) \{ display: none;/);
+  assert.match(css, /\.copy-host:not\(:hover, :focus-within\) \.copy-btn\[data-state="idle"\] \{ opacity: 0; \}/,
+    'hover/focus reveals the existing action without taking it out of the tab order');
+});
+
 test('an agent message: the keyword as a quiet chip, an intermediate one lighter, a truncated one says so', () => {
   const h = viewHarness();
   h.add(START,
@@ -919,7 +990,9 @@ test('the rules live in one module: the panel and the page only mount it', () =>
   assert.equal((main.match(/createSteering|buildChatRequest/g) ?? []).length, 0, 'the page makes no second session');
   // the view is engine neutral: entries in, nodes out
   const view = read('js/chat-view.js');
-  assert.deepEqual([...view.matchAll(/^import .* from '(.+)';$/gm)].map((m) => m[1]), ['./chat-entries.js', './chat-markdown.js', './format.js']);
+  assert.deepEqual([...view.matchAll(/^import .* from '(.+)';$/gm)].map((m) => m[1]), ['./chat-entries.js', './long-text.js', './copy.js', './format.js']);
+  // what it adds to them knows no engine either: text in, nodes out
+  for (const file of ['js/long-text.js', 'js/copy.js']) assert.doesNotMatch(read(file), /agent_message|run_reply|hive_write|state\.js|pipeline/, file);
   assert.doesNotMatch(view, /agent_message|run_reply|hive_write|reduce\(/);
   // and the logic it shares with other adapters touches no DOM
   for (const file of ['js/chat-entries.js', 'js/chat-adapter-team.js']) assert.doesNotMatch(read(file), /\bdocument\b|\bwindow\b|getElementById|createElement/, file);
@@ -943,7 +1016,7 @@ test('consecutive same-speaker/context messages share a name line while tools an
   assert.match(agents[1].getAttribute('aria-label'), /^Dwight, Developer, m2 · cycle 1/);
   assert.equal(agents[1].querySelector('.chat-body').textContent, 'Implemented.');
   const css = read('styles.css');
-  assert.match(css, /\.chat-entry\[data-cont="true"\] \.chat-head > :not\(\.badge\) \{ display: none; \}/);
+  assert.match(css, /\.chat-entry\[data-cont="true"\] \.chat-head > :not\(\.badge, \.copy-btn\) \{ display: none; \}/);
   assert.match(css, /\.chat-entry\[data-kind="activity"\]\[data-cont="true"\] \{ margin-left: var\(--s3\); \}/);
 });
 

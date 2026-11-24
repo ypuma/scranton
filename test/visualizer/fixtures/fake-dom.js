@@ -8,6 +8,8 @@ export class FakeEl {
     this.selectedOptions = [];
     this.attrs = new Map();
     this.listeners = new Map();
+    // custom properties set from code (a code line's indent)
+    this.style = { setProperty(name, value) { this[name] = String(value); } };
     const classes = new Set();
     this.classList = { add: (...c) => c.forEach((x) => classes.add(x)), remove: (...c) => c.forEach((x) => classes.delete(x)), contains: (c) => classes.has(c) };
   }
@@ -17,7 +19,7 @@ export class FakeEl {
   toggleAttribute(k, on) { if (on) this.attrs.set(k, ''); else this.attrs.delete(k); }
   addEventListener(type, fn) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]); }
   fire(type, fields = {}) {
-    const ev = { type, target: this, preventDefault() {}, ...fields };
+    const ev = { type, target: this, preventDefault() {}, stopPropagation() {}, ...fields };
     return Promise.all((this.listeners.get(type) ?? []).map((fn) => fn(ev)));
   }
   focus() { globalThis.document.activeElement = this; }

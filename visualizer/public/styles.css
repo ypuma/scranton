@@ -20,6 +20,8 @@
   --bar: rgba(11, 11, 11, 0.72);
   --scrim: rgba(0, 0, 0, 0.6);
   --shadow: rgba(0, 0, 0, 0.55);
+  --scroll-thumb: var(--line-strong);
+  --scroll-thumb-hover: var(--text-4);
   --sans: "Geist", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
   /* type: 12 / 13 / 14 / 15 / 19 px at the default text size */
@@ -61,11 +63,24 @@
   --run-line: rgba(110, 168, 254, 0.45);
 }
 
-/* every scroller gets a thin neutral bar without arrow buttons; the colour is inherited */
-* { box-sizing: border-box; scrollbar-width: thin; }
+* { box-sizing: border-box; }
 
-html { font-size: 100%; background: var(--bg); color: var(--text); scrollbar-color: var(--line-strong) transparent; }
+html { font-size: 100%; background: var(--bg); color: var(--text); }
 html, body { margin: 0; }
+
+/* Every scroller gets a thin bar with a quiet thumb and no arrow buttons. Chromium and WebKit (the desktop shell on
+   every platform) draw it from the ::-webkit-scrollbar parts, the only way to drop the buttons of a classic
+   Windows bar. Chromium ignores those parts on an element whose scrollbar-width or scrollbar-color is not auto, so
+   the standard properties are left to the engines that do not know the parts (Firefox). */
+::-webkit-scrollbar { width: 0.625rem; height: 0.625rem; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { border: 0.1875rem solid transparent; border-radius: 999px; background: var(--scroll-thumb); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; }
+  html { scrollbar-color: var(--scroll-thumb) transparent; }
+}
 
 body {
   font: var(--fs)/1.55 var(--sans);
@@ -177,6 +192,13 @@ h1, h2, h3 { margin: 0; }
 .badge[data-tone="loud"] { background: var(--text); color: var(--bg); font-weight: 600; }
 .badge[data-tone="quiet"] { background: transparent; border-color: var(--line-strong); color: var(--text-3); }
 .badge[data-tone="on"] { color: var(--text); }
+/* A status, the same wherever one is shown (status-tone.js): done, at work, waiting on someone, failed. */
+.badge[data-tone="ok"] { background: var(--ok-bg); border-color: var(--ok-line); color: var(--ok); }
+.badge[data-tone="run"] { background: var(--run-bg); border-color: var(--run-line); color: var(--run); }
+.badge[data-tone="warn"] { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
+.badge[data-tone="bad"] { background: var(--bad-bg); border-color: var(--bad-line); color: var(--bad); font-weight: 600; }
+/* with a glyph before its word */
+.badge:has(> .glyph, > .pill-glyph) { display: inline-flex; align-items: center; gap: var(--s1); }
 
 .hint { font-size: var(--fs-s); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-3); }
 
@@ -405,7 +427,9 @@ body[data-shell="desktop"] .main { position: relative; }
 .thread { display: grid; gap: var(--s3); padding: var(--s4) var(--gutter) 0; min-width: 0; }
 .thread-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s4); min-width: 0; min-height: 2rem; }
 .thread-name { flex: 1 1 16rem; display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
-.thread-project { flex: 0 1 auto; max-width: 34%; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The project is said in full while the row has room for it: only the title gives way, and it takes a second line
+   before it is cut. Both carry their whole text in a title. */
+.thread-project { flex: 0 0 auto; max-width: 50%; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .thread-sep { flex: none; color: var(--text-4); }
 .thread-title {
   flex: 0 1 auto;
@@ -414,16 +438,20 @@ body[data-shell="desktop"] .main { position: relative; }
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .thread-title:focus { outline: none; }
 .thread-name .btn { flex: none; align-self: center; }
-.thread-runs { flex: 0 1 22rem; display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+/* as wide as its longest run, so what it does not need is the title's */
+.thread-runs { flex: 0 1 auto; max-width: 22rem; display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .thread-runs[data-choices="1"] { display: none; }
 .thread-runs .field-label { color: var(--text-3); font-weight: 400; }
-.thread-runs select { flex: 1 1 auto; height: 1.75rem; min-width: 0; border-color: var(--line); background: transparent; color: var(--text-2); font-size: var(--fs-s); }
+.thread-runs select { flex: 1 1 auto; width: auto; height: 1.75rem; min-width: 0; border-color: var(--line); background: transparent; color: var(--text-2); font-size: var(--fs-s); }
 .thread-runs select:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
 .thread-runs select:disabled { opacity: 0.7; }
 .thread-empty { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); color: var(--text-2); }
@@ -471,13 +499,15 @@ body[data-scope="none"] .conn { display: none; }
 .pill[data-status="finished"] { color: var(--ok); }
 .pill[data-status="running"] .pill-glyph,
 .pill[data-status="planning"] .pill-glyph { animation: pulse 1.8s ease-in-out infinite; }
-.pill:is([data-status="paused"], [data-status="aborted"], [data-status="failed"], [data-status="exited"]) {
+.pill:not(.badge):is([data-status="paused"], [data-status="aborted"], [data-status="failed"], [data-status="exited"]) {
   padding: 0 var(--s2);
   border-radius: var(--radius-s);
   background: var(--bad-bg);
   color: var(--bad);
 }
-.pill[data-status="paused"] { background: var(--warn-bg); color: var(--warn); }
+.pill:not(.badge)[data-status="paused"] { background: var(--warn-bg); color: var(--warn); }
+/* the run's own state is a status badge, a size up: it heads the run line */
+.pill.badge { padding: 0 var(--s3); font-size: var(--fs-s); font-weight: 600; }
 .elapsed { font: 500 var(--fs) var(--sans); color: var(--text); min-width: 3.5rem; }
 
 .conn { display: inline-flex; align-items: center; gap: var(--s2); flex: none; font-size: var(--fs-s); color: var(--text-2); }
@@ -523,7 +553,7 @@ body[data-scope="none"] .conn { display: none; }
 .run-more dt { color: var(--text-3); }
 .run-more dd { margin: 0; color: var(--text-2); min-width: 0; overflow-wrap: anywhere; }
 .run-more .more-request { flex: 1 1 100%; }
-.run-more .more-request dd { color: var(--text); }
+.run-more .more-request dd { max-width: 72ch; color: var(--text); line-height: 1.6; white-space: pre-wrap; }
 
 .segments { display: inline-flex; gap: 0.125rem; flex: 0 1 auto; min-width: 0; align-self: center; }
 .segments:empty { display: none; }
@@ -554,7 +584,7 @@ body[data-scope="none"] .conn { display: none; }
 }
 .alert-title { font-size: var(--fs); font-weight: 700; color: var(--bad); flex: none; }
 /* the most critical text on screen is read in full: it wraps, and a long reason scrolls after four lines */
-.alert-detail { flex: 1 1 17.5rem; max-height: 6em; overflow-y: auto; font: var(--fs-s)/1.5 var(--sans); white-space: pre-line; overflow-wrap: anywhere; min-width: 0; }
+.alert-detail { flex: 1 1 17.5rem; max-height: 6em; overflow-y: auto; overscroll-behavior: contain; font: var(--fs-s)/1.5 var(--sans); white-space: pre-line; overflow-wrap: anywhere; min-width: 0; }
 .alert[data-tone="info"] { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
 .alert[data-tone="info"] .alert-title { font-weight: 600; color: var(--text); }
 .alert[data-tone="info"] .alert-detail { color: var(--text-2); }
@@ -580,7 +610,7 @@ body[data-scope="none"] .conn { display: none; }
 .hitl-head h2:focus, .recovery h2:focus { outline: none; }
 .hitl-head h2:focus-visible, .recovery h2:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 .hitl-meta { margin-left: auto; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.hitl-reason { margin: 0; max-height: 4.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
+.hitl-reason { margin: 0; max-width: 72ch; max-height: 4.8em; overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; color: var(--text); }
 .hitl-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
 /* The answer card owns the reason and actions; terminal-only and exited alerts stay visible. */
 .main:has(> #hitl:not([hidden])) > .alert[data-kind="human"] { display: none; }
@@ -590,8 +620,8 @@ body[data-scope="none"] .conn { display: none; }
 .main:has(> #hitl:not([hidden])) .fig[data-critical="true"] .fig-value { color: var(--text); }
 .main:has(> #hitl:not([hidden])) .fig[data-critical="true"] .segments i[data-fill="full"] { background: var(--text); }
 .hitl-feedback { display: grid; gap: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--line); }
-.recovery-detail { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
-.recovery-error { margin: 0; padding-left: var(--s3); border-left: 2px solid var(--bad); font: var(--fs-s)/1.5 var(--mono); color: var(--text); overflow-wrap: anywhere; }
+.recovery-detail { margin: 0; max-width: 72ch; color: var(--text-2); overflow-wrap: anywhere; }
+.recovery-error { margin: 0; padding-left: var(--s3); border-left: 2px solid var(--bad); font: var(--fs-s)/1.55 var(--mono); color: var(--text); overflow-wrap: anywhere; }
 .recovery-times { margin: 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
 /* tool calls waiting for a human: the answer panel's card, neutral, with the one inverted mark of a critical state */
 .approvals { flex: none; margin: var(--s3) var(--gutter) 0; min-width: 0; }
@@ -602,12 +632,12 @@ body[data-scope="none"] .conn { display: none; }
 .approval-who { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .approval-title { margin: 0; color: var(--text); }
 .approval-label { font-size: var(--fs-s); color: var(--text-3); }
-.approval-args { margin: 0; max-height: 9em; overflow: auto; padding: var(--s2) var(--s3); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-s); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
+.approval-args { margin: 0; max-height: 10.5em; overflow: auto; overscroll-behavior: contain; padding: var(--s3) var(--s4); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-s); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; color: var(--text); }
 .approval-card[data-late="true"] .approval-left { color: var(--text); font-weight: 600; }
 .approval-card .hitl-actions[hidden] + .approval-status { color: var(--text); }
 /* request_access: the reason, and what the human should know before allowing it, set off by a hairline */
 .approval-asked { margin: 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
-.approval-reason { margin: 0; max-height: 6em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; color: var(--text); }
+.approval-reason { margin: 0; max-width: 72ch; max-height: 6.4em; overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; color: var(--text); }
 .approval-warnings { list-style: none; margin: 0; padding: 0 0 0 var(--s3); border-left: 2px solid var(--text); display: grid; gap: var(--s1); }
 .approval-warn { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
 .approval-card[data-protected="credentials"] .approval-args, .approval-card[data-protected="scranton-state"] .approval-args { border-color: var(--text); }
@@ -636,10 +666,11 @@ body[data-scope="none"] .conn { display: none; }
   padding: var(--s3) var(--s4);
   max-height: min(14rem, 24vh);
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg);
   border-top: 1px solid var(--line);
   color: var(--text-2);
-  font: var(--fs-s)/1.5 var(--mono);
+  font: var(--fs-s)/1.55 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -648,7 +679,7 @@ body[data-scope="none"] .conn { display: none; }
 .followup { display: grid; gap: var(--s2); margin: var(--s4) var(--gutter) 0; max-width: 56rem; min-width: 0; }
 .composer {
   display: grid;
-  gap: var(--s1);
+  gap: var(--s2);
   padding: var(--s2);
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -663,7 +694,8 @@ body[data-scope="none"] .conn { display: none; }
 /* the counter matters while typing; at rest it is noise */
 .followup:not(:focus-within) #followup-count { opacity: 0; }
 #followup-count { transition: opacity var(--dur) var(--ease-out); }
-.followup-hint { padding: 0 var(--s2); overflow-wrap: anywhere; }
+/* the hint and the context line start where the text in the composer does */
+.followup-hint { padding: 0 var(--s4); overflow-wrap: anywhere; }
 .followup-fix { justify-self: start; font-size: var(--fs-s); }
 /* what the next turn receives: one quiet line that opens the Context drawer */
 .context-line {
@@ -673,6 +705,7 @@ body[data-scope="none"] .conn { display: none; }
   gap: var(--s2);
   max-width: 100%;
   min-height: 1.5rem;
+  margin-left: var(--s2);
   padding: 0 var(--s2);
   border: 0;
   border-radius: var(--radius-s);
@@ -696,6 +729,7 @@ body[data-run="none"] .followup:not([data-off="true"]) textarea { min-height: 6.
 .followup[data-off="true"] .composer { grid-column: 2; grid-row: 1; padding: 0; border: 0; background: none; }
 .followup[data-off="true"] .followup-hint { grid-column: 1; grid-row: 1; padding: 0; }
 .followup[data-off="true"] > .hitl-status, .followup[data-off="true"] > .context-line { grid-column: 1 / -1; }
+.followup[data-off="true"] > .context-line { margin-left: calc(-1 * var(--s2)); }
 .followup[data-off="true"] :is(textarea, #followup-count, #followup-options, .dictate) { display: none; }
 
 /* the guidance line when there is no run; a chat's composer already says it */
@@ -849,56 +883,55 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .agent[data-active="true"] .agent-head h3, .agent:is([data-status="blocked"], [data-status="error"]) .agent-head h3 { color: var(--text); }
 .role { display: block; font-size: var(--fs-s); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.status { display: inline-flex; align-items: center; gap: var(--s1); flex: none; font-size: var(--fs-s); color: var(--text-3); }
+/* the status is a badge (its tone: status-tone.js), with the glyph of the status before the word */
+.status { flex: none; }
 .status-word::first-letter { text-transform: uppercase; }
-.status .glyph { font-size: var(--fs-xs); line-height: 1; }
-.agent[data-active="true"] .status { color: var(--run); font-weight: 600; }
+.status .glyph { font-size: 0.625rem; line-height: 1; }
+.agent[data-active="true"] .status { font-weight: 600; }
 .agent[data-active="true"] .status .glyph { animation: pulse 1.6s ease-in-out infinite; }
-.agent[data-status="done"] .status { color: var(--ok); }
 .agent[data-status="failed"] .status { color: var(--bad); font-weight: 600; }
-.agent[data-status="stopped"] .status { color: var(--warn); }
-.agent:is([data-status="blocked"], [data-status="error"]) .status {
-  padding: 0 var(--s2);
-  border-radius: var(--radius-s);
-  background: var(--bad-bg);
-  color: var(--bad);
-  font-weight: 600;
-}
-/* the process behind it is gone: outlined, not inverted, so the alert bar stays the loudest thing */
-.agent[data-status="interrupted"] .status { padding: 0 var(--s2); border: 1px dashed var(--warn-line); border-radius: var(--radius-s); color: var(--warn); }
+/* the process behind it is gone: a dashed outline, so the alert bar stays the loudest thing */
+.agent[data-status="interrupted"] .status { border-style: dashed; }
 
 .activity { margin: var(--s1) 0 0; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent[data-active="true"] .activity, .agent:is([data-status="blocked"], [data-status="error"]) .activity { color: var(--text); }
 
-/* one clipped line that opens in place to every part in full (a details summary: click, Enter or Space) */
-.agent-more { min-width: 0; }
-/* relative: the clipped line is also the box of its hidden labels, which would widen the page otherwise */
+/* The meta line is the summary of a disclosure (click, Enter or Space). Closed, it says the keyword and the totals
+   whole: the parts wrap as units, nothing is cut. The last tool, a path or a command, is read in the opened list,
+   where every part is a label and its value, which wraps. */
+.agent-more { min-width: 0; margin-top: var(--s1); }
+/* relative: the line is also the box of its hidden labels, which would widen the page otherwise */
 .agent-meta {
   position: relative;
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--s3);
   padding-left: 0.875rem;
   list-style: none;
   border-radius: 2px;
   color: var(--text-3);
   font-size: var(--fs-s);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.5;
   cursor: pointer;
 }
 .agent-meta::-webkit-details-marker { display: none; }
-/* the + / - of the other disclosures; out of the flow so the open grid gets no extra row */
-.agent-meta::before { content: "+"; position: absolute; left: 0; top: 0; width: 0.875rem; }
+/* the + / - of the other disclosures, out of the flow */
+.agent-meta::before { content: "+"; position: absolute; left: 0; top: 0; width: 0.875rem; font-family: var(--mono); }
 .agent-more[open] .agent-meta::before { content: "-"; }
 .agent-meta:hover { color: var(--text-2); }
+.agent-meta > span { min-width: 0; overflow-wrap: anywhere; }
 .agent-meta > span:empty { display: none; }
-.agent-more:not([open]) .agent-meta > span:not(:empty) ~ span:not(:empty)::before { content: " · "; }
+.agent-meta :is(.fact-keyword, .fact-tool) .meta-value { font-family: var(--mono); }
+.agent-totals .meta-value > span { white-space: nowrap; }
+.agent-more:not([open]) .fact-tool { display: none; }
 .agent-more:not([open]) .meta-label {
   position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
-.agent-more[open] .agent-meta { display: grid; gap: 0.125rem; white-space: normal; color: var(--text-2); }
-.agent-more[open] .agent-meta > span { overflow-wrap: anywhere; }
-.agent-more[open] .meta-label { color: var(--text-3); }
+.agent-more[open] .agent-meta { display: grid; gap: var(--s1); color: var(--text-2); }
+/* a narrow card puts the value under its label */
+.agent-more[open] .agent-meta > span:not(:empty) { display: flex; flex-wrap: wrap; gap: 0 var(--s2); }
+.agent-more[open] .meta-label { flex: 0 0 4.5rem; color: var(--text-3); }
+.agent-more[open] .meta-value { flex: 1 1 7rem; min-width: 0; }
 .agent-meta .tool-name { color: var(--text-2); }
 .agent-more[open] .agent-meta .tool-name { color: var(--text); }
 /* a crowded row (four or more columns): the activity takes two lines instead of cutting every card short */
@@ -921,7 +954,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   overflow-wrap: anywhere;
 }
 .agent:has(.agent-more[open]) .activity { display: block; -webkit-line-clamp: none; line-clamp: none; white-space: normal; overflow-wrap: anywhere; }
-.keyword-bad { background: var(--bad-bg); color: var(--bad); padding: 0 0.25rem; border-radius: 2px; }
+.keyword-bad { background: var(--bad-bg); color: var(--bad); padding: 0 var(--s1); border-radius: 2px; }
 /* a gate's result for the cycle, in the activity line: quiet when it passed, firm when it sent the work back */
 .agent[data-gate] .activity { color: var(--text-2); }
 .agent:is([data-gate="failed"], [data-gate="blocked"], [data-gate="error"]) .activity { color: var(--bad); font-weight: 600; }
@@ -969,7 +1002,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   .pipeline > .connector, .pipeline .stack-slot::before, .pipeline .stack-slot::after { display: none; }
   .pipeline > .node-human { flex: none; flex-direction: row; gap: var(--s2); padding: var(--s2) var(--s3); }
   .pipeline > .stage-column, .pipeline .stack-slot { display: contents; }
-  .pipeline .agent { flex: 1 1 8.5rem; padding: var(--s2) var(--s3); }
+  .pipeline .agent { flex: 1 1 8.5rem; padding: var(--s3); }
 }
 /* four or more columns: narrower cards put the status under the name instead of cutting the name short, the
    lane count is left to the lanes list below, and the Human node gives up some of its width */
@@ -982,7 +1015,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   .pipeline[data-wide="true"] > .connector, .pipeline[data-wide="true"] .stack-slot::before, .pipeline[data-wide="true"] .stack-slot::after { display: none; }
   .pipeline[data-wide="true"] > .node-human { flex: none; flex-direction: row; gap: var(--s2); padding: var(--s2) var(--s3); }
   .pipeline[data-wide="true"] > .stage-column, .pipeline[data-wide="true"] .stack-slot { display: contents; }
-  .pipeline[data-wide="true"] .agent { flex: 1 1 8.5rem; padding: var(--s2) var(--s3); }
+  .pipeline[data-wide="true"] .agent { flex: 1 1 8.5rem; padding: var(--s3); }
 }
 /* five columns (every gate a stage of its own) need more room still before a card gets too narrow for its title */
 @container (max-width: 40rem) {
@@ -990,7 +1023,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   .pipeline[data-columns="5"] > .connector, .pipeline[data-columns="5"] .stack-slot::before, .pipeline[data-columns="5"] .stack-slot::after { display: none; }
   .pipeline[data-columns="5"] > .node-human { flex: none; flex-direction: row; gap: var(--s2); padding: var(--s2) var(--s3); }
   .pipeline[data-columns="5"] > .stage-column, .pipeline[data-columns="5"] .stack-slot { display: contents; }
-  .pipeline[data-columns="5"] .agent { flex: 1 1 8.5rem; padding: var(--s2) var(--s3); }
+  .pipeline[data-columns="5"] .agent { flex: 1 1 8.5rem; padding: var(--s3); }
 }
 /* six or more columns (custom gates in stages of their own) wrap sooner still */
 @container (max-width: 52rem) {
@@ -998,7 +1031,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   .pipeline[data-many="true"] > .connector, .pipeline[data-many="true"] .stack-slot::before, .pipeline[data-many="true"] .stack-slot::after { display: none; }
   .pipeline[data-many="true"] > .node-human { flex: none; flex-direction: row; gap: var(--s2); padding: var(--s2) var(--s3); }
   .pipeline[data-many="true"] > .stage-column, .pipeline[data-many="true"] .stack-slot { display: contents; }
-  .pipeline[data-many="true"] .agent { flex: 1 1 8.5rem; padding: var(--s2) var(--s3); }
+  .pipeline[data-many="true"] .agent { flex: 1 1 8.5rem; padding: var(--s3); }
 }
 
 /* instance lanes: one row per milestone/role instance, under the role overview */
@@ -1012,8 +1045,8 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   grid-template-columns: 0.875rem minmax(7rem, 10rem) 5.5rem minmax(0, 1fr) auto 4.5rem;
   align-items: center;
   gap: var(--s3);
-  min-height: 2.25rem;
-  padding: var(--s1) 0;
+  min-height: 2.5rem;
+  padding: var(--s2) 0;
   border-bottom: 1px solid var(--row-line);
   min-width: 0;
 }
@@ -1021,7 +1054,8 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .lane-id { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
 .lane-name { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lane-role { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lane-state { justify-self: start; font-size: var(--fs-s); color: var(--text-3); white-space: nowrap; }
+/* a status badge (its tone: status-tone.js) */
+.lane-state { justify-self: start; }
 .lane-state::first-letter { text-transform: uppercase; }
 .lane-activity { margin: 0; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .lane-badges { display: flex; flex-wrap: wrap; gap: var(--s1); justify-content: flex-end; min-width: 0; }
@@ -1029,17 +1063,10 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .lane-badges .badge + .badge::before, .lanes-exec .badge + .badge::before { content: "· "; color: var(--text-4); }
 .lane-badges .badge[data-tone="loud"], .lanes-exec .badge[data-tone="loud"] { padding: 0 var(--s1); background: var(--warn-bg); color: var(--warn); }
 .lane-badges .badge[data-tone="loud"]::before, .lanes-exec .badge[data-tone="loud"]::before { content: none; }
-.lane:is([data-status="working"], [data-status="thinking"]) :is(.lane-name, .lane-state, .lane-activity, .lane-glyph) { color: var(--text); }
+.lane:is([data-status="working"], [data-status="thinking"]) :is(.lane-name, .lane-activity) { color: var(--text); }
 .lane:is([data-status="working"], [data-status="thinking"]) .lane-name { font-weight: 600; }
-.lane:is([data-status="working"], [data-status="thinking"]) :is(.lane-glyph, .lane-state) { color: var(--run); }
+.lane:is([data-status="working"], [data-status="thinking"]) .lane-glyph { color: var(--run); }
 .lane:is([data-status="done"], [data-status="finished"]) .lane-glyph { color: var(--ok); }
-.lane:is([data-status="blocked"], [data-status="error"], [data-status="failed"]) .lane-state {
-  padding: 0 var(--s1);
-  border-radius: 0.25rem;
-  background: var(--bad-bg);
-  color: var(--bad);
-  font-weight: 600;
-}
 /* a failure wraps in full, unclamped: the server caps it at 300 characters */
 .lane:is([data-status="blocked"], [data-status="error"], [data-status="failed"]) .lane-activity {
   white-space: normal;
@@ -1049,7 +1076,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 /* a gate lane's own result: quiet when it passed, firm when it sent the work back */
 .lane-verdict { color: var(--text-2); }
 .lane:is([data-gate="failed"], [data-gate="blocked"], [data-gate="error"]) .lane-verdict { color: var(--bad); font-weight: 600; }
-.lane[data-status="interrupted"] .lane-state { padding: 0 var(--s1); border: 1px dashed var(--warn-line); border-radius: 0.25rem; color: var(--warn); }
+.lane[data-status="interrupted"] .lane-state { border-style: dashed; }
 .lane .btn-small { height: 1.5rem; padding: 0 var(--s2); justify-self: end; }
 @media (hover: hover) {
   .lane:not(:hover):not(:focus-within) .btn-small { opacity: 0; }
@@ -1084,20 +1111,19 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .board-col:is([data-column="in_progress"], [data-column="in_review"]):not([data-empty="true"]) h3::before { background: var(--run); }
 .board-col[data-column="blocked"]:not([data-empty="true"]) h3::before { background: var(--bad); }
 .board-col[data-column="done"]:not([data-empty="true"]) h3::before { background: var(--ok); }
-.board-col[data-column="done"] .card-state { color: var(--ok); }
 .board-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); align-content: start; min-height: 0; }
-.card { display: grid; gap: var(--s1); padding: var(--s3); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s); min-width: 0; }
+.card { display: grid; gap: var(--s1); padding: var(--s3) var(--s4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s); min-width: 0; }
 .board-col:is([data-column="in_progress"], [data-column="in_review"]) .card { border-color: var(--line-strong); }
 .card[data-loud="true"] { border-color: var(--bad-line); }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); min-width: 0; }
 .card-id { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.card-state { flex: none; font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }
+/* a status badge: its tone says the column, and a failure in any of them (board.js) */
+.card-state { flex: none; }
 .card-state::first-letter { text-transform: uppercase; }
-.card[data-loud="true"] .card-state { padding: 0 var(--s1); border-radius: 0.25rem; background: var(--bad-bg); color: var(--bad); font-weight: 600; }
 .card-title { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
 .board-col:is([data-column="todo"], [data-column="done"]) .card-title { font-weight: 400; color: var(--text-2); }
 .card-note, .card-reason { margin: 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
-.card-reason { font-family: var(--mono); color: var(--text-2); }
+.card-reason { font-family: var(--mono); line-height: 1.55; color: var(--text-2); }
 .card-reason b { font-weight: 600; color: var(--text); }
 .card-agents { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.125rem; font-size: var(--fs-s); min-width: 0; }
 .card-agents li { display: grid; grid-template-columns: 0.875rem minmax(0, 1fr); column-gap: var(--s1); align-items: baseline; min-width: 0; }
@@ -1121,7 +1147,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .card-criteria li::before { content: "·"; color: var(--text-3); font-family: var(--mono); }
 .board-col[data-column="done"] .card-criteria li::before { content: "✓"; color: var(--ok); }
 .board-notice, .board-note { margin: 0; font-size: var(--fs-s); color: var(--text-2); overflow-wrap: anywhere; }
-.board-notice[data-loud="true"] { justify-self: start; padding: var(--s1) var(--s2); border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.board-notice[data-loud="true"] { justify-self: start; padding: var(--s2) var(--s3); border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn); font-weight: 600; }
 .board-note { color: var(--text-3); }
 .board-empty { padding: 0; }
 /* the dashboard's board keeps to a part of the window: a long column scrolls in itself */
@@ -1137,7 +1163,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 /* too narrow for five columns: they stack, and an empty one is its heading alone */
 @container (max-width: 40rem) {
   .board-cols { grid-template-columns: minmax(0, 1fr); gap: var(--s4); }
-  .board-panel .board-cols { grid-template-rows: none; max-height: min(26rem, 55vh); overflow-y: auto; }
+  .board-panel .board-cols { grid-template-rows: none; max-height: min(26rem, 55vh); overflow-y: auto; overscroll-behavior: contain; }
   .board-panel .board-cards { overflow: visible; }
   .board-col[data-empty="true"] .board-col-head { border-bottom: 0; padding-bottom: 0; }
   .dash .board-panel .board-cols { display: grid; max-height: none; overflow: visible; }
@@ -1182,11 +1208,16 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 .tab-count, .seg-count { font: var(--fs-xs) var(--sans); color: var(--text-3); }
 
 .tabpanel { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.panel-note { flex: none; margin: 0; padding: var(--s2) var(--s4); font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
-.panel-tools { flex: none; display: flex; align-items: center; justify-content: flex-end; padding: var(--s2) var(--s3); min-width: 0; }
+/* the panel of the tab that was picked fades in; nothing moves */
+@keyframes tab-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  .tabpanel { animation: tab-in var(--dur) var(--ease-out); }
+}
+.panel-note { flex: none; margin: 0; padding: var(--s3) var(--s4) var(--s2); font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
+.panel-tools { flex: none; display: flex; align-items: center; justify-content: flex-end; padding: var(--s3) var(--s3) var(--s2); min-width: 0; }
 
-/* the event filter: one segmented control */
-.segmented { display: inline-flex; padding: 0.125rem; border-radius: var(--radius-s); background: var(--bg); min-width: 0; overflow-x: auto; }
+/* the event filter: one segmented control. Too narrow for one line, it takes a second one: it never scrolls. */
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 0.125rem; padding: 0.125rem; border-radius: var(--radius-s); background: var(--bg); min-width: 0; }
 .seg {
   display: inline-flex;
   align-items: center;
@@ -1220,17 +1251,21 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   outline: 2px solid var(--text);
   outline-offset: -2px;
 }
+/* the columns are their longest usual text (a clock time, an instance id like michael-m12, "Agent started") and
+   the padding of a cell; a longer source or type is cut, and read in the opened row */
 .log {
-  --c-time: calc(8ch + 1.5rem);
-  --c-source: calc(9ch + 1rem);
-  --c-type: calc(16ch + 1rem);
+  --c-time: calc(8ch + 1.75rem);
+  --c-source: calc(12ch + 1.5rem);
+  --c-type: calc(14ch + 2rem);
   width: 100%;
-  border-collapse: collapse;
+  /* separate: the rule under the sticky header row stays with it while the rows scroll */
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: fixed;
   font: var(--fs-s)/1.5 var(--mono);
 }
 .log col.c-time { width: var(--c-time); }
-.log[data-dated="true"] { --c-time: calc(16ch + 1.5rem); }
+.log[data-dated="true"] { --c-time: calc(16ch + 1.75rem); }
 .log col.c-source { width: var(--c-source); }
 .log col.c-type { width: var(--c-type); }
 .log thead th {
@@ -1239,49 +1274,74 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   z-index: 1;
   background: var(--panel);
   text-align: left;
-  font: 400 var(--fs-xs) var(--sans);
+  font: 400 var(--fs-xs)/1.5 var(--sans);
   color: var(--text-3);
-  padding: var(--s1) var(--s2);
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--line);
 }
 .log th, .log td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log td { padding: 0.3125rem var(--s2); vertical-align: top; border-bottom: 1px solid var(--row-line); }
+.log td { padding: var(--s2) var(--s3); vertical-align: top; border-bottom: 1px solid var(--row-line); }
 .log td:first-child, .log th:first-child { padding-left: var(--s4); }
+.log td:last-child, .log th:last-child { padding-right: var(--s4); }
 .log tbody tr { cursor: pointer; }
 .log tbody tr:hover td { background: var(--panel-2); }
-.log tr[data-expanded] .t-detail { white-space: normal; overflow-wrap: anywhere; }
+/* The detail is what the log is read for. Closed, a row shows two lines of it; opened (a click, Enter or Space)
+   all of it, with its line breaks, over what the narrow columns cut and a button that copies it. */
+.log .t-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.log tr[data-expanded] .t-text { display: flow-root; -webkit-line-clamp: none; line-clamp: none; overflow: visible; white-space: pre-wrap; line-height: 1.55; }
 .log tr[data-expanded] td { background: var(--panel-2); }
+.log tr[data-expanded] td.t-detail { padding-top: var(--s3); padding-bottom: var(--s3); }
 /* the ring marks the focused cell (the grid's one tab stop); its row is lit like a hovered one */
-.log tbody tr { scroll-margin-top: 1.5rem; } /* clears the sticky header row */
+.log tbody tr { scroll-margin-top: 2.25rem; } /* clears the sticky header row */
 .log tbody td:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
 .log tbody tr:has(> td:focus-visible) td { background: var(--panel-2); }
-.log .t-more { display: flex; flex-wrap: wrap; gap: 0 var(--s4); margin-top: 0.125rem; color: var(--text-2); }
+.log .t-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s4);
+  margin-top: var(--s3);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+  font-weight: 400;
+  white-space: normal;
+}
+.log .t-fact { min-width: 0; overflow-wrap: anywhere; }
 .log .t-more .meta-label { color: var(--text-3); }
+.log .t-more .copy-btn { margin-left: auto; }
 .log .t-time { color: var(--text-3); }
 .log .t-source, .log .t-type { color: var(--text-2); }
 .log .t-detail { color: var(--text); }
 .log tr[data-tone="muted"] .t-detail { color: var(--text-3); }
-.log tr[data-tone="good"] .t-detail::before { content: "✓ "; color: var(--ok); }
-.log tr[data-tone="bad"] .t-type span { background: var(--bad-bg); color: var(--bad); padding: 0 0.25rem; border-radius: 2px; }
+/* a float: the tick stands before the text, which keeps its own left edge on the second line */
+.log tr[data-tone="good"] .t-detail::before { content: "✓"; float: left; margin-right: 1ch; color: var(--ok); }
+.log tr[data-tone="bad"] .t-type span { background: var(--bad-bg); color: var(--bad); padding: 0 var(--s1); border-radius: 2px; }
 .log tr[data-tone="bad"] .t-detail { color: var(--bad); font-weight: 600; }
 .log tr.fresh td { animation: fresh 1.2s ease-out; }
 @keyframes fresh { from { background: var(--flash); } to { background: transparent; } }
 
-/* narrow log column: time, source and type on the first line, the detail below */
+/* narrow log column: time, source and type on the first line, the detail below. The header row is laid out the
+   same way, so every heading stands over what it names. */
 @container (max-width: 34.9rem) {
   .log, .log thead, .log tbody { display: block; }
   .log colgroup { display: none; }
-  /* the detail runs under the whole row, so its header leaves the line but stays the focused cell's header */
-  .log th:last-child {
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-  }
   .log thead { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--line); }
   .log thead tr { display: grid; grid-template-columns: var(--c-time) var(--c-source) minmax(0, 1fr); }
-  .log thead th { position: static; border-bottom: 0; }
-  .log tbody tr { display: grid; grid-template-columns: var(--c-time) var(--c-source) minmax(0, 1fr); border-bottom: 1px solid var(--row-line); }
+  .log thead th { position: static; border-bottom: 0; padding-bottom: 0; }
+  .log thead th:last-child { grid-column: 1 / -1; padding: 0 var(--s4) var(--s2) calc(var(--c-time) + var(--s3)); }
+  .log tbody tr { display: grid; grid-template-columns: var(--c-time) var(--c-source) minmax(0, 1fr); border-bottom: 1px solid var(--row-line); scroll-margin-top: 3.25rem; }
   .log td { border-bottom: 0; padding-bottom: 0; }
-  .log td.t-detail { grid-column: 1 / -1; padding: 0 var(--s2) var(--s1) calc(var(--c-time) + var(--s2)); }
+  .log td.t-detail { grid-column: 1 / -1; padding: var(--s1) var(--s4) var(--s2) calc(var(--c-time) + var(--s3)); }
+  .log tr[data-expanded] td.t-detail { padding-top: var(--s2); }
 }
 
 .log[data-filter="main"] tbody tr[data-cat="ticks"],
@@ -1312,17 +1372,17 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 /* direct messages */
 .chat-scroll { flex: 1 1 auto; min-height: 4.5rem; overflow: auto; overscroll-behavior: contain; }
 .chat-list { list-style: none; margin: 0; padding: 0; }
-.msg { padding: var(--s2) var(--s4); border-bottom: 1px solid var(--row-line); min-width: 0; }
+.msg { padding: var(--s3) var(--s4); border-bottom: 1px solid var(--row-line); min-width: 0; }
 .msg-head { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; font-size: var(--fs-s); }
 .msg-route { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .msg-route b { font-weight: 600; color: var(--text); }
 .msg-ms { color: var(--text-3); flex: none; }
 .msg-state { margin-left: auto; flex: none; }
 .msg-time { color: var(--text-3); flex: none; }
-.msg-text { margin: var(--s1) 0 0; max-height: 6.2em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.msg-text { margin: var(--s1) 0 0; max-height: 6.4em; overflow: hidden; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .msg[data-expanded] .msg-text { max-height: none; }
 .msg-more {
-  margin-top: 0.125rem;
+  margin-top: var(--s1);
   padding: 0;
   border: 0;
   background: none;
@@ -1344,8 +1404,8 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas: "to sel mic count" "text text text send" "hint hint hint hint";
   align-items: end;
-  gap: var(--s1) var(--s2);
-  padding: var(--s2) var(--s3);
+  gap: var(--s2);
+  padding: var(--s3);
   border-top: 1px solid var(--line);
   min-width: 0;
 }
@@ -1366,7 +1426,7 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 /* news about a sent message sits outside the tab panels, so it is seen and announced from any tab.
    Never display:none: a live region that is not rendered announces nothing. On another tab it shows
    until the Messages tab is opened, then only there. */
-.activity-status { flex: none; padding: 0 var(--s3) var(--s2); }
+.activity-status { flex: none; padding: 0 var(--s3) var(--s3); }
 .activity-status:empty { display: block; padding: 0; }
 #chat-panel[hidden] ~ .activity-status { padding-top: var(--s2); border-top: 1px solid var(--line); }
 #chat-panel[hidden] ~ .activity-status:is(:empty, :not([data-unseen="true"])) {
@@ -1374,17 +1434,17 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
 }
 
 /* the inboxes that hold a message, folded under the transcript: who was last told what */
-.inboxes { flex: none; max-height: 45%; overflow: auto; border-top: 1px solid var(--line); }
-.inboxes > summary { cursor: pointer; padding: var(--s2) var(--s4); font-size: var(--fs-s); font-weight: 600; color: var(--text-2); user-select: none; }
+.inboxes { flex: none; max-height: 45%; overflow: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
+.inboxes > summary { cursor: pointer; padding: var(--s3) var(--s4); font-size: var(--fs-s); font-weight: 600; color: var(--text-2); user-select: none; }
 .inboxes > summary:hover { color: var(--text); }
 .inboxes > summary .hint { margin-left: var(--s1); font-weight: 400; }
 .mailboxes { list-style: none; margin: 0; padding: 0; }
-.mailbox { padding: var(--s2) var(--s4) var(--s3); border-top: 1px solid var(--row-line); min-width: 0; }
+.mailbox { padding: var(--s3) var(--s4); border-top: 1px solid var(--row-line); min-width: 0; }
 .mb-head { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
 .mb-unread { width: 0.625rem; flex: none; font-size: 0.5625rem; color: var(--run); }
 .mb-to { font-weight: 600; flex: none; }
 .mb-time { margin-left: auto; color: var(--text-3); flex: none; }
-.mb-meta { margin: 0.125rem 0 0 1.125rem; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
+.mb-meta { margin: var(--s1) 0 0 1.125rem; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
 .mb-kind { font-weight: 600; color: var(--text-2); margin-right: var(--s1); }
 .mb-kind[data-kind="bug_report"], .mb-kind[data-kind="hitl"] { padding: 0 var(--s1); border-radius: 0.25rem; background: var(--bad-bg); color: var(--bad); }
 .mb-kind[data-kind="hitl"] { background: var(--warn-bg); color: var(--warn); }
@@ -1414,19 +1474,19 @@ body[data-view="dashboard"][data-run="yes"] .followup:focus-within #followup-cou
   overflow: hidden;
 }
 body[data-nav="closed"] .sidebar { display: none; }
-.nav-head { flex: none; display: flex; align-items: center; gap: var(--s2); min-height: 2.75rem; padding: var(--s1) var(--s2) 0 var(--s4); }
-.nav-head h2 { margin-right: auto; font-size: var(--fs-s); font-weight: 600; color: var(--text-3); }
-.nav-status { margin: 0; padding: var(--s2) var(--s4) 0; font-size: var(--fs-s); color: var(--text-2); overflow-wrap: anywhere; }
+.nav-head { flex: none; display: flex; align-items: center; gap: var(--s2); min-width: 0; min-height: 2.75rem; padding: var(--s3) var(--s4); }
+.nav-head h2 { min-width: 0; overflow-wrap: anywhere; margin-right: auto; font-size: var(--fs-s); font-weight: 600; color: var(--text-3); }
+.nav-status { margin: 0; padding: var(--s3) var(--s4); font-size: var(--fs-s); line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; }
 .nav-status:empty { display: none; }
 .nav-status[data-tone="error"] { color: var(--bad); font-weight: 600; }
 .nav-status[data-tone="error"]::before { content: "✕ "; }
 .nav-empty { margin: 0; padding: var(--s3) var(--s4); }
-.nav-foot { flex: none; padding: var(--s2) var(--s4) var(--s3); min-height: 2.25rem; }
+.nav-foot { flex: none; min-width: 0; overflow-wrap: anywhere; line-height: 1.6; padding: var(--s3) var(--s4); min-height: 2.25rem; }
 .nav-foot .hint { font-size: var(--fs-xs); }
 
 .projects { flex: 1 1 auto; min-height: 0; overflow: auto; list-style: none; margin: 0; padding: 0 0 var(--s3); overscroll-behavior: contain; }
 .project + .project { margin-top: var(--s3); }
-.sidebar :is(.project-row, .chat-row) { display: flex; align-items: center; gap: 0.125rem; min-width: 0; padding: 0 var(--s2); }
+.sidebar :is(.project-row, .chat-row) { display: flex; align-items: center; gap: var(--s1); min-width: 0; padding: 0 var(--s3); }
 .project-toggle, .chat-link {
   flex: 1 1 auto;
   min-width: 0;
@@ -1464,9 +1524,9 @@ body[data-nav="closed"] .sidebar { display: none; }
 .chat[data-status="failed"] .chat-glyph { color: var(--bad); }
 .chat[data-status="done"] .chat-glyph { color: var(--ok); }
 .chat-badge { flex: none; }
-.chat-none { padding: var(--s1) 0 var(--s2) 2.25rem; font-size: var(--fs-s); }
-.nav-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s1) var(--s2) var(--s2) 1.75rem; min-width: 0; }
-.chat .nav-actions { padding-left: 2.25rem; }
+.chat-none { padding: var(--s3) var(--s4); font-size: var(--fs-s); line-height: 1.6; overflow-wrap: anywhere; }
+.nav-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4); min-width: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.chat .nav-actions { padding-left: var(--s4); }
 .nav-actions .hint { font-size: var(--fs-xs); }
 
 @media (max-width: 899px) {
@@ -1519,20 +1579,30 @@ dialog[open]::backdrop { opacity: 1; }
   transform: translateX(1.5rem);
 }
 @starting-style { .drawer[open] { opacity: 0; transform: translateX(1.5rem); } }
-.drawer form#run-form, .drawer-frame { display: flex; flex-direction: column; height: 100%; }
+.drawer form#run-form, .drawer-frame { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .drawer-head {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: var(--topbar-h);
-  padding: 0 var(--s3) 0 var(--s5);
+  padding: 0 var(--s4);
+  gap: var(--s3);
+  min-width: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
 }
-.drawer-head h2 { font-size: var(--fs-m); font-weight: 600; }
+.drawer-head h2 { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-m); font-weight: 600; }
 /* relative: an absolutely placed .sr-only child scrolls with the body instead of stretching the dialog */
-.drawer-body { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; align-content: start; gap: var(--s5); padding: var(--s2) var(--s5) var(--s5); }
+.drawer-body { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--s5); padding: var(--s4); }
+.drawer-body > * { min-width: 0; }
+.drawer-body :is(p, .hint, .form-help) { min-width: 0; max-width: 72ch; line-height: 1.6; overflow-wrap: anywhere; }
+.drawer :is(textarea, input[type="text"], input[type="password"]) { padding: var(--s3) var(--s4); }
+.drawer :is(textarea, pre) { white-space: pre-wrap; overflow-wrap: anywhere; }
 .drawer :is(.field > label, .field-label, .hitl-feedback > label) { font-size: var(--fs); font-weight: 500; }
-.form-help { min-width: 0; font-size: var(--fs-s); color: var(--text-3); }
+.form-help { min-width: 0; font-size: var(--fs-s); line-height: 1.6; overflow-wrap: anywhere; color: var(--text-3); }
 .form-help > summary { cursor: pointer; width: fit-content; color: var(--text-2); }
 .form-help > summary:hover { color: var(--text); }
 .form-help > :not(summary) { margin: var(--s2) 0 0; }
@@ -1541,12 +1611,12 @@ dialog[open]::backdrop { opacity: 1; }
 #run-dialog #f-request { min-height: 6.5rem; }
 #agents-dialog .accounts-intro { color: var(--text-2); font-size: var(--fs); }
 #agents-dialog .role-model { font-size: var(--fs); }
-.drawer-foot { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: var(--s2); padding: var(--s3) var(--s5); border-top: 1px solid var(--line); }
-.drawer-foot .hint { margin-right: auto; }
+.drawer-foot { flex: none; position: sticky; bottom: 0; z-index: 1; background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s2); min-width: 0; padding: var(--s3) var(--s4); border-top: 1px solid var(--line); }
+.drawer-foot .hint { flex: 1 1 10rem; min-width: 0; line-height: 1.6; overflow-wrap: anywhere; margin-right: auto; }
 
 .exec { margin: 0; padding: var(--s4) 0 0; border: 0; border-top: 1px solid var(--line); display: grid; gap: var(--s4); min-width: 0; }
 .exec legend { float: left; width: 100%; padding: 0; font-size: var(--fs); font-weight: 600; color: var(--text); }
-.trust { padding: var(--s2) var(--s3); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); }
+.trust { padding: var(--s3) var(--s4); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); }
 .exec[data-demo="true"] #f-sandbox, .exec[data-demo="true"] #f-approve, .exec[data-demo="true"] #docker-fields { opacity: 0.45; }
 #docker-fields[data-disabled="true"], .approve-wait[data-disabled="true"] { opacity: 0.45; }
 .approve-wait { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s2); min-width: 0; }
@@ -1554,12 +1624,12 @@ dialog[open]::backdrop { opacity: 1; }
 .model-grid { display: grid; gap: var(--s3); min-width: 0; }
 .models[data-demo="true"] .model-grid { opacity: 0.45; }
 /* outside the Options fold, beside Start: the one thing a first run cannot do without */
-.models-signin { margin: 0; padding: var(--s2) var(--s3); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); font-size: var(--fs-s); color: var(--text); }
+.models-signin { margin: 0; padding: var(--s3) var(--s4); border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius-s); font-size: var(--fs-s); color: var(--text); }
 
 /* the gates: one row each, its check on the left and its stage number on the right; a long list scrolls */
 .workflow { gap: var(--s3); }
 .gates-intro { margin: 0; }
-.gate-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s1); max-height: 17rem; overflow: auto; min-width: 0; }
+.gate-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s1); max-height: 17rem; overflow: auto; overscroll-behavior: contain; min-width: 0; }
 .gate-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 2rem; min-width: 0; }
 .gate-row .check { flex: 1 1 auto; align-items: baseline; min-width: 0; }
 .gate-row .check > span { min-width: 0; overflow-wrap: anywhere; }
@@ -1612,9 +1682,9 @@ dialog[open]::backdrop { opacity: 1; }
 }
 @starting-style { .confirm[open] { opacity: 0; transform: scale(0.98); } }
 .confirm h2 { margin: 0 0 var(--s2); font-size: var(--fs-m); font-weight: 600; }
-.confirm p { margin: 0 0 var(--s4); color: var(--text-2); }
+.confirm p { margin: 0 0 var(--s4); min-width: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .confirm .form-error { color: var(--bad); }
-.confirm-foot { display: flex; justify-content: flex-end; gap: var(--s2); }
+.confirm-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); }
 .dialog-form { display: grid; gap: var(--s4); }
 .dialog-form h2 { margin: 0; }
 .dialog-form > p { margin: 0; }
@@ -1624,22 +1694,25 @@ dialog[open]::backdrop { opacity: 1; }
 .folder-row .btn { height: auto; min-height: 2rem; }
 
 /* ------------------------------------------------------------ accounts */
-.accounts-intro { margin: 0; }
+.accounts-intro { margin: 0; min-width: 0; display: grid; gap: var(--s3); line-height: 1.6; overflow-wrap: anywhere; }
+.accounts-intro > p { margin: 0; }
 .accounts { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .account {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--s1) var(--s3);
-  padding: var(--s3) 0;
+  padding: var(--s4);
   border-bottom: 1px solid var(--line);
   min-width: 0;
 }
 .account-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); min-width: 0; }
 .account-name { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
-.account-detail { grid-column: 1; margin: 0; font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
+.account-detail { grid-column: 1; min-width: 0; margin: 0; font-size: var(--fs-s); line-height: 1.6; white-space: pre-wrap; color: var(--text-3); overflow-wrap: anywhere; }
+.account-help { grid-column: 1 / -1; }
+.account-help > p { white-space: pre-wrap; }
 .account-detail:empty { display: none; }
-.account-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); }
+.account-actions { grid-column: 2; grid-row: 1 / span 2; min-width: 0; max-width: 12rem; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); }
 .account[data-status="signed_out"] .account-name { color: var(--text-2); }
 .account > .keyform { grid-column: 1 / -1; margin-top: var(--s2); }
 .accounts-status { margin: 0; font-size: var(--fs-s); color: var(--text); overflow-wrap: anywhere; }
@@ -1821,9 +1894,10 @@ dialog[open]::backdrop { opacity: 1; }
 .provider-model-list {
   list-style: none;
   margin: 0;
-  padding: var(--s2) var(--s3);
+  padding: var(--s3) var(--s4);
   max-height: 14rem;
   overflow: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: var(--s2);
   border: 1px solid var(--line-strong);
@@ -1856,19 +1930,21 @@ dialog[open]::backdrop { opacity: 1; }
 .login-progress[data-tone="error"] { padding: var(--s2) var(--s3); border-radius: var(--radius-s); background: var(--bad-bg); color: var(--bad); font-weight: 600; }
 .login-progress[data-tone="done"]::before { content: "✓ "; color: var(--ok); }
 .login-url { display: grid; gap: var(--s1); min-width: 0; }
-.login-url-box { display: flex; align-items: flex-start; gap: var(--s2); min-width: 0; margin-top: 0.125rem; }
+.login-url-box { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s2); min-width: 0; margin-top: 0.125rem; }
 .login-url-text {
-  flex: 1 1 auto;
+  flex: 1 1 12rem;
   min-width: 0;
   max-height: 6.4em;
   overflow: auto;
-  padding: var(--s2);
+  overscroll-behavior: contain;
+  padding: var(--s3) var(--s4);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-s);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.45;
-  word-break: break-all;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   user-select: all;
 }
 .login-url-text:focus-visible { outline-offset: 0; border-color: var(--text); }
@@ -1885,7 +1961,7 @@ dialog[open]::backdrop { opacity: 1; }
 
 @media (max-width: 480px) {
   .account { grid-template-columns: minmax(0, 1fr); }
-  .account-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+  .account-actions { grid-column: 1; grid-row: auto; max-width: none; justify-content: flex-start; }
   .role-detail { grid-column: 1; }
   .provider-form .field-row { grid-template-columns: minmax(0, 1fr); }
 }
@@ -1926,7 +2002,7 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 .pv-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
 .pv-runs { flex: 0 1 20rem; }
 .pv-runs[data-choices="0"] { display: none; }
-.pill[data-loud="true"] { padding: 0 var(--s2); border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn); }
+.pill:not(.badge)[data-loud="true"] { padding: 0 var(--s2); border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn); }
 .pv-msg { margin: 0; }
 .pv-msg[data-tone="critical"] { padding: var(--s2) var(--s3); border-radius: var(--radius-s); background: var(--bad-bg); color: var(--bad); font-weight: 600; }
 .pv-msg[data-tone="critical"]::before { content: "✕ "; }
@@ -1957,8 +2033,10 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 .pv-h { flex: none; font-size: var(--fs-m); font-weight: 600; color: var(--text); }
 .pv-h:focus { outline: none; }
 .pv-h:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+/* the name of a section stays in sight while a long plan or diff scrolls under it */
+.pv-section > .section-head { position: sticky; top: 0; z-index: 1; margin-top: calc(var(--s2) * -1); padding: var(--s2) 0; background: var(--bg); }
 .pv-sub { margin: var(--s1) 0 0; font-size: var(--fs-s); font-weight: 600; color: var(--text-2); }
-.pv-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-text { margin: 0; max-width: 72ch; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pv-dim { color: var(--text-2); }
 .pv-block { display: block; overflow-wrap: anywhere; }
 .pv-list, .pv-files, .pv-changed, .pv-checks, .pv-flags, .pv-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); min-width: 0; }
@@ -1986,16 +2064,17 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 
 .pv-changed li { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr) auto; align-items: baseline; gap: var(--s2); }
 .pv-path { overflow-wrap: anywhere; }
+/* a diff is read in the page: folded to its first lines until it is opened (long-text.js), never a scroll box */
 .pv-diff {
+  --clamp-h: 37.2em;
   margin: 0;
-  max-height: min(36rem, 60vh);
-  overflow: auto;
-  padding: var(--s2) 0;
+  padding: var(--s3) 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-s);
-  font: var(--fs-s)/1.5 var(--mono);
+  font: var(--fs-s)/1.55 var(--mono);
+  overflow: hidden;
 }
-.dl { display: block; min-height: 1.5em; padding: 0 var(--s3); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.dl { display: block; min-height: 1.55em; padding: 0 var(--s4); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .dl[data-kind="add"] { background: var(--ok-bg); color: var(--text); box-shadow: inset 2px 0 0 var(--ok); }
 .dl[data-kind="del"] { background: var(--bad-bg); color: var(--text-2); box-shadow: inset 2px 0 0 var(--bad); }
 .dl[data-kind="hunk"] { background: var(--panel-2); color: var(--text-3); }
@@ -2003,29 +2082,29 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 .dl[data-kind="file"]:first-child { margin-top: 0; border-top: 0; }
 .dl:is([data-kind="meta"], [data-kind="note"]) { color: var(--text-3); }
 
-.pv-failure { display: grid; gap: var(--s1); padding: var(--s2) var(--s3); border-radius: var(--radius-s); background: var(--bad-bg); color: var(--text); box-shadow: inset 0 0 0 1px var(--bad-line); overflow-wrap: anywhere; }
+.pv-failure { display: grid; gap: var(--s1); padding: var(--s3) var(--s4); border-radius: var(--radius-s); background: var(--bad-bg); color: var(--text); box-shadow: inset 0 0 0 1px var(--bad-line); overflow-wrap: anywhere; }
 .pv-failure .pv-dim { color: var(--text-2); }
 .pv-report {
+  --clamp-h: 37.2em;
   margin: 0;
-  max-height: 28rem;
-  overflow: auto;
-  padding: var(--s3);
+  padding: var(--s3) var(--s4);
   border: 1px solid var(--line);
   border-radius: var(--radius-s);
   color: var(--text-2);
-  font: var(--fs-s)/1.5 var(--mono);
+  font: var(--fs-s)/1.55 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .pv-events { list-style: none; margin: 0; padding: 0; max-height: min(40rem, 70vh); overflow: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
-.pv-event { display: grid; grid-template-columns: 4.5rem 7.5rem minmax(0, 1fr); align-items: baseline; gap: var(--s2); padding: 0.1875rem 0; border-bottom: 1px solid var(--row-line); font-size: var(--fs-s); }
+.pv-event { display: grid; grid-template-columns: 4.5rem 7.5rem minmax(0, 1fr); align-items: baseline; gap: var(--s2); padding: var(--s2) 0; border-bottom: 1px solid var(--row-line); font-size: var(--fs-s); line-height: 1.5; }
 .pv-ev-time { color: var(--text-3); }
 .pv-ev-type { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pv-ev-text { color: var(--text-2); overflow-wrap: anywhere; min-width: 0; }
 .pv-event[data-loud="true"] .pv-ev-type { color: var(--text); font-weight: 600; }
 .pv-stderr summary, .pv-tail summary { cursor: pointer; width: max-content; font-size: var(--fs-s); color: var(--text-2); }
 .pv-stderr .exit-tail, .pv-tail .exit-tail { margin-top: var(--s2); border: 1px solid var(--line); border-radius: var(--radius-s); }
+:is(.pv-stderr, .pv-tail) summary .copy-btn { margin-left: var(--s2); vertical-align: middle; }
 .pv-checks .pv-tail { grid-column: 2 / -1; min-width: 0; }
 .pv-ev-lane { margin-right: var(--s2); color: var(--text-3); }
 
@@ -2036,7 +2115,7 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 .pf-sandbox-state .btn { flex: none; }
 
 .pv-lanes { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); min-width: 0; }
-.pv-lane { display: grid; grid-template-columns: 1rem minmax(0, 1fr) auto auto; align-items: baseline; gap: var(--s2); padding: 0.3125rem 0; border-bottom: 1px solid var(--row-line); font-size: var(--fs-s); }
+.pv-lane { display: grid; grid-template-columns: 1rem minmax(0, 1fr) auto auto; align-items: baseline; gap: var(--s2); padding: var(--s2) 0; border-bottom: 1px solid var(--row-line); font-size: var(--fs-s); line-height: 1.5; }
 .pv-lane-glyph { text-align: center; color: var(--text-3); }
 .pv-lane[data-state="running"] .pv-lane-glyph { color: var(--run); animation: pulse 1.8s ease-in-out infinite; }
 .pv-lane-title { overflow-wrap: anywhere; min-width: 0; }
@@ -2071,8 +2150,8 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
   position: sticky;
   top: var(--topbar-h);
   z-index: 16;
-  flex: 0 0 4rem;
-  width: 4rem;
+  flex: 0 0 5rem;
+  width: 5rem;
   height: calc(100vh - var(--topbar-h));
   height: calc(100dvh - var(--topbar-h));
   align-self: flex-start;
@@ -2087,8 +2166,9 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 .viewbar-group + .viewbar-group { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
 .viewbar-group:not(:has(> :not([hidden]))) { display: none; }
 .viewbar-group:not(:has(> :not([hidden]))) + .viewbar-group { margin-top: 0; padding-top: 0; border-top: 0; }
-/* every icon says what it is: the name under it, so nothing has to be hovered to be found */
-.bar-btn { width: 3.75rem; height: auto; min-height: 2.75rem; gap: 0.1875rem; padding: var(--s1) 0; align-content: center; }
+/* every icon says what it is: the name under it, so nothing has to be hovered to be found. The button is wide
+   enough for the longest name to keep its distance from the edges. */
+.bar-btn { width: 4.75rem; height: auto; min-height: 3rem; gap: var(--s1); padding: var(--s2); align-content: center; }
 .bar-label { font-size: 0.6875rem; line-height: 1; font-weight: 500; white-space: nowrap; }
 /* the mark of what is open, on the bar's inner edge */
 .bar-btn[aria-pressed="true"]::before { content: ""; position: absolute; left: -0.125rem; top: 0.5rem; bottom: 0.5rem; width: 2px; border-radius: 1px; background: var(--text); }
@@ -2102,8 +2182,13 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
     flex-direction: row; align-items: stretch; padding: 0 var(--s1); border-left: 0; border-top: 1px solid var(--line);
   }
   .viewbar-group, .viewbar-group + .viewbar-group { display: contents; }
-  .bar-btn { flex: 1 1 0; width: auto; min-width: 0; min-height: 0; }
+  .viewbar .bar-btn { flex: 1 1 0; width: auto; min-width: 0; height: 100%; min-height: 2.5rem; padding: var(--s1); }
   .bar-btn[hidden] { display: none; }
+  /* On phones the icons keep their names for screen readers, without nine clipped labels. */
+  .bar-label {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
   .bar-end { margin-top: 0; }
   .bar-btn[aria-pressed="true"]::before { left: 25%; right: 25%; top: 0; bottom: auto; width: auto; height: 2px; }
 }
@@ -2113,7 +2198,7 @@ body[data-engine="pipeline"] :is(#runline, #alert, #hitl, #approvals, #exit-pane
 /* ------------------------------------------------------------ thinking view */
 /* The third view, beside Chat and Dashboard: a column per agent with what it reasoned, wrote and did. It takes the
    place of the main column while it is open. */
-.think { flex: 1 1 0; min-width: 0; height: calc(100vh - var(--topbar-h)); height: calc(100dvh - var(--topbar-h)); display: flex; flex-direction: column; }
+.think { --think-col: 32rem; flex: 1 1 0; min-width: 0; height: calc(100vh - var(--topbar-h)); height: calc(100dvh - var(--topbar-h)); display: flex; flex-direction: column; }
 .think[hidden] { display: none; }
 body[data-think="open"] :is(.main, .rail, .side) { display: none; }
 /* Chat and Dashboard are not on screen while it is: their buttons do not read as pressed */
@@ -2122,30 +2207,69 @@ body[data-think="open"] :is(#bar-chat, #bar-dash)[aria-pressed="true"]::before {
 .think-top { flex: none; display: flex; align-items: baseline; gap: var(--s3); padding: var(--s4) var(--gutter) var(--s2); min-width: 0; }
 .think-top h2 { flex: none; font-size: var(--fs-l); font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
 .think-close { margin-left: auto; align-self: center; }
+/* who is in the run, a chip each: it brings that agent's column into view, or picks who is read alone */
+.think-strip { flex: none; display: flex; flex-wrap: wrap; gap: var(--s2); padding: 0 var(--gutter) var(--s2); min-width: 0; }
+.think-chip { display: inline-flex; align-items: center; gap: var(--s2); max-width: 100%; height: 1.75rem; padding: 0 var(--s3); border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-2); font-size: var(--fs-s); cursor: pointer; min-width: 0; }
+.think-chip:hover { background: var(--fill); color: var(--text); }
+.think-chip-glyph { flex: none; font-size: var(--fs-xs); color: var(--text-3); }
+.think-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.think-chip[data-live="true"] { border-color: var(--line-strong); color: var(--text); }
+.think-chip[data-live="true"] .think-chip-glyph { color: var(--run); }
+.think-chip[data-status="done"] .think-chip-glyph { color: var(--ok); }
+.think-chip[data-status="failed"] .think-chip-glyph { color: var(--bad); }
+.think-chip[data-status="stopped"] .think-chip-glyph { color: var(--warn); }
+.think-chip[aria-current="true"] { background: var(--fill); border-color: var(--text-3); color: var(--text); font-weight: 600; }
+.think-chip-all { border-style: dashed; }
 .think-note { flex: none; margin: 0; padding: 0 var(--gutter) var(--s2); font-size: var(--fs-s); color: var(--text-3); }
-.think-cols { flex: 1 1 auto; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(20rem, 1fr); gap: var(--s3); padding: var(--s2) var(--gutter) var(--s4); overflow-x: auto; overscroll-behavior: contain; }
+/* A column is wide enough to read prose in: two share a window, more scroll sideways and snap into place, and
+   the edge that has more behind it fades (data-more, thinking-view.js). */
+.think-cols { flex: 1 1 auto; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(min(var(--think-col), 100%), 1fr); gap: var(--s3); padding: var(--s2) var(--gutter) var(--s4); overflow-x: auto; overscroll-behavior: contain; scroll-snap-type: x proximity; scroll-padding-inline: var(--gutter); }
 .think-cols[hidden] { display: none; }
-.think-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.think-cols[data-more="end"] { -webkit-mask-image: linear-gradient(to left, transparent, #000 4rem); mask-image: linear-gradient(to left, transparent, #000 4rem); }
+.think-cols[data-more="start"] { -webkit-mask-image: linear-gradient(to right, transparent, #000 4rem); mask-image: linear-gradient(to right, transparent, #000 4rem); }
+.think-cols[data-more="both"] { -webkit-mask-image: linear-gradient(to right, transparent, #000 4rem, #000 calc(100% - 4rem), transparent); mask-image: linear-gradient(to right, transparent, #000 4rem, #000 calc(100% - 4rem), transparent); }
+/* one agent has the width, by choice or because it is the only one: a reading column in the middle, a size up */
+.think-cols[data-mode="one"] { grid-auto-columns: minmax(0, 44rem); justify-content: center; }
+.think-cols[data-mode="one"] .think-col { font-size: var(--fs-m); }
+.think-col { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); scroll-snap-align: start; }
 .think-col[data-live="true"] { border-color: var(--line-strong); }
 .think-col[data-live="true"] :is(.act-glyph, .act-status) { color: var(--run); }
 .think-col[data-status="done"] .act-glyph { color: var(--ok); }
 .think-col[data-status="failed"] :is(.act-glyph, .act-status) { color: var(--bad); }
 .think-col[data-status="stopped"] :is(.act-glyph, .act-status) { color: var(--warn); }
-.think-head { flex: none; display: grid; gap: 0.125rem; padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); min-width: 0; }
+.think-head { flex: none; display: grid; gap: var(--s1); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); min-width: 0; }
 .think-name { flex: 0 1 auto; margin: 0; font-size: var(--fs); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.think-line { margin: 0 0 0 calc(0.875rem + var(--s2)); font-size: var(--fs-s); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* what the agent is doing, on two lines at most (the whole of it in its title), and the column's own actions */
+.think-sub { display: flex; align-items: flex-start; gap: var(--s3); min-width: 0; }
+.think-line { flex: 1 1 auto; margin: 0 0 0 calc(0.875rem + var(--s2)); font-size: var(--fs-s); line-height: 1.5; color: var(--text-3); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; min-width: 0; }
 .think-line:empty { display: none; }
-.think-scroll { flex: 1 1 auto; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; display: grid; align-content: start; gap: var(--s3); padding: var(--s3) var(--s4); }
+.think-col-tools { flex: none; display: flex; align-items: center; gap: var(--s2); margin-left: auto; }
+.think-col-tools .msg-more { margin: 0; }
+.think-only { width: 1.5rem; height: 1.5rem; }
+.think-col > .jump { right: var(--s4); bottom: var(--s4); }
+.think-scroll { flex: 1 1 auto; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--s4); padding: var(--s4); }
+.think-scroll:focus-visible { outline-offset: -2px; }
 .think-scroll .placeholder { padding: 0; }
-.think-item { margin: 0; min-width: 0; }
-.think-item-head { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
+/* A block: a label row (what it is, when, copy) and the text under it. Reasoning is ruled and quiet, an answer
+   stands on a surface of its own, a run of tool calls is a short log. */
+.think-item { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s2); min-width: 0; }
+.think-item-head { display: flex; align-items: center; gap: var(--s2); min-height: 1.5rem; min-width: 0; }
+.think-item-head > .copy-btn { margin-left: auto; }
+.think-item-head > .chat-time + .copy-btn { margin-left: 0; }
 .think-label { font-size: var(--fs-xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
 .think-now { font-size: var(--fs-xs); font-weight: 600; color: var(--run); }
-.think-text { margin: 0.125rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; color: var(--text); }
-.think-item[data-kind="reasoning"] .think-text { padding-left: var(--s3); border-left: 2px solid var(--line-strong); color: var(--text-2); }
-.think-item[data-open="true"] .think-text { border-left-color: var(--run); }
-.think-item[data-kind="tool"] { font-family: var(--mono); font-size: var(--fs-s); color: var(--text-3); overflow-wrap: anywhere; }
-.think-item[data-kind="tool"]::before { content: "\203A  "; color: var(--text-4); }
+.think-body { max-width: 72ch; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; min-width: 0; }
+.think-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.think-item[data-kind="reasoning"] .think-body { padding-left: var(--s3); border-left: 2px solid var(--line-strong); color: var(--text-2); }
+.think-item[data-kind="answer"] .think-body { padding: var(--s3) var(--s4); border-radius: var(--radius-s); background: var(--panel-2); }
+.think-item[data-open="true"] .think-body { border-left-color: var(--run); }
+.think-item[data-open="true"][data-kind="answer"] .think-body { box-shadow: inset 2px 0 0 var(--run); }
+/* a plan or a result that is being written as JSON is code from its first line on */
+.think-item[data-payload="true"] .think-text { font: var(--fs-s)/1.55 var(--mono); }
+.think-tools { list-style: none; margin: 0; padding: 0 0 0 var(--s3); border-left: 2px solid var(--line); display: grid; gap: 0.125rem; font: var(--fs-s)/1.5 var(--mono); min-width: 0; }
+.think-tool { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--s3); align-items: baseline; min-width: 0; }
+.think-tool-time { color: var(--text-3); }
+.think-tool-text { color: var(--text-2); overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .think { height: calc(100dvh - var(--topbar-h) - 3.5rem); }
   .think-cols { grid-auto-columns: 86vw; }
@@ -2195,9 +2319,9 @@ body[data-side] .rail { display: none; }
 .plan-item[data-column="done"] .plan-state { color: var(--ok); }
 .plan-item[data-column="blocked"] .plan-state { color: var(--bad); }
 .plan-item:is([data-column="in_progress"], [data-column="in_review"]) .plan-state { color: var(--run); }
-.plan-desc { margin: 0; font-size: var(--fs-m); line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan-desc { margin: 0; max-width: 72ch; font-size: var(--fs-m); line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-sub { margin: var(--s2) 0 0; font-size: var(--fs-s); font-weight: 600; color: var(--text-3); }
-.plan-criteria { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s2); }
+.plan-criteria { margin: 0; padding: 0; max-width: 72ch; list-style: none; display: grid; gap: var(--s2); }
 .plan-criteria li { display: grid; grid-template-columns: 1.125rem minmax(0, 1fr); font-size: var(--fs); line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; }
 .plan-criteria li::before { content: "○"; font-size: var(--fs-xs); line-height: 1.375rem; color: var(--text-3); }
 .plan-item[data-column="done"] .plan-criteria li::before { content: "✓"; color: var(--ok); }
@@ -2212,11 +2336,11 @@ body[data-side] .rail { display: none; }
 .changes-files li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--s3); padding: var(--s2) 0; border-bottom: 1px solid var(--row-line); font-size: var(--fs-s); min-width: 0; }
 .changes-path { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
 .changes-by { color: var(--text-3); white-space: nowrap; }
-.changes-diff { flex: none; max-height: none; }
+.changes-diff { flex: none; }
 
 /* too narrow for a third column: the side panel lies over the page, up to the bar */
 @media (max-width: 1099px) {
-  .side { position: fixed; top: var(--topbar-h); right: 4rem; bottom: 0; left: 0; z-index: 15; height: auto; border-left: 0; }
+  .side { position: fixed; top: var(--topbar-h); right: 5rem; bottom: 0; left: 0; z-index: 15; height: auto; border-left: 0; }
 }
 @media (max-width: 600px) {
   .side { right: 0; bottom: 3.5rem; }
@@ -2307,7 +2431,7 @@ body[data-side] .rail { display: none; }
 .access-line { color: var(--text-2); overflow-wrap: anywhere; }
 .access-item[data-status="pending"] .access-line { color: var(--text); font-weight: 600; }
 .access-item[data-status="denied"] .access-path { color: var(--text-3); text-decoration: line-through; }
-.access-quote { padding-left: var(--s2); border-left: 1px solid var(--line-strong); color: var(--text-2); overflow-wrap: anywhere; }
+.access-quote { padding-left: var(--s3); border-left: 1px solid var(--line-strong); color: var(--text-2); overflow-wrap: anywhere; }
 .access-writes-title { margin: var(--s2) 0 0; font-size: var(--fs-s); color: var(--text); font-weight: 600; }
 .access-writes { gap: var(--s1); padding-left: var(--s3); border-left: 2px solid var(--text); }
 .access-writes li { font-size: var(--fs-s); color: var(--text); overflow-wrap: anywhere; }
@@ -2357,7 +2481,7 @@ body[data-side] .rail { display: none; }
   justify-content: flex-end;
   max-height: 4.5em;
   overflow: hidden;
-  padding-left: var(--s2);
+  padding-left: var(--s3);
   border-left: 1px solid var(--line-strong);
   line-height: 1.5;
   color: var(--text-2);
@@ -2571,7 +2695,10 @@ body[data-scope="none"] #chat-view { display: none; }
 .chat-context::before { content: "· "; color: var(--text-4); }
 .chat-head .badge { font-size: var(--fs-s); }
 .chat-time { margin-left: auto; padding-left: var(--s2); font-size: var(--fs-s); color: var(--text-3); white-space: nowrap; }
-.chat-body { margin-top: var(--s1); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.chat-body { margin-top: var(--s1); line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+/* prose keeps to a line that can be read, however wide the conversation is; code and the plan take the room */
+.chat-body:not(.md), .chat-body > :is(p, ul, ol, h3, h4, h5) { max-width: 72ch; }
+.chat-head > .copy-btn { align-self: center; }
 .chat-note { margin: var(--s1) 0 0; font-size: var(--fs-s); color: var(--text-3); }
 /* a long message shows about twelve lines and fades out; Show more opens it */
 .chat-entry[data-long="true"]:not([data-open]) .chat-body {
@@ -2597,8 +2724,8 @@ body[data-scope="none"] #chat-view { display: none; }
    follows its speaker's label shows no label of its own (its accessible name still says who and where). */
 .chat-entry[data-kind="agent"] > :not(.chat-head) { margin-left: var(--s3); }
 .chat-entry[data-cont="true"] { margin-top: calc(var(--s2) - var(--s4)); }
-.chat-entry[data-cont="true"] .chat-head > :not(.badge) { display: none; }
-.chat-entry[data-cont="true"] .chat-head:not(:has(.badge)) { display: none; }
+.chat-entry[data-cont="true"] .chat-head > :not(.badge, .copy-btn) { display: none; }
+.chat-entry[data-cont="true"] .chat-head:not(:has(.badge, .copy-btn)) { display: none; }
 .chat-entry[data-cont="true"] .chat-head { margin-left: var(--s3); }
 .chat-entry[data-kind="activity"][data-cont="true"] { margin-left: var(--s3); }
 .chat-entry[data-kind="activity"][data-cont="true"] + .chat-entry[data-kind="activity"][data-cont="true"] { margin-top: calc(var(--s1) - var(--s4)); }
@@ -2640,7 +2767,7 @@ body[data-scope="none"] #chat-view { display: none; }
 .md code { padding: 0.0625rem var(--s1); border-radius: 0.25rem; background: var(--fill); font-size: 0.9em; overflow-wrap: anywhere; }
 .md strong { font-weight: 600; }
 /* a code block scrolls inside itself; the page never does */
-.md pre { max-width: 100%; padding: var(--s3); overflow-x: auto; border-radius: var(--radius-s); background: var(--panel); line-height: 1.5; }
+.md pre { max-width: 100%; padding: var(--s3) var(--s4); overflow-x: auto; border-radius: var(--radius-s); background: var(--panel); line-height: 1.55; }
 /* a long line of code wraps (one line of JSON would otherwise scroll sideways for screens) */
 .md pre code { padding: 0; background: none; font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* the planner's plan inside its message: the list of plan.js, a size down, and the way to the Plan panel */
@@ -2673,6 +2800,10 @@ body[data-view="chat"] .followup { margin-top: var(--s3); }
 /* Keep the decision's reason beside its actions even when the transcript is scrolled away. */
 body[data-view="chat"] .hitl-reason { display: block; }
 body[data-view="chat"][data-run="none"] .followup:not([data-off="true"]) { margin-top: var(--s5); }
+/* the conversation arrives with a short fade when its view is picked */
+@media (prefers-reduced-motion: no-preference) {
+  .chatview { animation: fade-in var(--dur) var(--ease-out) backwards; }
+}
 
 /* ------------------------------------------------------------ narrow */
 @media (min-width: 761px) and (max-width: 1099px) {
@@ -2704,7 +2835,7 @@ body[data-view="chat"][data-run="none"] .followup:not([data-off="true"]) { margi
   .seg, .btn-small, .tab, .msg-more { min-height: 2.5rem; }
   .seg { padding: 0 var(--s3); }
   .check input { width: 1.25rem; height: 1.25rem; margin-top: 0; }
-  .bar-btn { width: 3.75rem; height: auto; }
+  .bar-btn { width: 4.75rem; height: auto; }
 }
 
 /* ------------------------------------------------------------ motion */
@@ -2803,7 +2934,7 @@ body[data-view="chat"][data-run="none"] .followup:not([data-off="true"]) { margi
   .agent { box-shadow: inset 0 0 0 1px var(--line); }
   .agent[data-active="true"] { box-shadow: inset 0 0 0 1px var(--text); }
   .tab[aria-selected="true"] { text-decoration: underline; text-underline-offset: 0.375rem; }
-  html { scrollbar-color: var(--text-4) transparent; }
+  :root { --scroll-thumb: var(--text-4); }
 }
 
 /* motion off: short cross-fades only, nothing slides, scales or pulses */
@@ -2815,4 +2946,81 @@ body[data-view="chat"][data-run="none"] .followup:not([data-off="true"]) { margi
   .btn:active, .icon-btn:active, .tab:active, .seg:active, .jump:active, #thread-rename:active { transform: none; }
   .drawer, .confirm, .sheet { transform: none !important; }
   @starting-style { .drawer[open], .confirm[open], .sheet[open] { transform: none; } }
+}
+
+/* ------------------------------------------------------------ copy */
+/* The copy button (copy.js): an icon, with a word beside it where one is given. For a moment after a click it
+   says how it went. A .copy-host shows the buttons in it on hover and on focus, and always where nothing hovers;
+   one that is the host's own child floats in its top right corner. */
+.copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s1);
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 var(--s1);
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  cursor: pointer;
+}
+.copy-btn:hover { background: var(--fill-hover); color: var(--text); }
+.copy-btn svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+.copy-btn-label { white-space: nowrap; }
+.copy-btn :is(.copy-ok, .copy-no), .copy-btn:is([data-state="copied"], [data-state="failed"]) .copy-ico { display: none; }
+.copy-btn[data-state="copied"] .copy-ok, .copy-btn[data-state="failed"] .copy-no { display: inline; }
+.copy-btn[data-state="copied"] { color: var(--ok); }
+.copy-btn[data-state="failed"] { color: var(--bad); }
+.copy-host { position: relative; }
+.copy-host > .copy-btn { position: absolute; top: var(--s2); right: var(--s2); z-index: 1; background: var(--fill); }
+.copy-host > .copy-btn:hover { background: var(--fill-hover); }
+@media (hover: hover) {
+  .copy-host:not(:hover, :focus-within) .copy-btn[data-state="idle"] { opacity: 0; }
+}
+@media (pointer: coarse) {
+  .copy-btn { min-width: 2.5rem; height: 2.5rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .copy-btn { transition: opacity 120ms var(--ease-out), background-color 120ms var(--ease-out), color 120ms var(--ease-out); }
+}
+/* what copies when the clipboard API does not: on the page for one moment, never seen */
+.copy-sink { position: fixed; top: 0; left: 0; width: 1px; height: 1px; min-height: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+
+/* ------------------------------------------------------------ long text */
+/* What the reading surfaces share (long-text.js): a text that shows about twelve lines until it is opened, a code
+   block whose wrapped lines keep their indent, a path that wraps between its folders, and the line over an
+   output that names it and copies it. */
+[data-clamp="closed"] {
+  max-height: var(--clamp-h, 19.2em);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 3em), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 3em), transparent);
+}
+.clamp-more { justify-self: start; align-self: flex-start; margin: 0; }
+.code-block { margin: 0; max-width: 100%; padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); font: var(--fs-s)/1.55 var(--mono); tab-size: 2; }
+.code-block code { display: block; padding: 0; background: none; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* --indent: the columns of the line's own indent; a wrapped line starts under its text, not at the left edge */
+.code-line { display: block; min-height: 1.55em; padding-left: calc(var(--indent, 0) * 1ch); text-indent: calc(var(--indent, 0) * -1ch); }
+.path { overflow-wrap: anywhere; }
+.path-line { display: flex; align-items: flex-start; gap: var(--s2); margin: var(--s1) 0; padding: var(--s2) var(--s2) var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); min-width: 0; }
+.path-line .path { flex: 1 1 auto; align-self: center; color: var(--text); min-width: 0; }
+.out-head { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.out-head :is(h3, h4) { flex: none; margin: 0; font-size: var(--fs-s); font-weight: 600; color: var(--text-2); }
+.out-head .section-aside { flex: 1 1 auto; }
+.out-head .copy-btn { margin-left: auto; }
+/* in the Changes panel the diff's line stays in sight while the diff scrolls under it */
+.changes > .out-head { flex: none; position: sticky; top: 0; z-index: 1; padding: var(--s2) 0; background: var(--bg); }
+
+/* ------------------------------------------------------------ view changes */
+/* Thinking and a pipeline chat's Details arrive with the same short fade as the conversation; the columns of the
+   Thinking view glide to the agent that was picked. Nothing of it for a reader who asked for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .think, .pview { animation: fade-in var(--dur) var(--ease-out) backwards; }
+  .think-cols { scroll-behavior: smooth; }
+  .think-chip { transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out), border-color 120ms var(--ease-out); }
 }

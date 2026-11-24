@@ -83,11 +83,12 @@ export class TreeEl extends FakeEl {
   }
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
 
-  // like a real event: the listeners of the node, then of every ancestor
+  // like a real event: the listeners of the node, then of every ancestor, until one of them stops it
   dispatch(type, fields = {}) {
-    const ev = { type, target: this, preventDefault() {}, ...fields };
+    let stopped = false;
+    const ev = { type, target: this, preventDefault() {}, stopPropagation() { stopped = true; }, ...fields };
     const calls = [];
-    for (let n = this; n; n = n.parentNode) calls.push(...(n.listeners.get(type) ?? []).map((fn) => fn(ev)));
+    for (let n = this; n && !stopped; n = n.parentNode) calls.push(...(n.listeners.get(type) ?? []).map((fn) => fn(ev)));
     return Promise.all(calls);
   }
   // a click on a button focuses it first

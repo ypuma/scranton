@@ -77,13 +77,23 @@ test('instance lanes: a failure shows in full and never scrolls sideways', () =>
   }
 });
 
-test('event log: a closed row stays one clipped line, an open row wraps its detail', () => {
+test('event log: the narrow cells stay one clipped line, the detail is cut after two lines and an open row shows all of it', () => {
   const cells = rules.find((r) => r.selectors.includes('.log td'));
   assert.match(cells.body, /white-space:\s*nowrap/);
   assert.match(cells.body, /overflow:\s*hidden/);
   assert.match(cells.body, /text-overflow:\s*ellipsis/);
-  const wrapping = rules.filter((r) => /white-space:\s*normal/.test(r.body) && r.selectors.some((s) => s.startsWith('.log ')));
-  assert.deepEqual(wrapping.flatMap((r) => r.selectors), ['.log tr[data-expanded] .t-detail'], 'only an open row wraps');
+  const body = (selector) => rules.find((r) => r.selectors.length === 1 && r.selectors[0] === selector)?.body ?? '';
+  const closed = body('.log .t-text');
+  assert.equal(clamp(closed), 2, 'a closed row shows two lines of its detail');
+  assert.ok(wraps(closed), 'and a long path breaks inside them');
+  const open = body('.log tr[data-expanded] .t-text');
+  assert.equal(clamp(open), null, 'an open row is not clamped');
+  assert.match(open, /-webkit-line-clamp:\s*none/);
+  assert.match(open, /white-space:\s*pre-wrap/, 'line breaks are kept');
+  assert.doesNotMatch(open, /max-height|overflow:\s*(hidden|auto|scroll)/, 'nothing of it is cut or scrolls');
+  // the detail is the only text of a row that wraps; the foot of an open row wraps its facts
+  const wrapping = rules.filter((r) => /white-space:\s*(normal|pre-wrap)/.test(r.body) && r.selectors.some((s) => s.startsWith('.log ')));
+  assert.deepEqual(wrapping.flatMap((r) => r.selectors), ['.log .t-text', '.log tr[data-expanded] .t-text', '.log .t-more']);
 });
 
 const at = (seq, fields) => ({ v: 1, seq, ts: '2026-11-08T12:00:00.000Z', runId: 'r', ...fields });

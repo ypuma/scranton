@@ -297,22 +297,29 @@ const rail = createRunRail({
 });
 
 // Everything that reads the run view, after the state or a poll changed.
+// the gist beside a section heading: one line, in full in its title
+function aside(id, text) {
+  const node = $(id);
+  if (node.textContent !== text) node.textContent = text;
+  node.title = text;
+}
+
 function renderActivity(v = view()) {
   const rv = runView();
   const summary = rv.board.total ? boardSummary(rv.board) : '';
   if (engine === 'pipeline') {
     $('pv-live').hidden = !rv.runId;
     boards.details.render(rv.board);
-    $('pv-board-aside').textContent = summary;
+    aside('pv-board-aside', summary);
     usages.details.render(rv.usage, { live: rv.live });
   } else {
     lanes.render(v, rv);
     boards.dash.render(rv.board);
-    $('board-aside').textContent = summary;
+    aside('board-aside', summary);
     usages.dash.render(rv.usage, { live: rv.live });
   }
   boards.dialog.render(rv.board);
-  $('board-dialog-aside').textContent = summary;
+  aside('board-dialog-aside', summary);
   rail.render(rv);
   renderThinking(rv);
   side.render(rv, engine === 'pipeline' ? pipelineView.changes() : teamChanges(rv, summary), engine === 'pipeline' ? '' : undo.note(rv.runId));
@@ -362,13 +369,14 @@ control = createControlPanel({
   workspace: () => (projectsMode ? findProject(nav?.doc(), scope.get()?.project)?.workspace || null : null),
   limits: () => nav?.doc() ?? null,
   replaying: () => Boolean(replay),
-  // without a chat on screen, New run starts a chat (or asks for a project first)
+  // without a chat on screen, New run starts a chat (or asks for a project first). The drawer of the chat on
+  // screen is only right while that chat has a route to start a run at.
   onNewRun: () => {
     if (projectsMode && scope.get()?.chat && engine === 'pipeline') {
       pipelineView.newRun();
       return true;
     }
-    if (!projectsMode || scope.get()?.chat) return false;
+    if (urlFor('runs')) return false;
     const p = scope.get()?.project;
     if (p) nav.newChat(p);
     else nav.newProject();

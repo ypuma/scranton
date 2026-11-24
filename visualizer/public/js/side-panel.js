@@ -5,6 +5,8 @@ import { store } from './control-panel.js';
 import { classifyDiff } from './pipeline-model.js';
 import { planOf } from './plan.js';
 import { renderPlan } from './plan-render.js';
+import { copyButton } from './copy.js';
+import { pathNode } from './long-text.js';
 
 export const SIDE_KEY = 'scranton.side';
 export const PREVIEW_KEY = 'scranton.preview_url';
@@ -72,6 +74,13 @@ export function createSidePanel({ onChange } = {}) {
   let changesKey = '';
   let planKey = null;
   let asides = { plan: '', browser: '', changes: '' };
+  // the diff's own header: it stays in sight while the diff scrolls under it, and copies the diff as it was written
+  const diffHead = el('div', 'out-head');
+  const diffAside = el('span', 'section-aside');
+  let diffText = '';
+  diffHead.append(el('h3', 'out-title', 'Diff'), diffAside, copyButton({ text: () => diffText, what: 'the diff', label: 'Copy' }));
+  diffHead.hidden = true;
+  e.views.changes.insertBefore(diffHead, e.diff);
 
   function sync() {
     e.panel.hidden = !open;
@@ -172,9 +181,7 @@ export function createSidePanel({ onChange } = {}) {
     e.undone.textContent = undone;
     e.files.replaceChildren(...files.map((f) => {
       const li = el('li');
-      const path = el('span', 'changes-path mono', f.path);
-      path.title = f.path;
-      li.append(path, el('span', 'changes-by', `${f.kind} by ${f.by}`));
+      li.append(pathNode(f.path, 'changes-path mono'), el('span', 'changes-by', `${f.kind} by ${f.by}`));
       return li;
     }));
     const has = Boolean(diff?.content);
@@ -189,8 +196,11 @@ export function createSidePanel({ onChange } = {}) {
                 : files.length ? 'The files the agents changed in this run, each with who touched it last.' : '';
     e.note.hidden = !e.note.textContent;
     e.diff.hidden = !has;
+    diffHead.hidden = !has;
+    diffText = has ? diff.content : '';
     if (has) {
       const lines = classifyDiff(diff.content);
+      diffAside.textContent = `${lines.length} line${lines.length === 1 ? '' : 's'}`;
       e.diff.replaceChildren(...lines.slice(0, DIFF_LINES_MAX).map((l) => {
         const span = el('span', 'dl', l.text);
         span.dataset.kind = l.kind;

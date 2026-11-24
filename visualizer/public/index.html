@@ -101,7 +101,7 @@
     <h2 class="sr-only" id="pv-title">Pipeline run</h2>
     <div class="pv-head">
       <div class="pv-line">
-        <span class="pill" id="pv-status" data-status="idle"><span class="pill-glyph" aria-hidden="true">○</span><span class="pill-text">No run</span></span>
+        <span class="pill badge" id="pv-status" data-status="idle" data-tone="quiet"><span class="pill-glyph" aria-hidden="true">○</span><span class="pill-text">No run</span></span>
         <span class="pv-meta" id="pv-meta"></span>
       </div>
       <div class="pv-controls">
@@ -141,7 +141,7 @@
   <div class="runline" id="runline" hidden>
     <div class="run-row">
       <div class="run-state">
-        <span class="pill" id="run-status" data-status="idle"><span class="pill-glyph" aria-hidden="true">○</span><span class="pill-text">Idle</span></span>
+        <span class="pill badge" id="run-status" data-status="idle" data-tone="quiet"><span class="pill-glyph" aria-hidden="true">○</span><span class="pill-text">Idle</span></span>
         <span class="elapsed" id="elapsed" title="Elapsed run time">-</span>
         <span class="conn" id="conn" data-mode="connecting"><span class="conn-dot" aria-hidden="true"></span><span class="conn-label" id="conn-label">Connecting</span></span>
       </div>
@@ -1005,7 +1005,13 @@
         <button type="button" class="icon-btn" data-close aria-label="Close" title="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
       </header>
       <div class="drawer-body">
-        <p class="hint accounts-intro">Sign in with your Claude Pro/Max or ChatGPT subscription or your Google account (Google Antigravity), or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers. Everything is stored with Scranton's credentials on this computer; this page never shows a stored sign-in or key.</p>
+        <div class="accounts-intro">
+          <p class="hint">Everything is stored with Scranton's credentials on this computer; this page never shows a stored sign-in or key.</p>
+          <details class="form-help">
+            <summary>Supported accounts and providers</summary>
+            <p>Sign in with your Claude Pro/Max or ChatGPT subscription or your Google account (Google Antigravity), or add API keys for Gemini, other providers and your own OpenAI- or Anthropic-compatible servers.</p>
+          </details>
+        </div>
         <p class="form-error" id="accounts-error" role="alert" hidden></p>
         <p class="accounts-status" id="accounts-status" role="status" aria-live="polite" tabindex="-1"></p>
         <p class="hint" id="accounts-empty">Loading accounts...</p>

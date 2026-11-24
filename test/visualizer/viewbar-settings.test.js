@@ -4,11 +4,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parsePrefs, applyPrefs, parseParallel, parseRunDefaults, PREF_DEFAULTS } from '../../visualizer/public/js/prefs.js';
+import { installTree } from './fixtures/tree-dom.js';
+import { fakeStorage } from './fixtures/run-drawer.js';
 
 const read = (file) => readFileSync(new URL(`../../visualizer/public/${file}`, import.meta.url), 'utf8');
 
 // side-panel.js imports the store of control-panel.js, which needs no DOM until it is used
-const { parsePreviewUrl, changedFiles, parseSide } = await import('../../visualizer/public/js/side-panel.js');
+const { parsePreviewUrl, changedFiles, parseSide, createSidePanel } = await import('../../visualizer/public/js/side-panel.js');
 
 test('prefs: anything stored that is no choice is the default; a default sets no attribute', () => {
   assert.deepEqual(parsePrefs(null), PREF_DEFAULTS);
@@ -60,6 +62,36 @@ test('Changes: each changed file once, by who touched it last; a file that was o
   assert.deepEqual(changedFiles(undefined), []);
 });
 
+test('Changes panel: the diff has a line of its own that copies it as the run wrote it, and a path wraps between its folders', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const $ = installTree();
+  globalThis.localStorage = fakeStorage();
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (s) => { copied.push(s); } } } });
+  // as in the page: the diff is a child of the Changes view
+  $('side-changes').append($('changes-diff'));
+  const side = createSidePanel({});
+  const head = $('side-changes').children[0];
+  assert.deepEqual([$('side-changes').children.length, head.className, head.hidden, $('side-changes').children[1]], [2, 'out-head', true, $('changes-diff')], 'above the diff, and not there without one');
+  const rv = { runId: 'r1', board: null, agents: [{ id: 'dwight-m1', name: 'dwight-m1', files: [{ path: 'src/core/cli.js', kind: 'edit', ts: '2026-11-08T12:00:01Z' }] }] };
+  const diff = 'diff --git a/src/core/cli.js b/src/core/cli.js\n@@ -1 +1 @@\n-old\n+new <b>';
+  side.render(rv, { key: 'k', content: diff, known: true });
+  assert.deepEqual([head.hidden, head.children.map((n) => [n.tagName, n.textContent])], [false, [['H3', 'Diff'], ['SPAN', '4 lines'], ['BUTTON', 'Copy']]]);
+  await head.querySelector('.copy-btn').click();
+  assert.deepEqual(copied, [diff]);
+  assert.equal(head.querySelector('.copy-btn').getAttribute('aria-label'), 'Copied');
+  const path = $('changes-files').querySelector('.changes-path');
+  assert.deepEqual([path.className, path.title, path.textContent, path.querySelectorAll('wbr').length], ['changes-path mono', 'src/core/cli.js', 'src/core/cli.js', 2]);
+  // another diff under the same button: it copies what is shown now
+  side.render(rv, { key: 'k2', content: `${diff}\n+more`, known: true });
+  await head.querySelector('.copy-btn').click();
+  assert.equal(copied.at(-1), `${diff}\n+more`);
+  side.render(rv, null);
+  assert.deepEqual([head.hidden, $('changes-diff').hidden], [true, true]);
+  const css = read('styles.css');
+  assert.match(css, /\.changes > \.out-head \{[^}]*position: sticky; top: 0;[^}]*background: var\(--bg\); \}/, 'it stays in sight while the diff scrolls under it');
+});
+
 test('page: the bar closes the shell, the frame is sandboxed, and the controls the bar presses stay in the page', () => {
   const html = read('index.html');
   const shellEnd = html.slice(html.indexOf('<aside class="rail" id="run-rail"'), html.indexOf('<dialog class="drawer" id="prefs-dialog"'));
@@ -79,6 +111,55 @@ test('page: the bar closes the shell, the frame is sandboxed, and the controls t
   assert.match(css, /body\[data-side\] \.rail \{ display: none; \}/, 'one side panel at a time');
   assert.match(css, /:root\[data-motion="off"\] \*, :root\[data-motion="off"\] \*::before, :root\[data-motion="off"\] \*::after \{ animation: none !important; transition: none !important; \}/);
   assert.match(css, /:root\[data-color="off"\] \{ --ok: var\(--text\);/);
+});
+
+test('phone view bar keeps all nine accessible names with screen-reader labels, not visual ellipsis', async (t) => {
+  const { installPage } = await import('./fixtures/page-dom.js');
+  const { createViewBar } = await import('../../visualizer/public/js/viewbar.js');
+  const timers = { setTimeout, setInterval };
+  t.after(() => Object.assign(globalThis, timers));
+  const { $ } = installPage();
+  const buttons = $('viewbar').querySelectorAll('button');
+  assert.equal(buttons.length, 9);
+  assert.deepEqual(buttons.map((b) => b.querySelector('.bar-label').textContent),
+    ['Chat', 'Dashboard', 'Thinking', 'Plan', 'Browser', 'Changes', 'Agents', 'Accounts', 'Settings']);
+  for (const b of buttons) {
+    const label = b.querySelector('.bar-label');
+    assert.equal(b.getAttribute('type'), 'button');
+    assert.equal(label.hidden, false);
+    assert.notEqual(label.getAttribute('aria-hidden'), 'true', 'visually hidden labels still name their buttons');
+    assert.ok(b.title, 'touch users retain the tooltip text too');
+    assert.equal(b.getAttribute('tabindex'), null, 'native buttons stay in the tab order when shown');
+    assert.equal(b.querySelector('svg').getAttribute('aria-hidden'), 'true');
+    if (['bar-chat', 'bar-dash', 'bar-think', 'bar-plan', 'bar-browser', 'bar-changes'].includes(b.id)) {
+      assert.equal(b.getAttribute('aria-pressed'), 'false');
+    } else assert.equal(b.getAttribute('aria-haspopup'), 'dialog');
+    const controls = b.getAttribute('aria-controls');
+    if (controls) assert.ok($(controls), 'the control association still points to a real panel');
+    b.hidden = false;
+    b.focus();
+    assert.equal(document.activeElement, b);
+  }
+  $('thread').hidden = false;
+  $('view-mode-toggle').hidden = false;
+  $('view-mode-dash').textContent = 'Details';
+  $('view-mode-dash').setAttribute('aria-pressed', 'true');
+  createViewBar();
+  assert.deepEqual([$('bar-dash-label').textContent, $('bar-dash').title, $('bar-dash').getAttribute('aria-pressed')],
+    ['Details', 'Details', 'true'], 'pipeline naming and pressed-state mirroring remain intact');
+
+  const css = read('styles.css');
+  const phone = css.match(/\/\* a phone has no width[^\n]*\n@media \(max-width: 600px\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+  const labelRule = phone.match(/\.bar-label \{([^}]+)\}/)?.[1] ?? '';
+  assert.doesNotMatch(labelRule, /text-overflow:\s*ellipsis|display:\s*none|visibility:\s*hidden/,
+    'no clipped visible names, and no removal from the accessibility tree');
+  assert.match(labelRule, /position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;/);
+  assert.match(labelRule, /overflow: hidden; clip-path: inset\(50%\); white-space: nowrap; border: 0;/);
+  assert.match(phone, /\.viewbar \.bar-btn \{[^}]*flex: 1 1 0;[^}]*height: 100%;[^}]*min-height: 2\.5rem;/,
+    'compact icons keep full bar-height targets even with the coarse-pointer height rule');
+  assert.match(css, /:focus-visible \{ outline: 2px solid var\(--text\); outline-offset: 2px; \}/);
+  assert.match(css.replace(phone, ''), /\.bar-label \{ font-size: 0\.6875rem; line-height: 1; font-weight: 500; white-space: nowrap; \}/,
+    'desktop and tablet keep their descriptive labels');
 });
 
 test('plan: the planner\'s JSON message is read as a plan, anything else stays text; the board gives the plan in order', async () => {

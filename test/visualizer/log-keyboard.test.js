@@ -510,3 +510,52 @@ test('moving back down to the newest row resumes tail-follow', () => {
   assert.equal(h.jump.hidden, true);
   assert.equal(h.focused(), 22, 'the focus stays on its row');
 });
+
+// every node of a class under a row, in document order
+const under = (node, cls) => node.childNodes.flatMap((c) => [...(c.className === cls ? [c] : []), ...(c.childNodes ? under(c, cls) : [])]);
+
+test('the detail has a box of its own, which a closed row cuts after two lines and an open row shows whole', () => {
+  const h = harness();
+  h.add(2);
+  const [text] = h.cell(2).childNodes;
+  assert.deepEqual([h.cell(2).childNodes.length, text.className, text.textContent], [1, 't-text', 'row 2']);
+  assert.equal(h.cell(2).textContent, '', 'the cell holds no text of its own beside it');
+  h.cell(2).focus();
+  h.key('Enter');
+  assert.deepEqual(h.cell(2).childNodes.map((n) => n.className), ['t-text', 't-more'], 'opened: the same text, and what belongs to it under it');
+  assert.equal(h.cell(2).childNodes[0], text);
+});
+
+test('an open row has a button that copies its whole detail; it is no cell of the grid', async () => {
+  const h = harness();
+  const long = `Build failed in C:\\work\\${'deep\\'.repeat(150)}index.js\nsecond line`;
+  h.log.render({ runId: 'r1', log: [1, 2, 3].map((seq) => ({ seq, ts: ENTRY_TS(seq), source: 'dwight-m2', type: 'log', category: 'results', tone: 'bad', text: seq === 2 ? long : `row ${seq}` })) });
+  assert.deepEqual(under(h.body, 'copy-btn'), [], 'a closed row has none');
+  h.cell(2).focus();
+  h.key('Enter');
+  const [button, ...more] = under(h.row(2), 'copy-btn');
+  assert.equal(more.length, 0);
+  assert.equal(button.parentNode.className, 't-more', 'in the foot of the open row');
+  assert.deepEqual([button.getAttribute('aria-label'), button.title, button.dataset.state], ['Copy event detail', 'Copy event detail', 'idle']);
+  assert.deepEqual(h.stops(), [2], 'the grid keeps its one roving stop on a cell');
+
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { copied.push(t); } } }, configurable: true });
+  let bubbled = true;
+  await button.fire('click', { stopPropagation() { bubbled = false; } });
+  assert.deepEqual(copied, [long], 'the text of the event, line breaks and all, not what the row has room for');
+  assert.equal(button.dataset.state, 'copied');
+  assert.equal(bubbled, false, 'the click does not reach the row');
+  assert.equal(h.row(2).hasAttribute('data-expanded'), true, 'so the row stays open');
+
+  // the grid keys act on cells only: Enter and Space on the button are the button's
+  for (const key of ['Enter', ' ', 'ArrowUp']) {
+    const ev = { key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, target: button, prevented: false, preventDefault() { ev.prevented = true; } };
+    h.body.fire('keydown', ev);
+    assert.equal(ev.prevented, false, `${key === ' ' ? 'Space' : key} on the button is left alone`);
+  }
+  assert.equal(h.row(2).hasAttribute('data-expanded'), true);
+  h.cell(2).focus();
+  h.key('Enter');
+  assert.deepEqual(under(h.row(2), 'copy-btn'), [], 'closing takes the button with the foot');
+});

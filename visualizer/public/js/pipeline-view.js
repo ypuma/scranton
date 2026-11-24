@@ -13,6 +13,9 @@ import {
 import { pipelineChatEvent } from './chat-adapter-pipeline.js';
 import { parseUsage, parseLive, foldCalls } from './activity-model.js';
 import { detailError } from './scope.js';
+import { copyButton } from './copy.js';
+import { createFold, countLines } from './long-text.js';
+import { statusTone, setTone } from './status-tone.js';
 
 const $ = (id) => document.getElementById(id);
 const EVENTS_SHOWN = 300;
@@ -20,6 +23,9 @@ const FRESH_MS = 15000;
 const MOVED = 'Another chat is on screen now. Nothing was sent.';
 // an earlier run opened in the Chat view is read page by page, up to this many pages
 const EARLIER_PAGES_MAX = 200;
+// a diff or a report shows this many lines until it is opened; the page scrolls it, not a box of its own
+const OUTPUT_LINES = 24;
+const REPORT_WRAP = 100;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -94,8 +100,9 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
   // loads are numbered; one that began before the last action was answered still describes the call before it
   let loadSeq = 0;
   let actionAt = 0;
-  // the checks whose output the human opened
+  // the checks whose output the human opened, and the long outputs (diff, report) shown in full
   let openTails = new Set();
+  let openFolds = new Set();
   let comment = '';
   let busy = '';
   // the message line shows a loading or load error text render() put there, not the answer to an action
@@ -248,6 +255,7 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
     action = '';
     comment = '';
     openTails = new Set();
+    openFolds = new Set();
     built.clear();
   }
 
@@ -440,6 +448,7 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
     const s = run?.status ?? null;
     const line = runLine(s);
     e.pill.dataset.status = line.status;
+    setTone(e.pill, statusTone(RUN_STATUS[line.status]?.chat ?? line.status));
     e.pill.dataset.loud = String(line.loud);
     const glyph = el('span', 'pill-glyph', line.glyph);
     glyph.setAttribute('aria-hidden', 'true');
@@ -804,12 +813,29 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
     });
     const summary = el('summary', '', 'Output');
     summary.dataset.focus = `tail-${c.id}`;
-    summary.append(el('span', 'sr-only', ` of ${c.id}`));
+    summary.append(el('span', 'sr-only', ` of ${c.id}`), copyButton({ text: c.outputTail, what: `the output of ${c.id}` }));
     const pre = el('pre', 'exit-tail', revealBidi(c.outputTail));
     pre.tabIndex = 0;
     pre.setAttribute('aria-label', `Last output of check ${c.id}`);
     d.append(summary, pre);
     return d;
+  }
+
+  // A long output under its own line: what it is and a copy button, the text, and the button that opens it in
+  // full. It stays open across the rebuilds of its section. text: what is copied, as the run wrote it.
+  function output(name, title, pre, text, lines) {
+    const head = el('div', 'out-head');
+    head.append(sub(title), copyButton({ text, what: `the ${title.toLowerCase()}`, label: 'Copy' }));
+    const fold = createFold(pre, {
+      limit: OUTPUT_LINES,
+      onToggle: (on) => {
+        if (on) openFolds.add(name);
+        else openFolds.delete(name);
+      },
+    });
+    fold.more.dataset.focus = `fold-${name}`;
+    fold.set({ lines, open: openFolds.has(name) });
+    return [head, pre, fold.more];
   }
 
   // decided: the evidence block shows the criteria
@@ -886,7 +912,7 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
         span.dataset.kind = l.kind;
         return span;
       }));
-      root.append(pre);
+      root.append(...output('diff', 'Diff', pre, diff.content, Math.min(lines.length, DIFF_LINES_SHOWN)));
       if (lines.length > DIFF_LINES_SHOWN || diff.truncated) {
         root.append(el('p', 'hint', `Showing ${Math.min(lines.length, DIFF_LINES_SHOWN)} lines${diff.truncated ? ' of a diff cut at 1 MiB' : ` of ${lines.length}`}. The full diff is in the run folder.`));
       }
@@ -915,7 +941,7 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
       pre.tabIndex = 0;
       pre.dataset.focus = 'report';
       pre.setAttribute('aria-label', 'Run report');
-      root.append(sub('Report'), pre);
+      root.append(...output('report', 'Report', pre, report.content, countLines(report.content, REPORT_WRAP)));
     }
     return root;
   }
@@ -934,13 +960,17 @@ export function createPipelineView({ confirm, openRun, onChange, onUpdate, timer
       const said = [nodeLabel(ev.node), eventText(ev, { observe })].filter(Boolean).join(' · ');
       const text = el('span', 'pv-ev-text', ev.lane ? undefined : said);
       if (ev.lane) text.append(el('span', 'mono pv-ev-lane', ev.lane), el('span', '', said));
-      li.append(el('span', 'mono pv-ev-time', formatWhen(ev.ts)), el('span', 'mono pv-ev-type', ev.type.replace(/_/g, ' ')), text);
+      const type = el('span', 'mono pv-ev-type', ev.type.replace(/_/g, ' '));
+      type.title = type.textContent;
+      li.append(el('span', 'mono pv-ev-time', formatWhen(ev.ts)), type, text);
       return li;
     }));
     if (events.length) root.append(ol);
     if (stderr.trim()) {
       const d = el('details', 'pv-stderr');
-      d.append(el('summary', '', 'Engine output'), el('pre', 'exit-tail', stderr));
+      const summary = el('summary', '', 'Engine output');
+      summary.append(copyButton({ text: stderr, what: 'the engine output' }));
+      d.append(summary, el('pre', 'exit-tail', stderr));
       root.append(d);
     }
     return root;

@@ -3,6 +3,7 @@
 // card from run_started.roles the first time a run uses it.
 import { AGENT_IDS, isFailKeyword, displayName, roleTitle, humanNeeded, roleView, workflowOf, gateView, workflowText, stepNames, settledStatus } from './state.js';
 import { formatTokens, formatCost, plural, stripBidi } from './format.js';
+import { statusTone, setTone } from './status-tone.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // a column count from which the row needs more room than a single gate stage did
@@ -22,6 +23,13 @@ function el(tag, cls, text) {
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
+}
+
+// one part of a card's meta line: its label and its value, which the opened line sets side by side
+function fact(box, label, ...value) {
+  const v = el('span', 'meta-value');
+  v.append(...value);
+  box.replaceChildren(el('span', 'meta-label', `${label} `), v);
 }
 
 // The pipeline's columns for a run: [['michael'], ['dwight'], ...its gate stages].
@@ -58,7 +66,7 @@ export function createPipeline(root) {
     const glyph = el('span', 'glyph');
     glyph.setAttribute('aria-hidden', 'true');
     const word = el('span', 'status-word');
-    const status = el('span', 'status');
+    const status = el('span', 'badge status');
     status.append(glyph, word);
     const head = el('header', 'agent-head');
     head.append(name, status);
@@ -67,13 +75,13 @@ export function createPipeline(root) {
     const keyword = el('span', 'fact-keyword');
     const tool = el('span', 'fact-tool');
     const totals = el('span', 'agent-totals');
-    const meta = el('summary', 'agent-meta mono');
+    const meta = el('summary', 'agent-meta');
     meta.append(keyword, tool, totals);
     const more = el('details', 'agent-more');
     more.append(meta);
     card.append(head, role, activity, more);
     nodes[id] = card;
-    cards[id] = { card, name, glyph, word, activity, tool, keyword, totals, role, more };
+    cards[id] = { card, name, status, glyph, word, activity, tool, keyword, totals, role, more };
     return cards[id];
   }
   for (const id of AGENT_IDS) cardFor(id);
@@ -141,9 +149,14 @@ export function createPipeline(root) {
       const status = hasRun ? settledStatus(s, a, { role: true }) : 'idle';
       const name = displayName(id, s);
       if (c.name.textContent !== name) c.name.textContent = name;
+      // a narrow card cuts the name and the role: both are a hover away
+      c.name.title = name;
       // the lane count is said again by the lanes list, so a crowded row drops it (styles.css)
-      c.role.replaceChildren(roleTitle(id, s), ...(a?.lanes ? [el('span', 'role-lanes', ` · ${plural(a.lanes, 'lane')}`)] : []));
+      const lanes = a?.lanes ? ` · ${plural(a.lanes, 'lane')}` : '';
+      c.role.replaceChildren(roleTitle(id, s), ...(lanes ? [el('span', 'role-lanes', lanes)] : []));
+      c.role.title = `${roleTitle(id, s)}${lanes}`;
       c.card.dataset.status = status;
+      setTone(c.status, statusTone(status));
       c.card.dataset.active = String(status === 'working' || status === 'thinking');
       c.glyph.textContent = STATUS_GLYPH[status] ?? '○';
       c.word.textContent = status;
@@ -167,24 +180,26 @@ export function createPipeline(root) {
         c.activity.title = activity || '';
       }
       c.activity.hidden = !gate && !activity;
-      // the meta line: what is known and nothing else; empty parts drop out with their separator.
-      // It is the summary of a disclosure: opened (click, Enter, Space) it shows every part in full, labelled.
-      // The keyword leads so a clipped line never hides it; a gate result already names it.
-      c.keyword.replaceChildren();
-      if (hasRun && a?.lastKeyword && !gate) {
-        const k = el('span', isFailKeyword(s, id, a.lastKeyword) || a.lastExitCode ? 'keyword-bad' : '', a.lastKeyword);
-        c.keyword.append(el('span', 'meta-label', 'Keyword '), k);
-      }
-      c.tool.replaceChildren();
-      if (hasRun && a?.lastTool) {
-        c.tool.append(el('span', 'meta-label', 'Last tool '), el('span', 'tool-name', a.lastTool.tool), ` ${a.lastTool.detail}`);
-      }
+      // the meta line: what is known and nothing else; an empty part drops out.
+      // It is the summary of a disclosure: closed it says the keyword and the totals, opened (click, Enter, Space)
+      // every part, labelled. A gate result already names the keyword.
+      const keyword = hasRun && a?.lastKeyword && !gate ? a.lastKeyword : '';
+      const bad = Boolean(keyword) && Boolean(isFailKeyword(s, id, keyword) || a.lastExitCode);
+      const tool = hasRun ? a?.lastTool ?? null : null;
       const t = hasRun ? a?.totals : null;
       // nothing to tell before the first run
       c.more.hidden = !t?.runs;
-      c.totals.replaceChildren(el('span', 'meta-label', 'Totals '), t
-        ? `${plural(t.runs, 'run')} · ${formatTokens(t.input + t.output)} tok · ${formatCost(t.cost)}`
-        : `0 runs · 0 tok · ${formatCost(0)}`);
+      const figures = t ? [plural(t.runs, 'run'), `${formatTokens(t.input + t.output)} tok`, formatCost(t.cost)] : ['0 runs', '0 tok', formatCost(0)];
+      // drawn again only when it says something else, so a selection or the focus in the opened line stays
+      const metaKey = JSON.stringify([keyword, bad, tool?.tool, tool?.detail, figures]);
+      if (metaKey === c.metaKey) continue;
+      c.metaKey = metaKey;
+      c.keyword.replaceChildren();
+      if (keyword) fact(c.keyword, 'Keyword', el('span', bad ? 'keyword-bad' : '', keyword));
+      c.tool.replaceChildren();
+      if (tool) fact(c.tool, 'Last tool', el('span', 'tool-name', tool.tool), ` ${tool.detail}`);
+      // each figure stays in one piece when the line wraps, with its separator behind it
+      fact(c.totals, 'Totals', ...figures.flatMap((f, i) => [...(i ? ['\u00a0· '] : []), el('span', '', f)]));
     }
     renderHuman(s);
   }

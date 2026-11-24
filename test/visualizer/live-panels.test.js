@@ -273,6 +273,42 @@ test('rail: closing it is remembered like the view switch; the toggle and the li
   assert.deepEqual([document.body.dataset.rail, again.$('run-live-line').hidden, again.$('rail-toggle').hidden], ['closed', true, false]);
 });
 
+test('rail: the folder of the run is a path that wraps between its folders, says itself whole and can be copied', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const FOLDER = 'C:\\Users\\me\\Documents\\Project_Scranton';
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (s) => { copied.push(s); } } } });
+  const { state } = run();
+  const over = reduce(state, { v: 1, seq: 99, ts: new Date(T0 + 99000).toISOString(), runId: RUN, type: 'run_finished', status: 'success', summary: 'ok' });
+  const $ = installTree();
+  globalThis.localStorage = fakeStorage();
+  const rail = createRunRail({ viewMode: () => 'chat', openBoard() {}, media: { matches: true, addEventListener() {} }, folder: () => FOLDER, openChanges() {} });
+  rail.render(teamRunView({ state: over }));
+  const text = $('rail-outcome-files-text');
+  assert.equal(text.textContent, `1 file written by the agents for ${FOLDER}`, 'the sentence reads as before');
+  const line = text.querySelector('.path-line');
+  assert.deepEqual(line.children.map((n) => [n.tagName, n.className]), [['SPAN', 'path mono'], ['BUTTON', 'copy-btn']]);
+  const path = line.querySelector('.path');
+  assert.equal(path.title, FOLDER);
+  assert.deepEqual(path.childNodes.map((n) => (n.nodeType === 3 ? n.textContent : n.tagName)), ['C:\\', 'WBR', 'Users\\', 'WBR', 'me\\', 'WBR', 'Documents\\', 'WBR', 'Project_Scranton'],
+    'a break may come after a separator, not inside a name');
+  const copy = line.querySelector('.copy-btn');
+  assert.equal(copy.getAttribute('aria-label'), 'Copy the folder path');
+  await copy.click();
+  assert.deepEqual(copied, [FOLDER]);
+  // the next tick leaves the line alone: the button still says it copied
+  rail.render(teamRunView({ state: over }));
+  assert.equal(text.querySelector('.path-line'), line);
+  assert.equal(copy.dataset.state, 'copied');
+  // names that are cut say themselves in a title
+  const act = $('rail-agents').querySelectorAll('.act')[0];
+  assert.deepEqual([act.querySelector('.act-name').title, act.querySelector('.act-role').title], [act.querySelector('.act-name').textContent, act.querySelector('.act-role').textContent]);
+  assert.equal($('rail-status').title, $('rail-status').textContent);
+  const css = read('styles.css');
+  assert.match(css, /\.path-line \{[^}]*border: 1px solid var\(--line\);/);
+  assert.match(css, /\.live-body \{[^}]*padding-left: var\(--s3\);/, 'text keeps its distance from the rule beside it');
+});
+
 test('rail, narrow window: a toggle in the chat header opens the same content as a drawer; the dashboard has none', () => {
   const { state } = run();
   const h = railHarness({ wide: false });

@@ -407,6 +407,7 @@ export function createControlPanel({
     recoveryKey = key;
     e.recoveryTitle.textContent = text.title;
     e.recoveryMeta.textContent = times.meta;
+    e.recoveryMeta.title = times.meta;
     e.recoveryDetail.textContent = text.detail;
     e.recoveryError.textContent = o.recoveryError ?? '';
     e.recoveryError.hidden = !o.recoveryError;
@@ -511,6 +512,7 @@ export function createControlPanel({
       if (key !== hitlKey) {
         hitlKey = key;
         e.hitlMeta.textContent = pending.milestoneId ? `milestone ${pending.milestoneId}` : 'run';
+        e.hitlMeta.title = e.hitlMeta.textContent;
         e.hitlReason.textContent = pending.reason || 'The orchestrator is waiting for a decision.';
         e.hitlActions.replaceChildren(...pending.options.map((d) => {
           const b = el('button', d === 'feedback' ? 'btn btn-primary' : 'btn', DECISION_LABEL[d] ?? d);
@@ -983,6 +985,12 @@ export function createControlPanel({
     onStarted = opts.onStarted ?? null;
     if (!runTarget && (gates().alive || gates().recovery || replaying())) return;
     runPin = runTarget ? null : pin('runs');
+    // no chat on screen to start the run in: the page starts one for it, a drawer without a route never opens
+    if (runPin && !runPin.url) {
+      runPin = null;
+      if (!onNewRun()) say('Open a chat or start a new one first: a run belongs to a chat.');
+      return;
+    }
     e.runTitle.textContent = runTarget?.title ?? 'New run';
     const fixed = runTarget ? runTarget.workspace : workspace();
     e.fWorkspace.readOnly = Boolean(fixed);
@@ -1096,7 +1104,7 @@ export function createControlPanel({
     const target = runTarget;
     const to = runPin;
     const here = target ? null : chatKey();
-    if (target ? !gates().on || submitting : !gates().canStart || replaying() || !to) return;
+    if (target ? !gates().on || submitting : !gates().canStart || replaying() || !to?.url) return;
     if (to?.stale()) return runError(MOVED);
     clearRunError();
     // the gates decide which roles need a model, so they are checked first
@@ -1213,6 +1221,7 @@ export function createControlPanel({
     const g = gates();
     if (!g.canStart) return { error: g.alive ? 'A run is already in progress in this chat.' : 'A run cannot be started here right now.' };
     const to = pin('runs');
+    if (!to.url) return { error: 'A run cannot be started here right now.' };
     const here = chatKey();
     fillExecution(here);
     await models?.open();

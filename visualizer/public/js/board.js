@@ -3,10 +3,19 @@
 import { STATUS_GLYPH, GATE_GLYPH } from './pipeline.js';
 import { BOARD_COLUMNS } from './activity-model.js';
 import { measure, flip } from './motion.js';
+import { statusTone } from './status-tone.js';
 
 // a gate on a card: its result in the glyphs the lanes use, or that it runs or has not run yet
 export const GATE_MARK = { ...GATE_GLYPH, running: STATUS_GLYPH.thinking, pending: STATUS_GLYPH.idle };
 const GATE_WORD = { passed: 'passed', failed: 'failed', blocked: 'blocked', error: 'error', running: 'running', pending: 'not run yet' };
+const COLUMN_TONE = { todo: 'quiet', in_progress: 'run', in_review: 'run', blocked: 'warn', done: 'ok' };
+
+// The tone of a card's state badge: its column says it, and a state that names a failure ("failed", "lane
+// failed") is one in any column.
+export function cardTone(card) {
+  const failed = String(card.state ?? '').split(' ').some((word) => statusTone(word) === 'bad');
+  return failed ? 'bad' : COLUMN_TONE[card.column] ?? 'quiet';
+}
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -66,7 +75,11 @@ export function createBoard(root, { name = 'board' } = {}) {
     li.dataset.card = c.id;
     li.dataset.loud = String(c.loud);
     const head = el('div', 'card-head');
-    head.append(el('span', 'card-id mono', c.id), el('span', 'card-state', c.state));
+    const id = el('span', 'card-id mono', c.id);
+    id.title = c.id;
+    const state = el('span', 'badge card-state', c.state);
+    state.dataset.tone = cardTone(c);
+    head.append(id, state);
     li.append(head, el('p', 'card-title', c.title));
     if (c.note) li.append(el('p', 'card-note', c.note));
     if (c.reason) {
@@ -88,7 +101,9 @@ export function createBoard(root, { name = 'board' } = {}) {
         glyph.setAttribute('aria-hidden', 'true');
         const line = el('span', 'card-line', a.line);
         line.title = a.line;
-        row.append(glyph, el('span', 'card-agent mono', a.id), line);
+        const agent = el('span', 'card-agent mono', a.id);
+        agent.title = a.id;
+        row.append(glyph, agent, line);
         return row;
       }));
       li.append(ul);

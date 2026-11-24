@@ -1,7 +1,8 @@
-// Event log grid: incremental one-line rows (click, Enter or Space to expand), filter buttons,
-// auto-scroll that pauses while the user reads back. total: where the count of all events goes (the tab).
+// Event log grid: incremental rows whose detail is cut after two lines (click, Enter or Space to expand), filter
+// buttons, auto-scroll that pauses while the user reads back. total: where the count of all events goes (the tab).
 import { displayName } from './state.js';
 import { formatWhen } from './format.js';
+import { copyButton } from './copy.js';
 
 const FOLLOW_SLACK_PX = 24;
 const KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ']);
@@ -107,7 +108,8 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
   });
   jump.addEventListener('click', toBottom);
 
-  // opened, the detail cell shows the text in full and below it what the narrow columns clip
+  // opened, the detail cell shows the text in full and below it what the narrow columns clip, with a button
+  // that copies the text. The button is no cell: the grid keys pass it by, Tab reaches it.
   function toggle(tr) {
     const r = rows.get(tr);
     const open = !tr.hasAttribute('data-expanded');
@@ -122,6 +124,7 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
       part.append(el('span', 'meta-label', `${label} `), el('span', '', value));
       r.more.append(part);
     }
+    r.more.append(copyButton({ text: r.entry.text, what: 'event detail' }));
     r.cell.append(r.more);
   }
 
@@ -199,7 +202,9 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
     const source = entry.source === 'orchestrator' ? 'run' : displayName(entry.source).toLowerCase();
     const type = el('td', 't-type');
     type.append(el('span', '', typeLabel(entry.type)));
-    const cell = el('td', 't-detail', entry.text);
+    // the text has a box of its own: a table cell cannot cut after two lines
+    const cell = el('td', 't-detail');
+    cell.append(el('span', 't-text', entry.text));
     // a row of another day says its date, and the column makes room for it
     const when = formatWhen(entry.ts);
     if (when.length > 8) table.dataset.dated = 'true';

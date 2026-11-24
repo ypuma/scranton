@@ -340,6 +340,64 @@ test('a run the server does not know any more stops the polling and says it was 
   assert.equal(runGets(h).length, 1);
 });
 
+test('long output: a diff and a report fold to their first lines instead of scrolling in a box, stay open across a rebuild, and copy as written', async (t) => {
+  let updated = '2026-11-09T10:01:00Z';
+  const doc = () => ({
+    status: runStatus({ status: 'failed', phase: 'done', node: 'finalize', pending: null, updated_at: updated, artifacts: { plan: 'p', diff: 'partial.diff', report_md: 'report.md', report_json: null },
+      failure: { failure_class: 'checks_failed', code: 'exhausted', message: 'unit failed', node: 'verify' },
+      checks: [{ id: 'unit', kind: 'test', status: 'failed', required: true, duration_s: 2.1, output_tail: 'AssertionError: 1 !== 2' }] }),
+    live: false, events: [], lastSeq: 9, plan: null, review: null, stderrTail: '',
+  });
+  const diff = ['diff --git a/a.js b/a.js', '--- a/a.js', '+++ b/a.js', '@@ -1 +1,60 @@', ...Array.from({ length: 60 }, (_, i) => `+line ${i}`)].join('\n');
+  const report = Array.from({ length: 40 }, (_, i) => `Report line ${i}`).join('\n');
+  const short = harness({ doc, artifacts: { diff: 'diff --git a/a.js b/a.js\n+one', report: 'All good.' } });
+  done(t, short);
+  short.view.show({ project: 'core', chat: 'c1' });
+  await short.tick();
+  await short.tick();
+  const part = (h, cls) => walk(h.$('pv-sections'), (n) => n.className === cls)[0];
+  const more = (h, name) => walk(h.$('pv-sections'), (n) => n.dataset.focus === `fold-${name}`)[0];
+  assert.deepEqual([part(short, 'pv-diff').dataset.clamp, more(short, 'diff').hidden, more(short, 'report').hidden], [undefined, true, true], 'a short output is shown whole, without a button');
+  short.view.hide();
+
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (s) => { copied.push(s); } } } });
+  const h = harness({ doc, artifacts: { diff, report } });
+  done(t, h);
+  h.view.show({ project: 'core', chat: 'c1' });
+  await h.tick();
+  await h.tick();
+  assert.deepEqual([part(h, 'pv-diff').dataset.clamp, more(h, 'diff').hidden, more(h, 'diff').textContent, more(h, 'diff').getAttribute('aria-expanded')], ['closed', false, 'Show all (64 lines)', 'false']);
+  assert.deepEqual([part(h, 'pv-report').dataset.clamp, more(h, 'report').textContent], ['closed', 'Show all (40 lines)']);
+  assert.equal(walk(h.$('pv-sections'), (n) => n.className === 'dl').length, 64, 'every line is in the page; the stylesheet cuts it');
+
+  // each output is named by a line with its copy button; a check's output has one beside its disclosure
+  const heads = walk(h.$('pv-sections'), (n) => n.className === 'out-head');
+  assert.deepEqual(heads.map((x) => x.childNodes.map((n) => [n.className, n.textContent || n.getAttribute('aria-label')])), [
+    [['pv-sub', 'Diff'], ['copy-btn', 'Copy the diff']], [['pv-sub', 'Report'], ['copy-btn', 'Copy the report']],
+  ]);
+  const tail = walk(h.$('pv-sections'), (n) => n.className === 'pv-tail')[0];
+  assert.equal(tail.childNodes[0].childNodes.at(-1).getAttribute('aria-label'), 'Copy the output of unit');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await heads[0].childNodes[1].fire('click');
+  await heads[1].childNodes[1].fire('click');
+  await tail.childNodes[0].childNodes.at(-1).fire('click');
+  t.mock.timers.reset();
+  assert.deepEqual(copied, [diff, report, 'AssertionError: 1 !== 2']);
+
+  // opened by the reader; the run changes, the section is built again, and the report is still open
+  const before = part(h, 'pv-report');
+  await more(h, 'report').fire('click');
+  assert.deepEqual([before.dataset.clamp, more(h, 'report').textContent, more(h, 'report').getAttribute('aria-expanded')], ['open', 'Show less', 'true']);
+  updated = '2026-11-09T10:02:00Z';
+  await fire(h);
+  await h.tick();
+  assert.notEqual(part(h, 'pv-report'), before, 'the section was rebuilt');
+  assert.deepEqual([part(h, 'pv-report').dataset.clamp, more(h, 'report').textContent], ['open', 'Show less']);
+  assert.equal(part(h, 'pv-diff').dataset.clamp, 'closed', 'what was not opened stays folded');
+  assert.deepEqual(h.html, []);
+});
+
 // finding 4 (reverting the `have.failedAt === at` condition in fetchArtifacts fails this)
 test('a failed run shows its partial diff as changes up to the last passing step, and a failed artifact is not asked for again', async (t) => {
   const failed = (over = {}) => ({
@@ -895,4 +953,26 @@ test('activity combines retained conversation with lifecycle history without cha
   assert.deepEqual(activity.map((e) => e.seq), [...new Set(activity.map((e) => e.seq))].sort((a, b) => a - b), 'the combined evidence is ordered and not counted twice');
   assert.deepEqual(h.view.chat().run.events.map((e) => e.type), ['agent_message', 'edits_applied', 'agent_message', 'run_finished'], 'lifecycle events stay out of the transcript');
   assert.equal(activity.filter((e) => e.type === 'node_finished').length, 995, 'the original lifecycle retention cap is unchanged');
+});
+
+test('pipeline status uses the shared badge tones without changing its engine status, word, glyph or loud flag', async (t) => {
+  for (const [status, tone, label, glyph, loud] of [
+    ['running', 'run', 'Running', '●', false],
+    ['awaiting_approval', 'warn', 'Waiting for you', '■', true],
+    ['suspended', 'warn', 'Suspended', '–', true],
+    ['succeeded', 'ok', 'Succeeded', '✓', false],
+    ['failed', 'bad', 'Failed', '✕', true],
+    ['rejected', 'warn', 'Rejected', '–', false],
+    ['cancelled', 'warn', 'Cancelled', '–', false],
+  ]) {
+    const h = harness({ doc: () => doc(runStatus({ status, pending: null }), { live: status === 'running' }) });
+    done(t, h);
+    h.view.show({ project: 'core', chat: 'c1' });
+    await h.tick();
+    const badge = h.$('pv-status');
+    assert.deepEqual([badge.dataset.status, badge.dataset.tone, badge.childNodes[1].textContent, badge.childNodes[0].textContent, badge.dataset.loud],
+      [status, tone, label, glyph, String(loud)], status);
+    assert.equal(badge.hidden, false);
+    h.view.hide();
+  }
 });

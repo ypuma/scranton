@@ -149,3 +149,30 @@ export function thoughtColumns({ agents = [], thoughts = [], tools = [], tails =
   }
   return [...byId.values()];
 }
+
+// The stream of a column as it is laid out: a run of consecutive tool calls is one entry, named by its first call
+// (a run that grows stays the same entry).
+// -> [{ id, kind: 'reasoning' | 'answer', ts, text, cut } | { id, kind: 'tools', ts, calls: [{ id, ts, text }] }]
+export function groupTools(items) {
+  const out = [];
+  for (const x of items ?? []) {
+    if (x.kind !== 'tool') out.push(x);
+    else if (out.at(-1)?.kind === 'tools') out.at(-1).calls.push({ id: x.id, ts: x.ts, text: x.text });
+    else out.push({ id: `g${x.id}`, kind: 'tools', ts: x.ts, calls: [{ id: x.id, ts: x.ts, text: x.text }] });
+  }
+  return out;
+}
+
+const KIND_WORD = { reasoning: 'Reasoning', answer: 'Answer', tools: 'Tools' };
+
+// One entry of groupTools as plain text, for the clipboard.
+export function entryText(x) {
+  return x.kind === 'tools' ? x.calls.map((c) => c.text).join('\n') : x.text;
+}
+
+// A whole column as plain text: who, then every block under its kind and time, then the block being written.
+export function columnText(col) {
+  const blocks = groupTools(col.items).map((x) => `${[KIND_WORD[x.kind], x.ts].filter(Boolean).join(' \u00b7 ')}\n${entryText(x)}`);
+  if (col.open) blocks.push(`${col.open.label} \u00b7 in progress\n${col.open.cut ? '... ' : ''}${col.open.body}`);
+  return [[col.name, col.role].filter(Boolean).join(' \u00b7 '), ...blocks].join('\n\n');
+}

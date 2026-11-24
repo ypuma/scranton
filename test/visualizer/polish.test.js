@@ -54,7 +54,8 @@ test('the transcript establishes a containing block for absolute accessible labe
 test('setup help is disclosed, not its settings or safety messages', () => {
   const html = read('index.html');
   const help = [...html.matchAll(/<details class="form-help">([\s\S]*?)<\/details>/g)].map((m) => m[1]);
-  assert.equal(help.length, 3);
+  assert.equal(help.length, 4);
+  assert.ok(help.some((s) => s.includes('Supported accounts and providers') && s.includes('Claude Pro/Max')));
   assert.ok(help.some((s) => s.includes('How stages run') && s.includes('stages run in ascending order')));
   assert.ok(help.some((s) => s.includes('Model selection help') && s.includes('id="models-note"')));
   for (const s of help) assert.doesNotMatch(s, /<(?:input|select|textarea|button)\b|id="exec-note"|class="trust"/);

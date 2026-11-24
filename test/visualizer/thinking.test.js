@@ -106,7 +106,9 @@ test('page: the live entries end the transcript, Thinking is the third view of t
   assert.match(bar, /id="bar-dash"[\s\S]*?<\/button>\s*<button type="button" class="icon-btn bar-btn" id="bar-think" aria-pressed="false" aria-controls="think-view"[^>]*>[\s\S]*?<span class="bar-label">Thinking<\/span><\/button>\s*<\/div>/);
   const css = read('styles.css');
   assert.match(css, /body\[data-think="open"\] :is\(\.main, \.rail, \.side\) \{ display: none; \}/, 'it takes the place of the chat');
-  assert.match(css, /\.think-cols \{[^}]*grid-auto-flow: column; grid-auto-columns: minmax\(20rem, 1fr\);[^}]*overflow-x: auto;/, 'a column per agent, side by side');
+  assert.match(css, /\.think-cols \{[^}]*grid-auto-flow: column; grid-auto-columns: minmax\(min\(var\(--think-col\), 100%\), 1fr\);[^}]*overflow-x: auto;[^}]*scroll-snap-type: x proximity;/,
+    'a column per agent, side by side, wide enough to read and never wider than the window');
+  assert.match(css, /\.think \{ --think-col: 32rem;/);
   assert.match(css, /\.chat-live-body \{[^}]*max-height: 9\.6em; overflow: hidden;/);
   for (const file of ['js/chat-live.js', 'js/thinking-view.js']) {
     const js = read(file).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/.*$/gm, '$1');

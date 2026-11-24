@@ -6,6 +6,7 @@ import {
 } from './state.js';
 import { formatTokens, formatCost, formatDuration, formatWhen, runElapsed, plural } from './format.js';
 import { countUp } from './motion.js';
+import { statusTone, setTone } from './status-tone.js';
 
 const STATUS_PILL = {
   idle: ['○', 'Idle'], planning: ['◐', 'Planning'], running: ['●', 'Running'], paused: ['■', 'Paused'],
@@ -252,6 +253,7 @@ export function createDashboard({ hasRun = () => null } = {}) {
     state = s;
     const [glyph, label] = STATUS_PILL[s?.status ?? 'idle'] ?? STATUS_PILL.idle;
     e.pill.dataset.status = s?.status ?? 'idle';
+    setTone(e.pill, statusTone(s?.status ?? 'idle'));
     e.pill.querySelector('.pill-glyph').textContent = glyph;
     e.pill.querySelector('.pill-text').textContent = label;
     e.runId.textContent = s?.runId ?? 'no run';

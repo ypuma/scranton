@@ -28,11 +28,11 @@ test('sidebar and view bar: plain words for the one project, a name under every 
   assert.match(readFileSync(new URL('../../src/server/registry-router.js', import.meta.url), 'utf8'),
     /const title = !registry && runs\[0\]\?\.goal \? derivedChatTitle\(String\(runs\[0\]\.goal\)\) : chat\.title;/, 'the one chat is called what it was first asked');
   const css = read('styles.css');
-  assert.match(css, /\.viewbar \{[^}]*flex: 0 0 4rem;\s*width: 4rem;/);
+  assert.match(css, /\.viewbar \{[^}]*flex: 0 0 5rem;\s*width: 5rem;/);
   assert.match(css, /\.bar-label \{ font-size: 0\.6875rem; line-height: 1; font-weight: 500; white-space: nowrap; \}/);
   const phone = css.slice(css.indexOf('/* a phone has no width to give to a column'));
   assert.match(phone, /^[^\n]*\n@media \(max-width: 600px\) \{\s*body \{ padding-bottom: 3\.5rem; \}[\s\S]*?\.viewbar \{\s*position: fixed; top: auto; right: 0; bottom: 0; left: 0; width: auto; height: 3\.5rem;\s*flex-direction: row;/);
-  assert.match(css, /\.side \{ position: fixed; top: var\(--topbar-h\); right: 4rem; bottom: 0;/, 'the overlaid side panel ends at the wider bar');
+  assert.match(css, /\.side \{ position: fixed; top: var\(--topbar-h\); right: 5rem; bottom: 0;/, 'the overlaid side panel ends at the wider bar');
 });
 
 test('Start says why it cannot be pressed', () => {
@@ -231,5 +231,5 @@ test('dates: a time stamp of another day carries its date in the event log, the 
     assert.match(js, /formatWhen\(/, file);
     assert.doesNotMatch(js, /formatClock/, file);
   }
-  assert.match(read('styles.css'), /\.log\[data-dated="true"\] \{ --c-time: calc\(16ch \+ 1\.5rem\); \}/, 'the time column makes room for the date');
+  assert.match(read('styles.css'), /\.log\[data-dated="true"\] \{ --c-time: calc\(16ch \+ 1\.75rem\); \}/, 'the time column makes room for the date');
 });

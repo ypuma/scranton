@@ -2,7 +2,8 @@
 // (.enma/chat-view-contract.md section 7, chat-entries.js). It never reads an engine's events itself, and model
 // text only ever becomes text nodes.
 import { groupRuns, runDigest, followers, splitKeyword, keywordWords, isLong, entryKey, entryLabel, announcement, REPLY_LABEL } from './chat-entries.js';
-import { renderMarkdown } from './chat-markdown.js';
+import { richText } from './long-text.js';
+import { copyButton } from './copy.js';
 import { formatWhen } from './format.js';
 
 const $ = (id) => document.getElementById(id);
@@ -134,6 +135,10 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
     const model = x.kind === 'agent' || x.kind === 'reply';
     const { text, keyword } = x.kind === 'agent' ? splitKeyword(x.text) : { text: x.text ?? '', keyword: null };
     const parts = [head(x, keyword)];
+    // what a run hands over (a reply, an agent's final message) can be taken along as it was written
+    const copyable = Boolean(text.trim()) && (x.kind === 'reply' || x.final === true);
+    node.className = copyable ? 'chat-entry copy-host' : 'chat-entry';
+    if (copyable) parts[0].append(copyButton({ text, what: x.kind === 'reply' ? `the ${(REPLY_LABEL[x.replyKind] ?? 'Reply').toLowerCase()}` : 'this message' }));
     if (text.trim()) {
       const body = el('div', model ? 'chat-body md' : 'chat-body');
       // what a person typed is shown as typed; what a model wrote goes through the Markdown subset
@@ -144,10 +149,10 @@ export function createChatView({ getEntries, currentRunId = () => null, loadRun 
         // the message as the planner wrote it, JSON and all, for whoever wants to read or copy it
         if (plan.brief && expanded.has(x.id)) {
           const raw = el('div', 'chat-raw');
-          raw.append(...renderMarkdown(text));
+          raw.append(...richText(text));
           body.append(raw);
         }
-      } else if (model) body.append(...renderMarkdown(text));
+      } else if (model) body.append(...richText(text));
       else body.textContent = text;
       parts.push(body);
       if (planned && plan.open) {

@@ -170,7 +170,7 @@ function drawer() {
     const [head, detail, actions] = li.children;
     const [name, state, kind] = head.children;
     const [signIn, key, again, signOut, unkey, remove] = actions.children;
-    return { name: name.textContent, state: state.textContent, kind: kind.hidden ? null : kind.textContent, detail: detail.textContent, signIn, key, again, signOut, unkey, remove };
+    return { li, help: li.querySelector('.account-help'), name: name.textContent, state: state.textContent, kind: kind.hidden ? null : kind.textContent, detail: detail.textContent, signIn, key, again, signOut, unkey, remove };
   };
   const stop = () => {
     ctl.on = false;
@@ -188,7 +188,19 @@ test('drawer: the Antigravity row signs in through the browser flow, never asks 
   await d.settle();
 
   const g = d.row(ANTIGRAVITY);
-  assert.deepEqual([g.name, g.state, g.kind, g.detail], ['Google Antigravity', 'Signed out', null, ANTIGRAVITY_NOTE]);
+  assert.deepEqual([g.name, g.state, g.kind, g.detail], ['Google Antigravity', 'Signed out', null,
+    'Sign in with your Google account, no API key needed. The sign-in stays on this computer and is refreshed here; the model calls are made from this computer.']);
+  assert.equal(g.help.tagName, 'DETAILS');
+  assert.equal(g.help.open, false);
+  assert.equal(g.help.hidden, false);
+  assert.equal(g.help.querySelector('summary').textContent, 'Usage and model availability');
+  assert.equal(g.help.querySelector('p').textContent, 'Usable in Team and Pipeline runs, whatever the sandbox. Which models you can use depends on that account.');
+  assert.ok(!g.help.contains(g.signIn), 'the main action is outside folded guidance');
+  assert.ok(!g.help.contains(g.li.querySelector('.account-state')), 'status is not folded');
+  g.help.open = true;
+  await d.settle();
+  assert.equal(d.row(ANTIGRAVITY).help, g.help, 'polling keeps the disclosure node');
+  assert.equal(g.help.open, true, 'polling preserves its open state');
   assert.deepEqual([g.signIn.hidden, g.signIn.textContent, g.signIn.getAttribute('aria-label')], [false, 'Sign in', 'Sign in to Google Antigravity']);
   assert.match(g.signIn.className, /\bbtn-primary\b/, 'the sign-in is the row\'s main action');
   assert.deepEqual([g.key.hidden, g.unkey.hidden, g.signOut.hidden, g.remove.hidden], [true, true, true, true], 'no API key on this row');
@@ -247,7 +259,13 @@ test('drawer: the Antigravity row signs in through the browser flow, never asks 
   assert.equal(d.$('login-title').textContent, 'Signed in to Google Antigravity');
   const on = d.row(ANTIGRAVITY);
   assert.deepEqual([on.state, on.kind, on.detail, on.signIn.hidden, on.signOut.hidden, on.key.hidden],
-    ['Signed in', 'OAuth', `Google account sign-in, refreshed automatically. ${ANTIGRAVITY_SCOPE}`, true, false, true]);
+    ['Signed in', 'OAuth', 'Google account sign-in, refreshed automatically. The sign-in stays on this computer and is refreshed here; the model calls are made from this computer.', true, false, true]);
+  assert.equal(on.help.hidden, false);
+  assert.ok(!on.help.contains(on.signOut));
+  d.server.accounts = d.server.accounts.map((a) => a.id === ANTIGRAVITY ? { ...a, status: 'expired', detail: 'Renewal failed. Sign in again.' } : a);
+  await d.settle();
+  assert.equal(d.row(ANTIGRAVITY).detail, 'Renewal failed. Sign in again.', 'credential errors remain fully visible');
+  assert.equal(d.row(ANTIGRAVITY).help.hidden, true, 'no secondary guidance beside an error');
 
   await on.signOut.click();
   assert.equal(d.confirms.length, 1);

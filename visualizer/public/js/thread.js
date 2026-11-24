@@ -159,7 +159,8 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     document.body.dataset.scope = chat ? 'chat' : 'none';
     e.empty.hidden = Boolean(chat);
     e.project.textContent = project?.name ?? '';
-    e.project.title = project?.workspace ?? '';
+    // a cut name is read here in full, over the folder as the sidebar says it
+    e.project.title = [project?.name, project?.workspace].filter(Boolean).join('\n');
     // the separator never stands without the name before it
     e.project.hidden = !project;
     if (!chat) {
@@ -178,6 +179,7 @@ export function createThread({ scope, nav, control, onReplay, view = () => 'dash
     e.rename.hidden = doc.mode === 'single';
     e.sep.hidden = !project;
     e.title.textContent = chat.title;
+    // two lines at most are drawn: the whole title is a hover away
     e.title.title = chat.title;
     const status = CHAT_STATUS[chat.status] ?? CHAT_STATUS.idle;
     e.state.textContent = `${status.glyph} ${status.label}`;

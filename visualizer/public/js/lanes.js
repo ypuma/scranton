@@ -6,6 +6,7 @@ import { STATUS_GLYPH, GATE_GLYPH } from './pipeline.js';
 import { plural } from './format.js';
 import { teamAgents, laneRole } from './activity-model.js';
 import { createLiveBlock } from './agent-live.js';
+import { statusTone } from './status-tone.js';
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -85,7 +86,9 @@ export function createLanes({ block, list, exec, onMessage }) {
     name.title = inst.id;
     const where = inst.milestoneId && inst.milestoneId !== 'plan' ? ` · ${inst.milestoneId}` : '';
     // a custom gate is called by the title the run gave it
-    id.append(name, el('span', 'lane-role', `${laneRole(inst.agent, s)}${where}`));
+    const role = el('span', 'lane-role', `${laneRole(inst.agent, s)}${where}`);
+    role.title = role.textContent;
+    id.append(name, role);
     // a settled gate lane says its own result for the cycle instead of the keyword it finished with
     const gate = serial || isBusy(inst) || ['starting', 'error', 'blocked'].includes(inst.status) ? null : laneGate(s, inst);
     const act = doing?.line ?? inst.activity;
@@ -100,7 +103,9 @@ export function createLanes({ block, list, exec, onMessage }) {
     }
     const badges = el('div', 'lane-badges');
     badges.append(...laneBadges(inst, { simulated }).map(([t, title, tone]) => badge(t, title, tone)));
-    li.append(glyph, id, el('span', 'lane-state', inst.status), activity, badges);
+    const state = el('span', 'badge lane-state', inst.status);
+    state.dataset.tone = statusTone(inst.status);
+    li.append(glyph, id, state, activity, badges);
     if (!serial && canMessage(inst.id)) {
       const b = el('button', 'btn btn-small', 'Message');
       b.type = 'button';

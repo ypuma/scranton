@@ -4,6 +4,7 @@
 // server to open it again. A typed key lives in its password field until it is sent, never anywhere else.
 import {
   AUTH_POLL_MS, REOPEN_MS, MODEL_ROLES, MODELS_KEY, DOCKER_NOTE, AUTOMATIC_NOTE, LOGIN_INPUT_MAX, API_TYPES, ABLITERATION_PRESET,
+  ANTIGRAVITY, ANTIGRAVITY_NOTE, ANTIGRAVITY_SCOPE,
   parseAuth, loginActive, shouldPoll, nextLogin, loginView, accountView, accountsSummary, signOutConfirm, buildLoginInput, buildReopen,
   removeKeyConfirm, removeProviderConfirm, buildKey, keyNote, scrubSecret, parseProviders, otherKeyProviders, slugify,
   buildDiscover, parseDiscovered, buildProvider, providerErrorField,
@@ -193,6 +194,10 @@ export function createAccountsPanel({ getControl, confirm, onChange }) {
       custom.dataset.tone = 'quiet';
       head.append(name, state, kind, custom);
       const detail = el('p', 'account-detail');
+      const help = el('details', 'form-help account-help');
+      const guidance = el('p');
+      help.append(el('summary', '', 'Usage and model availability'), guidance);
+      help.hidden = true;
       const actions = el('div', 'account-actions');
       const button = (action, text, primary) => {
         const b = el('button', primary ? 'btn btn-small btn-primary' : 'btn btn-small', text);
@@ -211,9 +216,9 @@ export function createAccountsPanel({ getControl, confirm, onChange }) {
       const unkey = button('unkey', 'Remove key');
       const remove = button('remove', 'Remove provider');
       actions.append(signIn, key, again, signOut, unkey, remove);
-      li.append(head, detail, actions);
+      li.append(head, detail, actions, help);
       e.list.append(li);
-      row = { li, name, state, kind, custom, detail, signIn, again, signOut, key, unkey, remove };
+      row = { li, name, state, kind, custom, detail, help, guidance, signIn, again, signOut, key, unkey, remove };
       rows.set(a.id, row);
     }
     const v = accountView(a, { busy: active || busy });
@@ -225,7 +230,15 @@ export function createAccountsPanel({ getControl, confirm, onChange }) {
     row.kind.hidden = !v.kind;
     setText(row.kind, v.kind ?? '');
     row.custom.hidden = !v.custom;
-    setText(row.detail, v.detail);
+    // Only static guidance folds. Credential errors and renewal status always stay beside the controls.
+    const guided = a.id === ANTIGRAVITY && !a.detail && ['signed_out', 'signed_in'].includes(a.status);
+    row.help.hidden = !guided;
+    if (guided) {
+      const [usage, ...security] = ANTIGRAVITY_SCOPE.split('. ');
+      const [intro, availability] = ANTIGRAVITY_NOTE.split(ANTIGRAVITY_SCOPE);
+      setText(row.detail, a.status === 'signed_out' ? `${intro}${security.join('. ')}` : v.detail.replace(ANTIGRAVITY_SCOPE, security.join('. ')));
+      setText(row.guidance, `${usage}.${availability}`);
+    } else setText(row.detail, v.detail);
     row.signIn.hidden = !v.signIn;
     setText(row.signIn, v.signInLabel);
     row.signIn.disabled = v.signInDisabled;

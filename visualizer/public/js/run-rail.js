@@ -9,6 +9,8 @@ import { createLiveBlock } from './agent-live.js';
 import { createUsage, usageFigures } from './usage-chart.js';
 import { plural } from './format.js';
 import { undoneMark } from './undo.js';
+import { copyButton } from './copy.js';
+import { pathNode } from './long-text.js';
 
 // agents listed before "Show all"; the ones that are active are always among them
 export const RAIL_AGENTS_SHOWN = 6;
@@ -96,7 +98,9 @@ export function createRunRail({
     else delete it.el.dataset.gate;
     say(it.glyph, STATUS_GLYPH[a.status] ?? (a.status === 'rejected' ? STATUS_GLYPH.cancelled : '○'));
     say(it.name, a.name);
+    it.name.title = a.name;
     say(it.role, a.role);
+    it.role.title = a.role;
     say(it.status, a.status);
     say(it.line, a.line);
     it.line.title = a.line;
@@ -150,8 +154,11 @@ export function createRunRail({
     e.oFiles.hidden = !where;
     if (where && e.oFilesText.dataset.key !== key) {
       e.oFilesText.dataset.key = key;
+      // the folder as a path: it wraps between its folders, says itself whole in its title and can be copied
+      const folderLine = el('span', 'path-line');
+      folderLine.append(pathNode(where), copyButton({ text: where, what: 'the folder path' }));
       e.oFilesText.replaceChildren(
-        `${plural(n, 'file')} ${kept ? 'changed in' : 'written by the agents for'} `, el('span', 'mono', where),
+        `${plural(n, 'file')} ${kept ? 'changed in' : 'written by the agents for'} `, folderLine,
         ...(mark ? [{ undone: ' · undone', partial: ' · partly undone', unrestorable: ' · cannot be undone' }[mark]] : []),
       );
     }
@@ -179,7 +186,7 @@ export function createRunRail({
       const li = el('li', 'access-item');
       li.dataset.status = x.status;
       if (x.protected) li.dataset.protected = x.protected;
-      li.append(el('span', 'access-path mono', x.path), el('span', 'access-line', x.line));
+      li.append(pathNode(x.path, 'access-path mono'), el('span', 'access-line', x.line));
       if (x.quote) li.append(el('q', 'access-quote', x.quote));
       return li;
     }));
@@ -187,7 +194,11 @@ export function createRunRail({
     e.writesTitle.hidden = !n;
     e.writes.hidden = !n;
     say(e.writesTitle, n ? `${plural(n, 'file')} written outside the project, not covered by undo` : '');
-    e.writes.replaceChildren(...a.writes.map((p) => el('li', 'mono', p)));
+    e.writes.replaceChildren(...a.writes.map((p) => {
+      const li = el('li');
+      li.append(pathNode(p));
+      return li;
+    }));
   }
 
   // Where the rail is, and what follows from it for the toggle, the drawer and the page.
@@ -218,6 +229,7 @@ export function createRunRail({
     // out of sight: nothing to draw, the next render that shows it does
     if (m !== 'open' && m !== 'overlay') return;
     say(e.status, [view.live ? 'live' : 'ended', agentsSummary(view.agents)].filter(Boolean).join(' · '));
+    e.status.title = e.status.textContent;
     drawOutcome();
     drawAccess();
     drawAgents();
