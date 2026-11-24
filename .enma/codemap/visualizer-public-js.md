@@ -44,6 +44,21 @@ by: "core"
 ---
 
 ---
+file: "visualizer/public/js/state.js"
+symbol: "reduce"
+ordinal: 0
+kind: "how"
+text: "The UI event reducer deep-copies the entire run state on every event (structuredClone of the whole state, or of a fresh createState() on reset) before applying it. Cost is per event (~1.2 ms measured in Node on a ~90 KB state), so a full journal replay on chat switch/reconnect costs O(events) main-thread time."
+evidence: "`const s = structuredClone(kind === 'reset' ? createState() : state);`"
+see_also: "Server side: src/server/visualizer-server.js handleEvents replays the journal from the start (no Last-Event-ID); agent-routes.js does resume. Probes in .scratch/audit-ui/."
+hash: "span:9090ed2a9b287398"
+quote: "quote:83c2d3d3bd8125f9"
+written: "2026-11-24"
+commit: "ee8c972"
+by: "core"
+---
+
+---
 file: "visualizer/public/js/tabs.js"
 kind: "where"
 text: "The activity panel's tabs (Events / Messages / Mailboxes) live in createTabs, wired in main.js. It implements an ARIA tablist with roving tabindex and Arrow/Home/End keys. It merged the old separate Event log, Messages and Mailboxes panels in the 2026-11-08 UI rework. Pre-rework copy of the whole UI: .scratch/ui-rework/baseline/public/."
