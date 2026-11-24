@@ -10,7 +10,7 @@ Die native Tauri-v2-Anwendung startet den lokalen Scranton-Appserver und zeigt D
 - Microsoft Edge WebView2 Runtime. Der Installer bietet bei Bedarf den Download-Bootstrapper an; dafür ist Internet nötig.
 - Internet für npm, Cargo und beim ersten Paketieren die NSIS-Werkzeuge.
 - Für Pipeline: Python **3.14 x64 mit pip** (zuerst `.scratch/pipeline/venv`, sonst `python` oder `py -3.14`) sowie beim ersten Vorbereiten Netzwerkzugriff auf python.org und PyPI. Auf dem Zielrechner ist keine Python-Installation nötig. Bewusst ohne Pipeline bauen: `set "SCRANTON_SKIP_PIPELINE=1"` vor dem Build; danach zum Wiederaktivieren `set "SCRANTON_SKIP_PIPELINE="`.
-- Git auf dem Zielrechner für private Worktrees/Snapshots. Team verwendet standardmäßig die eigene OS-Sandbox; unter Windows benötigt sie den Sandboxhelper, unter Linux bwrap. Docker bleibt optional. Pipeline verwendet für neue Läufe standardmäßig die Scranton-Sandbox (in dieser Version nur unter Windows); [ISOLATION.md](ISOLATION.md), [PIPELINE.md](PIPELINE.md).
+- Git auf dem Zielrechner für private Worktrees/Snapshots. Team verwendet standardmäßig die eigene OS-Sandbox; unter Windows benötigt sie den Sandboxhelper, unter macOS nutzt sie Seatbelt und unter Linux ein installiertes, funktionsfähiges `bwrap`. Pipeline verwendet für neue Läufe standardmäßig die Scranton-Sandbox (nur unter Windows). Unter macOS und Linux muss für Pipeline Docker oder ausdrücklich vertrauenswürdige Hostausführung gewählt werden; [ISOLATION.md](ISOLATION.md), [PIPELINE.md](PIPELINE.md).
 
 ```bat
 npm.cmd ci
@@ -25,8 +25,8 @@ set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 npm.cmd run app:build
 ```
 
-Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.8.1 liegt der NSIS-Installer anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.8.1_x64-setup.exe`.
+Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.8.2 liegt der NSIS-Installer anschließend unter
+`src-tauri\target\release\bundle\nsis\Scranton_0.8.2_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
 
 ## Desktop-Updates
@@ -40,9 +40,12 @@ Die WebView erhält keine Updater-Plugin-Rechte. Das Hauptfenster ruft stattdess
 - **Restart and update:** Rust fragt den Node-Server über `GET /api/app/busy` auf Loopback ab. Die Antwort `{ running, waitingForHuman }` zählt Team- und Pipeline-Läufe und offene Rückfragen über alle Chats im Registry- oder Single-Modus. Bei einem aktiven Lauf oder einer offenen Rückfrage verweigert `update_install` die Installation mit `busy` und den Zählern. Andernfalls beendet Rust den Server wie beim normalen Beenden und übergibt dann an den Installer. Die App startet nach der Installation neu.
 - **Beim nächsten Start:** Wenn `autoInstall` aktiv ist und ein Download vorliegt, prüft Rust **vor dem Start des Node-Servers** nochmals auf Updates (Timeout: 10 Sekunden). Nur wenn das Release dieselbe Version anbietet und der Installer die Signaturprüfung besteht, wird installiert. Bei Fehler oder abweichender Version startet die bisherige App normal.
 
-Der Windows-Updater startet NSIS passiv mit `/UPDATE`; der alte Uninstaller wird übersprungen und die App-Daten bleiben erhalten. **Version 0.7.0 einmal manuell installieren. Beim manuellen Installieren über eine ältere Version niemals „Delete the application data“ anhaken.**
+- **Windows x64 (`windows-x86_64`):** Der Updater startet NSIS passiv mit `/UPDATE`; der alte Uninstaller wird übersprungen und die App-Daten bleiben erhalten. Installationen ohne Updater (vor 0.7.0) können direkt auf die aktuelle Version aktualisiert werden. Beim manuellen Upgrade niemals „Delete the application data“ anhaken.
+- **macOS Apple Silicon (`darwin-aarch64`):** Der Updater verwendet das signierte `.app.tar.gz`-Archiv, nicht das DMG. Für den ersten Start die App aus dem DMG nach „Programme“ kopieren.
+- **Linux AppImage (`linux-x86_64-appimage`, `linux-aarch64-appimage`):** Der Updater ersetzt das AppImage der passenden Architektur. Die Datei muss an einem beschreibbaren Ort liegen. Für die Ausführung ist FUSE nötig; alternativ mit `--appimage-extract-and-run` starten.
+- **Linux DEB:** Die App zeigt einen Hinweis zur manuellen Aktualisierung; das neue `.deb` mit der Paketverwaltung installieren. Weder eine automatische Suche noch die Installation aus dem Updatecache ist für DEB aktiv. Es gibt keine generischen Linux-Manifest-Einträge als Fallback. Eine fehlende Plattform ist kein Fehler (`unsupported`).
 
-Automatische Updates werden zunächst nur für `windows-x86_64` angeboten. macOS und Linux erhalten erst dann Updates, wenn es passende signierte Builds und Manifest-Einträge gibt. Eine fehlende Plattform ist kein Fehler (`unsupported`).
+Die Updateabläufe auf macOS und Linux wurden nicht an installierten Apps auf realen Zielrechnern geprüft. Die [Installationsanleitung](guide/desktop-and-updates.md#install) beschreibt auch Gatekeeper und die Prüfsummenprüfung.
 
 ### Signaturschlüssel und Backup
 
@@ -50,11 +53,29 @@ Das Schlüsselpaar einmalig mit `node scripts/updater-keygen.mjs` erzeugen. Das 
 
 `node scripts/updater-keygen.mjs --export <file>` schreibt auf ausdrückliche Anforderung eine **Klartextkopie** an den angegebenen Ort. Die Kopie außerhalb des Repositorys direkt auf einem geschützten, verschlüsselten Backup-Medium ablegen; nie committen, hochladen oder in Logs ausgeben. **Geht der private Schlüssel verloren, können bestehende Installationen keine weiteren automatischen Updates erhalten.**
 
-### Update veröffentlichen (Windows x64)
+### Update veröffentlichen
 
-1. Version für das Release setzen, Release Notes als Textdatei vorbereiten und die lokalen Prüfungen für den zu veröffentlichenden Stand ausführen.
-2. Aus dem Repositoryroot auf dem lokalen Windows-Buildhost `npm.cmd run app:release -- --notes-file <file>` ausführen (`<file>` durch den Pfad zu den Release Notes ersetzen). Das Skript lädt den privaten Schlüssel nur für den Build, aktiviert die Updater-Artefakte, prüft die erzeugte `.sig` gegen den eingecheckten öffentlichen Schlüssel und legt Installer, Signatur und `latest.json` gemeinsam im ausgegebenen Ordner ab. `npm.cmd run app:build` bleibt ohne Schlüssel nutzbar und erzeugt diese Updater-Artefakte nicht.
-3. Auf GitHub einen Release zum passenden Tag `v<version>` vorbereiten. Den NSIS-Installer, seine `.sig` und `latest.json` aus demselben Build mit unveränderten Dateinamen hochladen. Prüfen, dass `latest.json` auf diesen Installer unter `/releases/download/v<version>/` verweist. Als regulären Release veröffentlichen (**kein Prerelease**) und als **Latest** markieren, damit der öffentliche Update-Endpunkt das Manifest findet.
+1. **Releasestand festlegen.** Die Version in npm, Tauri und Cargo abgleichen, Release Notes vorbereiten und die lokalen Prüfungen ausführen. Für alle Builds denselben geprüften Release-Commit verwenden und seine vollständige 40-stellige SHA als `RELEASE_COMMIT` festhalten.
+2. **macOS und Linux bauen.** Nach ausdrücklicher Zustimmung unter **Actions → Native desktop builds → Run workflow** den Ref mit genau diesem Release-Commit und `targets=posix` wählen. Der manuelle [Workflow](../.github/workflows/desktop-native.yml) bietet auch `all` (alle vier Ziele) und `windows` (nur Windows) für Prüfungen. Für die Veröffentlichung kommt der Windows-Installer vom lokalen Buildhost. Actions benötigt keine hinterlegten Secrets und signiert keine Updater-Dateien.
+3. **Herkunft prüfen und Artefakte entpacken.** Im eigenen GitHub-Repository Workflowpfad, `workflow_dispatch`, `head_sha` und erfolgreichen Abschluss des Runs sowie die Ergebnisse aller drei Build-Jobs prüfen. Die ZIPs `scranton-aarch64-apple-darwin`, `scranton-x86_64-unknown-linux-gnu` und `scranton-aarch64-unknown-linux-gnu` aus genau diesem Run herunterladen. Name und ID jedes Artefakts mit Actions abgleichen und den SHA-256-Hash des ZIPs mit dem von GitHub gemeldeten `digest` vergleichen. Jedes ZIP in ein eigenes flaches Verzeichnis entpacken; Paketdateien und `desktop-receipt-<target>.json` unverändert lassen. Im Beleg Commit, Version, Ziel, Dateinamen, Größen und SHA-256 der entpackten Dateien prüfen. Die Buildbelege sind keine unabhängigen Attestierungen.
+4. **Windows lokal bauen.** Auf dem Windows-x64-Signierhost vom selben Commit mit sauberem getracktem Arbeitsbaum und Index aus dem Repositoryroot bauen: `npm.cmd run app:release -- --notes-file ".scratch\multi-platform\notes.md"`. Als `WINDOWS_EXE` den ausgegebenen Pfad des NSIS-Installers übernehmen. `.sig` und `desktop-receipt-x86_64-pc-windows-msvc.json` müssen danebenliegen. Das dabei erzeugte Manifest enthält nur Windows und wird nicht veröffentlicht. Der Build selbst bleibt schlüssellos; erst danach signiert der lokale Tauri-Signer mit dem DPAPI-geschützten Updater-Schlüssel.
+5. **Lokal zusammenstellen.** Einen neuen Stagingpfad unter einem vorhandenen, vertrauenswürdigen Elternverzeichnis wählen. Im Beispiel ist je `--lane` der Pfad zum entpackten Artefakt angegeben:
+
+   ```bat
+   npm.cmd run app:release -- --assemble --commit %RELEASE_COMMIT% ^
+     --windows "%WINDOWS_EXE%" ^
+     --lane ".scratch\multi-platform\darwin-aarch64" ^
+     --lane ".scratch\multi-platform\linux-x86_64" ^
+     --lane ".scratch\multi-platform\linux-aarch64" ^
+     --stage ".scratch\multi-platform\stage" ^
+     --notes-file ".scratch\multi-platform\notes.md" ^
+     --provenance ".scratch\multi-platform\provenance.json"
+   ```
+
+   `--provenance` übernimmt die zuvor geprüften Actions-Metadaten in den Stage-Beleg. Die JSON-Datei enthält je einen Eintrag unter `darwin-aarch64`, `linux-x86_64-appimage` und `linux-aarch64-appimage`: `run_id`, `head_sha`, `workflow_path` (`.github/workflows/desktop-native.yml`), `event` (`workflow_dispatch`), `conclusion` (`success`) und `artifact` mit `name`, `id` und `digest` (`sha256:<hex>`). Das Skript prüft das Format und den Commit, fragt GitHub aber nicht selbst ab. Standardmäßig sind alle vier Ziele erforderlich; `--omit <Updater-Plattformschlüssel>` ist nur für bewusst ausgelassene Ziele gedacht, nicht für 0.8.2. Stages mit `--test-key` sind nicht zur Veröffentlichung bestimmt.
+
+   Der Assembler prüft Belege und Dateihashes, übernimmt das verifizierte Windows-Paar unverändert und signiert das macOS-App-Archiv sowie beide Linux-AppImages lokal. Jede Updater-Datei erhält eine `.sig`; die Signatur bindet auch Dateiname und Version. DMG und DEBs sind Installationspakete, keine Updater-Dateien. Die Stage enthält ein gemeinsames `latest.json`, `stage-receipt.json` und `SHA256SUMS`.
+6. **Veröffentlichen.** Einen GitHub-Release-Entwurf mit Tag `v<version>` auf genau dem geprüften Commit anlegen. Nur die vollständige Produktions-Stage (`publishable: true`) mit unveränderten Dateinamen hochladen. Vor dem Veröffentlichen die Assets gegen `SHA256SUMS` und die vier Manifest-Einträge gegen die vorgesehenen HTTPS-URLs unter `/releases/download/v<version>/` prüfen. Die nicht verifizierten Installations-, GUI- und Updatepfade in den Release Notes nennen. Als regulären Release (**kein Prerelease**) veröffentlichen und als **Latest** markieren. Danach `releases/latest/download/latest.json` und die öffentlichen Downloads erneut prüfen. Das Skript selbst veröffentlicht nichts.
 
 ## Smartphone-Steuerung ohne Checkout (Windows)
 
@@ -220,17 +241,16 @@ Ohne Auswahl von „Delete the application data“ entfernt die Deinstallation d
 
 ## Native Builds und CI-Matrix
 
-Die fünf **Buildziele** werden getrennt gebaut; es gibt kein Universalpaket, keinen Cross-Target-Download eines fremden Node und keinen System-Python-Fallback beim Nutzer. Ein fertiges macOS-Paket ist erst nach erfolgreichem nativen Build **und** separater Installations-/Lifecycleprüfung nachgewiesen. In diesem Windows-Entwicklungsdurchlauf wurden keine macOS-/Linux-App gestartet oder deren Installer ausgeführt.
+Die vier **Buildziele** werden getrennt gebaut; es gibt kein Universalpaket, keinen Intel-Mac-Build, keinen Cross-Target-Download eines fremden Node und keinen System-Python-Fallback beim Nutzer. Für 0.8.2 sind die macOS- und Linux-Pakete nur durch automatisierte CI-Prüfungen verifiziert: native Builds, Sandbox-Tests und Smoke-Tests für den paketierten App-Server und die Pipeline. Sie wurden nicht auf realen Zielrechnern installiert und getestet; Installation, Linux-Desktop-Oberfläche und der Updateablauf unter macOS und Linux bleiben ungeprüft.
 
 | System / Architektur | Rust-Hosttarget | GitHub-Runner | Automatisches Tauri-Overlay / Ausgabe |
 |---|---|---|---|
 | Windows x64 | `x86_64-pc-windows-msvc` | `windows-2022` | `tauri.windows.conf.json`: NSIS `.exe` |
 | macOS Apple Silicon | `aarch64-apple-darwin` | `macos-15` | `tauri.macos.conf.json`: `.app` und `.dmg` |
-| macOS Intel | `x86_64-apple-darwin` | `macos-15-intel` | `tauri.macos.conf.json`: `.app` und `.dmg` |
 | Linux glibc x64 | `x86_64-unknown-linux-gnu` | `ubuntu-22.04` | `tauri.linux.conf.json`: `.deb` und `.AppImage` |
 | Linux glibc arm64 | `aarch64-unknown-linux-gnu` | `ubuntu-22.04-arm` | `tauri.linux.conf.json`: `.deb` und `.AppImage` |
 
-Runnerlabels gemäß [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners), abgerufen am 11.11.2026: **`macos-15` ist arm64**, Intel verlangt **`macos-15-intel`**. Keine veraltete Annahme `macos-latest = Intel`. Runnerverfügbarkeit und enthaltene SDKs können sich ändern; der Workflow prüft Node-Plattform/-Architektur und `rustc -vV` vor dem Build. Tauri lädt das OS-Overlay automatisch; nicht mit `--target` auf einen anderen Host ausweichen.
+Laut [GitHub-Runner-Referenz](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) ist `macos-15` ein arm64-Runner. Runnerverfügbarkeit und enthaltene SDKs können sich ändern; der Workflow prüft Node-Plattform/-Architektur und `rustc -vV` vor dem Build. Tauri lädt das OS-Overlay automatisch; nicht mit `--target` auf einen anderen Host ausweichen.
 
 ### macOS und Linux lokal vorbereiten
 
@@ -240,7 +260,7 @@ Ubuntu 22.04 (x64 oder arm64), Buildabhängigkeiten:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file desktop-file-utils xdg-utils
+sudo apt-get install -y build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 file desktop-file-utils xdg-utils bubblewrap
 ```
 
 AppImage-Builds in CI verwenden `APPIMAGE_EXTRACT_AND_RUN=1`, damit die Werkzeuge nicht von einem FUSE-Mount im Runner abhängen. Dies ist keine Zusage, dass jede Zielumgebung AppImages ausführen kann. WebKitGTK 4.1 und die im Paket deklarierten Bibliotheksabhängigkeiten bleiben Laufzeitvoraussetzungen unter Linux; keine Windows-WebView2-Installation dort.
@@ -277,8 +297,8 @@ Die lokalen Pakete liegen unter `src-tauri/target/release/bundle/`, unter Window
 
 Der nur ausnahmsweise manuell freigegebene GitHub-Workflow behält seine Gates bei. Pro nativem Host: Node 24, Rust stable und Python 3.14, `npm ci`, serielle portable Core-/Resolver-/CSP-Gates und Python-Dateirechte-/Sandbox-User-Gates (`test_fs_modes.py`, `test_snapshot_modes.py`, `test_sandbox_user.py` nach Installation von `engine[dev]`), `app:prepare` einschließlich credential-freier eigener Runtime-/Pipeline-Smokes, Manifestpflichtprüfung, vollständige serielle Packagingtests, Rusttests, `app:build`. Die Pipeline darf dabei nicht absichtlich ausgelassen werden. Tests werden nicht pauschal auf Nicht-Windows übersprungen; Plattformregressionen sollen den betreffenden Job scheitern lassen. Das ist ein begrenztes Buildgate, **nicht die vollständige JS-/Python-/UI-Testsuite**. Diese weiter separat lokal und seriell ausführen. Weder echte OAuth-/Modellaufrufe noch Docker-Imagebuilds sind CI-Bestandteil.
 
-Nur bei einem ausdrücklich freigegebenen Cloudlauf wird jedes Format separat hochgeladen, mit OS/Architektur und **unsigned** im Namen, 14 Tage Aufbewahrung; fehlende Dateien führen zum Fehler. Das `.app` liegt als `.app.tar.gz` vor, damit Unix-Rechte und Symlinks beim Artefakttransport erhalten bleiben. DMG, NSIS, DEB und AppImage haben eigene Downloads. Der Workflow veröffentlicht **keinen GitHub Release**, pusht nicht und verändert keine Repositorydateien im Remote.
+Pro Ziel lädt der Workflow ein Artefakt `scranton-<rust-target>` mit den Paketdateien und dem Buildbeleg hoch (14 Tage Aufbewahrung, fehlende Dateien führen zum Fehler). Das macOS-Archiv enthält `Scranton.app` als oberstes Verzeichnis und erhält Unix-Rechte und Symlinks. Der Workflow veröffentlicht **keinen GitHub-Release**, pusht nicht und ändert keine Repositorydateien im Remote.
 
-Diese CI ist absichtlich **unsigniert** und braucht keine Signing-Secrets. Windows SmartScreen und macOS Gatekeeper können warnen oder den Start blockieren; dies ist kein notarisiertes, öffentlich freigegebenes Macpaket. Sicherheitsprüfungen nicht pauschal deaktivieren. Signierung/Notarisierung ist ein separater geschützter Maintainerprozess: Apple Developer ID mit `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` sowie Notarisierungszugang (z. B. `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, alternativ API-Key-Verfahren gemäß aktueller Tauri-Doku); Windows-Codesigning entsprechend Zertifikat und Signaturwerkzeug. Keine solchen Secrets in PR-Jobs geben. Ein späterer optionaler Signierjob muss bei nicht konfigurierten Secrets ausbleiben, ohne die unsignierten Buildjobs zu blockieren. [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
+Die App für macOS ist **ad hoc signiert, nicht notarisiert**. CI prüft die App-Signatur, verwendet aber keine Apple Developer ID und keine Updater-Schlüssel. Gatekeeper kann den Start blockieren oder warnen; Windows SmartScreen warnt wegen fehlender Windows-Codesignatur. Nach Prüfsummenprüfung und Kopieren nach „Programme“ ist bei einer Gatekeeper-Blockade gegebenenfalls **Systemeinstellungen → Datenschutz & Sicherheit → Dennoch öffnen** möglich. Alternativ kann `xattr -dr com.apple.quarantine /Applications/Scranton.app` die Quarantäne nur für diese verifizierte App entfernen. Sicherheitsprüfungen nicht pauschal deaktivieren. [Tauri-Dokumentation zur macOS-Signierung](https://v2.tauri.app/distribute/sign/macos/).
 
-Vor öffentlicher Verteilung pro OS/Architektur nachweisen: Installation aus dem tatsächlichen Artefakt, nativer Start/Ready/WebView, Ordnerdialog, bestehende Chats, Offline-Pipeline-Demo durch die Gates, Schließen/Abbruch/Neustart und Kindprozessbereinigung. Ein Windows-Smoke oder ein CI-Build ersetzt diesen Nachweis auf macOS/Linux nicht. Auch ein partieller Linux-Docker-Smoke prüft weder die native Linux-WebView noch macOS/WKWebView und darf nicht als solcher Laufzeitnachweis gelten.
+CI prüft die native Team-Sandbox und startet den paketierten App-Server; der Pipeline-Smoke prüft unter anderem Version, Graph und native Python-Importe. Der GUI-Smoke ist nicht verpflichtend und hat auf den Linux-Runnern keinen erfolgreichen Start bestätigt. Für einen vollständigen Laufzeitnachweis pro OS/Architektur separat prüfen: Installation des tatsächlichen Artefakts, WebView und Ordnerdialog, bestehende Chats, Offline-Pipeline-Demo, Schließen/Abbruch/Neustart, Kindprozessbereinigung und Update über zwei Versionen. Ein CI-Build oder ein Windows-Smoke ersetzt diesen Nachweis auf macOS und Linux nicht.

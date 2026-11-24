@@ -449,7 +449,7 @@ Direkte Antworten sind nur in der initialen Planungsrunde möglich: Planrevision
 
 ## macOS/Linux-Entwicklung und portable Desktop-Runtime
 
-Native Buildziele sind macOS arm64 und x64 sowie Linux **glibc** arm64 und x64, zusätzlich zu Windows x64. Dies ist kein Nachweis ausgeführter macOS-/Linux-Releases; native CI und separater installierter Lifecycle müssen die jeweiligen Artefakte noch bestätigen. Keine musl-/Universal-/Cross-Builds. [Native Desktopmatrix, Abhängigkeiten und Artefakte](../docs/DESKTOP.md#native-builds-und-ci-matrix).
+Native Buildziele sind macOS arm64 (kein Intel-Build) sowie Linux **glibc** arm64 und x64, zusätzlich zu Windows x64. Dies ist kein Nachweis ausgeführter macOS-/Linux-Releases; native CI und separater installierter Lifecycle müssen die jeweiligen Artefakte noch bestätigen. Keine musl-/Universal-/Cross-Builds. [Native Desktopmatrix, Abhängigkeiten und Artefakte](../docs/DESKTOP.md#native-builds-und-ci-matrix).
 
 Die eigenständige Entwicklerinstallation verlangt weiterhin selbst bereitgestelltes Python und Git. Auf macOS/Linux ist `scranton` für Pipeline noch nicht verfügbar; die mitgelieferte Demo unten wählt ausdrücklich Host. Beispiel auf einem nativen POSIX-Host mit Python 3.14, vom Repositoryroot (eine vorhandene venv nicht während anderer Läufe ersetzen):
 

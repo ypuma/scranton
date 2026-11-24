@@ -1,8 +1,20 @@
 # Desktop and updates
 
-Use the dashboards, connect a phone privately, and manage Windows desktop updates.
+Install Scranton, manage desktop updates, use the dashboards, and connect a phone privately.
 
 [Back to the README](../../README.md)
+
+## Install
+
+Choose your package from the [latest release](https://github.com/ypuma/scranton/releases/latest). Verify the download's SHA-256 against `SHA256SUMS` before opening it (for example, with `Get-FileHash -Algorithm SHA256` in PowerShell, `shasum -a 256` on macOS, or `sha256sum` on Linux, followed by the path to the download).
+
+- **Windows x64:** Run `Scranton_<version>_x64-setup.exe` (NSIS). The installer is not Windows code-signed, so expect a SmartScreen warning.
+- **macOS 13.5 or later (Apple Silicon only; no Intel build):** Open `Scranton_<version>_aarch64.dmg` and copy Scranton to Applications before launching. The app is ad-hoc signed, not notarized, so Gatekeeper may block or warn. For a verified official download, after a blocked launch use **System Settings → Privacy & Security → Open Anyway** if offered and permitted. Alternatively, remove quarantine from only the installed copy with `xattr -dr com.apple.quarantine /Applications/Scranton.app`. This does not fix a corrupt download or an invalid signature.
+- **Linux x64 or arm64:** On Debian-based distributions, install `Scranton_<version>_amd64.deb` (x64) or `Scranton_<version>_arm64.deb` (arm64) with your package manager. Alternatively, download `Scranton_<version>_amd64.AppImage` (x64) or `Scranton_<version>_aarch64.AppImage` (arm64), make it executable (`chmod +x`), and run it. The AppImage needs FUSE; if FUSE is unavailable, launch the file with `--appimage-extract-and-run`.
+
+macOS and Linux packages have only been verified in automated CI: native builds, sandbox tests, and packaged app-server and Pipeline smoke tests. They have not been installed and tested on real machines. Installation, Linux desktop GUI behavior, and the macOS and Linux update flows are unverified.
+
+Keep Git available. Team uses Seatbelt on macOS and requires an installed, usable `bwrap` on Linux. [Dictation](voice.md) and the [Pipeline Scranton sandbox](pipeline.md#check-and-setup-sandboxes) are Windows-only; Pipeline runs on macOS and Linux need Docker or explicit trusted host execution. Host execution is not OS isolation.
 
 ## Dashboards
 
@@ -30,8 +42,13 @@ Replace the example URL with your private Serve URL and enter the current port i
 
 ## Automatic updates
 
-Automatic updates currently apply only to the Windows x64 desktop app. **0.7.0** was the first self-updating version. If you have an older version, manually install a current release from [GitHub Releases](https://github.com/ypuma/scranton/releases); you do not need to install 0.7.0 first. **Do not select “Delete the application data”** when installing manually over an older version.
+| Installation | Update method |
+| --- | --- |
+| Windows x64 | The updater runs the signed NSIS installer. If your version predates the updater (first included in 0.7.0), install the current release directly. **Do not select “Delete the application data”** when upgrading manually. |
+| macOS (Apple Silicon) | The updater uses the signed `.app.tar.gz` archive, not the DMG. Run the installed app from Applications, not from the DMG. |
+| Linux AppImage | The updater uses the signed AppImage for your architecture. Keep the AppImage file in a writable location. |
+| Linux DEB | Settings shows manual-update guidance. Download and install the newer `.deb` for your architecture; automatic updates are not available. |
 
-By default, Scranton checks about 30 seconds after the app is ready and then every six hours. It downloads available updates in the background and installs at the next launch. When the download finishes, **Restart and update** installs immediately if no Team or Pipeline run is active and no human decision is pending. The updater verifies the GitHub release package signature; this is separate from Windows code signing.
+Where automatic updates are available, Scranton checks by default about 30 seconds after the app is ready and then every six hours. It downloads available updates in the background and installs them at the next launch. When the download finishes, **Restart and update** installs immediately if no Team or Pipeline run is active and no human decision is pending. The updater verifies the package's `.sig` (included in `latest.json`); this is separate from OS code signing and notarization. The macOS and Linux update paths are configured but have not been tested end to end on installed copies.
 
 In **Settings → Updates**, toggle automatic checking and automatic installation on next launch independently. You can also check manually. With automatic installation off, start the download and install yourself. A normal browser does not install desktop updates; update a checkout with `git pull`. See the [desktop updater reference](../DESKTOP.md#desktop-updates).

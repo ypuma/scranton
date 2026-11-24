@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/ypuma/scranton/releases/latest"><img src="https://img.shields.io/github/v/release/ypuma/scranton?style=flat-square&amp;color=555" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/ypuma/scranton?style=flat-square&amp;color=555" alt="MIT license"></a>
-  <a href="#install"><img src="https://img.shields.io/badge/platform-Windows%20x64-555?style=flat-square" alt="Windows x64"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-Windows%2C%20macOS%20and%20Linux-555?style=flat-square" alt="Windows, macOS and Linux"></a>
 </p>
 
 <p align="center">
@@ -50,7 +50,7 @@ The Team engine defaults to Angela as its verification gate. You can add Oscar, 
 | Project memory | Enable Dreaming to consolidate recorded outcomes into advisory project memory. Optional model proposals require explicit approval. |
 | Context system | Give follow-up runs bounded context from project notes and prior chats without reusing execution state. |
 | Offline dictation | Dictate in the Windows desktop app after downloading a local speech model. Audio stays on your machine. |
-| Desktop updates | Check for and install signed updater packages on Windows x64. |
+| Desktop updates | Use signed updates on Windows, macOS, and Linux AppImage; update DEB installs manually. |
 | Models and providers | Use Automatic for Team roles, pin models per agent, or add compatible custom providers. |
 
 ### Pipeline mode
@@ -83,15 +83,19 @@ Gate failures can return work to Dwight. A blocked gate can also pause for a hum
 
 ## Install
 
-1. Open the [latest release](https://github.com/ypuma/scranton/releases/latest) and download the Windows x64 setup `.exe`.
-2. Run the installer. It is not Windows code-signed, so expect a SmartScreen warning. The updater's signature is separate from Windows code signing.
-3. Open Scranton, register a project folder, and connect your model provider under **Accounts**. Keep Git available for private worktrees.
+Download the package for your platform from the [latest release](https://github.com/ypuma/scranton/releases/latest) and verify it against `SHA256SUMS` before opening it.
 
-Public installers are available for Windows x64 only. macOS and Linux are [build-from-source targets](docs/DESKTOP.md#macos-und-linux-lokal-vorbereiten), not verified release platforms.
+| Platform | Download | First run |
+| --- | --- | --- |
+| Windows x64 | `Scranton_<version>_x64-setup.exe` | Run the NSIS installer. It is not Windows code-signed, so expect a SmartScreen warning. |
+| macOS 13.5 or later (Apple Silicon only) | `Scranton_<version>_aarch64.dmg` | Copy Scranton to Applications. The app is ad-hoc signed, not notarized; if Gatekeeper blocks it, see the [first-run steps](docs/guide/desktop-and-updates.md#install). |
+| Linux x64 / arm64 | `Scranton_<version>_amd64.deb` / `Scranton_<version>_arm64.deb`, or `Scranton_<version>_amd64.AppImage` / `Scranton_<version>_aarch64.AppImage` | Install the DEB or make the AppImage executable. The AppImage needs FUSE or `--appimage-extract-and-run`. |
+
+Open Scranton, register a project folder, and connect your model provider under **Accounts**. Keep Git available for private worktrees.
 
 ## Quick start
 
-From a Scranton checkout, use **Node.js 24**, npm, and Git. The default OS sandbox must be available before a real run: Windows requires the [native helper](native/sandbox-helper/README.md), macOS uses `sandbox-exec`, and Linux needs usable `bwrap`. See the [source setup guide](docs/guide/getting-started.md) for prerequisites, or use the installer on Windows.
+From a Scranton checkout, use **Node.js 24**, npm, and Git. The default OS sandbox must be available before a real run: Windows requires the [native helper](native/sandbox-helper/README.md), macOS uses `sandbox-exec`, and Linux needs usable `bwrap`. See the [source setup guide](docs/guide/getting-started.md) for prerequisites, or use a [desktop package](#install).
 
 ```powershell
 npm.cmd ci
@@ -134,7 +138,7 @@ Want to try it without a model call? Run `node bin/scranton.js demo --hive .scra
 | [Dreaming](docs/guide/memory-dreaming.md) | Local project memory and optional reviewed reflection |
 | [Restore points and undo](docs/guide/restore-points.md) | Retention, conflicts, recovery, and what undo does not cover |
 | [Voice dictation](docs/guide/voice.md) | Offline models, microphone setup, and privacy |
-| [Desktop and updates](docs/guide/desktop-and-updates.md) | Dashboards, phone relay, and Windows updates |
+| [Desktop and updates](docs/guide/desktop-and-updates.md) | Installation, updates, dashboards, and phone relay |
 | [CLI reference](docs/guide/cli-reference.md) | Run options, request files, durable streams, and recovery |
 | [Configuration](docs/guide/configuration.md) | Settings, precedence, and migration limits |
 | [Development](docs/guide/development.md) | Repository layout, local checks, and release verification |
@@ -152,9 +156,8 @@ Want to try it without a model call? Run `node bin/scranton.js demo --hive .scra
 
 ## Status and limits
 
-- **Windows x64** is the tested release platform. Native macOS and Linux targets need separate lifecycle and isolation verification.
-- **Pipeline's native Scranton sandbox** is Windows-only. Windows Low mode does not block network access; read the [isolation limits](docs/ISOLATION.md) before selecting an executor.
-- **Windows installers are not code-signed.** The updater separately verifies a package signature.
+- **macOS and Linux packages have automated CI verification only:** native builds, sandbox tests, and packaged app-server and Pipeline smoke tests. They have not been installed and tested on real machines. Installation, Linux desktop GUI behavior, and the macOS and Linux update flows are unverified.
+- **Dictation and Pipeline's Scranton sandbox** are Windows-only. On macOS and Linux, Pipeline needs Docker or explicit trusted host execution. Team uses Seatbelt on macOS and needs `bwrap` on Linux. See the [isolation limits](docs/ISOLATION.md); Windows Low mode does not block network access.
 
 ## Development
 
