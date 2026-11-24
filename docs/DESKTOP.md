@@ -25,8 +25,8 @@ set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 npm.cmd run app:build
 ```
 
-Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.9.0 liegt der NSIS-Installer anschließend unter
-`src-tauri\target\release\bundle\nsis\Scranton_0.9.0_x64-setup.exe`.
+Der `beforeBuildCommand` bereitet vor **jedem** Build die Ressourcen vor. Für Version 0.10.0 liegt der NSIS-Installer anschließend unter
+`src-tauri\target\release\bundle\nsis\Scranton_0.10.0_x64-setup.exe`.
 Die Anwendung wird pro Benutzer installiert, ohne Administratorrechte. Das Paket ist ohne separat konfiguriertes Codesigning unsigniert; Windows SmartScreen kann daher warnen.
 
 ## Desktop-Updates
