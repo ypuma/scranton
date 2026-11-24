@@ -111,7 +111,13 @@ export function createLiveActivity(hiveDir, runId) {
       } else if (record.type === 'tool_execution_start') entry.phase = 'tool';
       else if (record.type === 'tool_execution_end' || record.type === 'message_end') {
         entry.phase = 'idle';
-        if (record.type === 'message_end') { flush(instanceId, agent); entry.open = null; }
+        if (record.type === 'message_end') {
+          if (record.discard) {
+            blocks.delete(instanceId);
+            Object.assign(entry, { thinking: null, thinkingCut: false, text: null, textCut: false });
+          } else flush(instanceId, agent);
+          entry.open = null;
+        }
       } else return;
       entry.updatedAt = snapshot.updatedAt = new Date().toISOString(); schedule();
     },

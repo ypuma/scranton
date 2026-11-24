@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { count, textContent } from './stream.js';
-import { protocolError } from './errors.js';
+import { protocolError, streamError, incompleteStream } from './errors.js';
 
 export function googleBody(model, context, options) {
   const contents = [];
@@ -38,11 +38,12 @@ export function googleRequest(model, context, options, auth) {
   return { url: `${model.baseUrl.replace(/\/$/, '')}/models/${encodeURIComponent(model.id)}:streamGenerateContent?alt=sse`, headers: { 'x-goog-api-key': auth.key }, body: googleBody(model, context, options) };
 }
 
-export async function* googleEvents(events, blocks, output, { envelope = false } = {}) {
+export async function* googleEvents(events, blocks, output, { envelope = false } = {}, env) {
   let current, serial = 0, terminal = false;
   for await (const raw of events) {
     const chunk = envelope ? raw.response : raw;
-    if (raw.error || !chunk || chunk.error) throw Object.assign(protocolError(), { status: raw.error?.code ?? chunk?.error?.code });
+    if (raw.error || chunk?.error) throw streamError(raw.error ?? chunk.error, env);
+    if (!chunk) throw protocolError('Missing Google response envelope');
     const candidate = chunk.candidates?.[0];
     if (chunk.promptFeedback?.blockReason) throw protocolError('Prompt blocked');
     for (const part of candidate?.content?.parts ?? []) {
@@ -72,6 +73,6 @@ export async function* googleEvents(events, blocks, output, { envelope = false }
       terminal = true;
     }
   }
-  if (!terminal) throw protocolError('Incomplete Google stream');
+  if (!terminal) throw incompleteStream('Incomplete Google stream');
   if (current !== undefined) yield blocks.end(current);
 }

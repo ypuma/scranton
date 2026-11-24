@@ -55,7 +55,9 @@ export async function runAgentWorkflow(wf, input, deps) {
       const stream = deps.llm.stream(input.model, context, { signal, reasoning: input.thinking });
       for await (const event of stream) {
         if (event.type === 'start') deps.onLive?.({ type: 'message_start', message: event.partial });
-        else if (event.type === 'done' || event.type === 'error') deps.onLive?.({ type: 'message_end', message: errorMessage(event.message ?? event.error, errorEnv) });
+        else if (event.type === 'done' || event.type === 'error') deps.onLive?.({ type: 'message_end',
+          discard: event.type === 'error' && event.reason !== 'aborted' && !signal.aborted,
+          message: errorMessage(event.message ?? event.error, errorEnv) });
         else deps.onLive?.({ type: 'message_update', message: event.partial, assistantMessageEvent: event });
         if (event.type === 'error') await wf.writeStream('output', { type: 'error', step: name, attempt,
           message: errorTail((event.message ?? event.error)?.errorMessage ?? (event.message ?? event.error)?.error?.message ?? 'LLM request failed', errorEnv) });

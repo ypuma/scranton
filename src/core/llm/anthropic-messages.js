@@ -1,5 +1,5 @@
 import { count, textContent } from './stream.js';
-import { protocolError } from './errors.js';
+import { protocolError, streamError, incompleteStream } from './errors.js';
 
 const names = new Map(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'KillShell', 'NotebookEdit', 'Skill', 'Task', 'TaskOutput', 'TodoWrite', 'WebFetch', 'WebSearch'].map(n => [n.toLowerCase(), n]));
 const cache_control = { type: 'ephemeral' };
@@ -50,14 +50,14 @@ export function anthropicRequest(model, context, options, auth) {
   return { url: `${model.baseUrl.replace(/\/$/, '').replace(/\/v1$/, '')}/v1/messages`, headers, body };
 }
 
-export async function* anthropicEvents(events, blocks, output, context) {
+export async function* anthropicEvents(events, blocks, output, context, env) {
   let stopped = false, reason;
   const usage = (u) => {
     for (const [key, wire] of Object.entries({ input: 'input_tokens', output: 'output_tokens', cacheRead: 'cache_read_input_tokens', cacheWrite: 'cache_creation_input_tokens' })) if (u?.[wire] !== undefined) output.usage[key] = count(u[wire]);
     if (u?.cache_creation) output.usage.cacheWrite1h = count(u.cache_creation.ephemeral_1h_input_tokens);
   };
   for await (const event of events) {
-    if (event.type === 'error') throw Object.assign(protocolError(), { status: event.error?.type === 'overloaded_error' ? 503 : event.error?.type === 'rate_limit_error' ? 429 : undefined });
+    if (event.type === 'error') throw streamError(event.error, env);
     if (event.type === 'message_start') usage(event.message?.usage);
     else if (event.type === 'content_block_start') {
       const b = event.content_block;
@@ -75,7 +75,7 @@ export async function* anthropicEvents(events, blocks, output, context) {
     else if (event.type === 'message_delta') { usage(event.usage); reason = event.delta?.stop_reason ?? reason; }
     else if (event.type === 'message_stop') { stopped = true; break; }
   }
-  if (!stopped || blocks.open.size) throw protocolError('Incomplete Anthropic stream');
+  if (!stopped || blocks.open.size) throw incompleteStream('Incomplete Anthropic stream');
   output.stopReason = reason === 'max_tokens' ? 'length' : reason === 'tool_use' ? 'toolUse' : ['end_turn', 'stop_sequence', 'pause_turn'].includes(reason) ? 'stop' : 'error';
   if (output.stopReason === 'error') throw protocolError('Anthropic stop reason rejected');
 }

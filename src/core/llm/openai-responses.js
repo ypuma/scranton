@@ -1,5 +1,5 @@
 import { count, textContent } from './stream.js';
-import { protocolError } from './errors.js';
+import { protocolError, streamError, incompleteStream } from './errors.js';
 import { isChatGPT } from './catalogue.js';
 
 export function responsesRequest(model, context, options, auth) {
@@ -38,11 +38,11 @@ export function responsesRequest(model, context, options, auth) {
   return { url, headers, body };
 }
 
-export async function* responsesEvents(events, blocks, output) {
+export async function* responsesEvents(events, blocks, output, context, env) {
   let terminal = false;
   for await (const event of events) {
     const key = event.output_index;
-    if (event.type === 'error' || event.type === 'response.failed') throw Object.assign(protocolError(), { status: event.code === 'rate_limit_exceeded' || event.response?.error?.code === 'rate_limit_exceeded' ? 429 : undefined });
+    if (event.type === 'error' || event.type === 'response.failed') throw streamError(event.response?.error ?? event.error ?? (event.type === 'response.failed' ? {} : event), env);
     if (event.type === 'response.output_item.added') {
       const item = event.item;
       if (item.type === 'function_call') yield blocks.start(key, { type: 'toolCall', id: item.call_id, name: item.name, arguments: {} });
@@ -57,7 +57,7 @@ export async function* responsesEvents(events, blocks, output) {
       yield blocks.end(key);
     } else if (['response.completed', 'response.incomplete', 'response.done'].includes(event.type)) {
       const response = event.response;
-      if (!response || !['completed', 'incomplete'].includes(response.status ?? (event.type === 'response.completed' ? 'completed' : ''))) throw protocolError();
+      if (!response || !['completed', 'incomplete'].includes(response.status ?? (event.type === 'response.completed' ? 'completed' : ''))) throw protocolError('Invalid Responses terminal status');
       for (const item of response.output ?? []) {
         if (item.type === 'reasoning' && item.encrypted_content) {
           const block = output.content.find(b => b.type === 'thinking' && b.providerItem?.id === item.id);
@@ -71,5 +71,5 @@ export async function* responsesEvents(events, blocks, output) {
       yield* blocks.endAll(); terminal = true; break;
     }
   }
-  if (!terminal) throw protocolError('Incomplete Responses stream');
+  if (!terminal) throw incompleteStream('Incomplete Responses stream');
 }

@@ -53,7 +53,7 @@ test('Vertex API keys use express-mode resource path and Gemini stream mapping',
 test('Antigravity retains fail-closed behavior for observed nonterminal text-only response', async () => {
   const result = await createLLM({ fetcher: async () => new Response(sse([{ response: { candidates: [{ content: { parts: [{ text: 'fixture' }] } }] } }])) }).complete(
     { provider: 'google-antigravity', model: 'gemini-3.8-flash' }, context, { auth: { type: 'oauth', access: 'fake', projectId: 'fake' } });
-  assert.equal(result.stopReason, 'error'); assert.equal(result.error.code, 'PROTOCOL_ERROR');
+  assert.equal(result.stopReason, 'error'); assert.equal(result.error.code, 'INCOMPLETE_STREAM'); assert.equal(result.error.transient, true);
 });
 
 test('Antigravity newest model routes to the exact advertised thinking variant', async () => {

@@ -1,8 +1,11 @@
-import { protocolError } from './errors.js';
+import { protocolError, incompleteStream } from './errors.js';
 
 export async function* parseSSE(body, { signal, maxEventBytes = 2 * 1024 * 1024, maxBytes = 32 * 1024 * 1024 } = {}) {
-  if (!body) throw protocolError('Missing response body');
+  if (!body) throw incompleteStream('Missing response body');
   const decoder = new TextDecoder('utf-8', { fatal: true });
+  const decode = (chunk, options) => {
+    try { return decoder.decode(chunk, options); } catch { throw protocolError('Invalid SSE UTF-8'); }
+  };
   let buffer = '', data = [], event = '', id, size = 0, total = 0, skipLF = false;
   const line = (value) => {
     if (!value) {
@@ -26,7 +29,7 @@ export async function* parseSSE(body, { signal, maxEventBytes = 2 * 1024 * 1024,
     signal?.throwIfAborted();
     total += chunk.byteLength;
     if (total > maxBytes) throw protocolError('SSE response exceeds limit');
-    let text = decoder.decode(chunk, { stream: true });
+    let text = decode(chunk, { stream: true });
     if (skipLF && text.length) { if (text.startsWith('\n')) text = text.slice(1); skipLF = false; }
     buffer += text;
     let match;
@@ -40,10 +43,10 @@ export async function* parseSSE(body, { signal, maxEventBytes = 2 * 1024 * 1024,
     }
     if (Buffer.byteLength(buffer) + size > maxEventBytes) throw protocolError('SSE event exceeds limit');
   }
-  buffer += decoder.decode();
+  buffer += decode();
   signal?.throwIfAborted();
   // SSE only dispatches records terminated by an empty line; a tail is a truncated transport.
-  if (buffer || data.length || event) throw protocolError('Truncated SSE record');
+  if (buffer || data.length || event) throw incompleteStream('Truncated SSE record');
 }
 
 export async function* jsonEvents(body, options) {
@@ -51,7 +54,7 @@ export async function* jsonEvents(body, options) {
     if (record.data === '[DONE]') return;
     let value;
     try { value = JSON.parse(record.data); } catch { throw protocolError('Invalid SSE JSON'); }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw protocolError();
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw protocolError('Invalid SSE object');
     if (!value.type && record.event !== 'message') value.type = record.event;
     yield value;
   }

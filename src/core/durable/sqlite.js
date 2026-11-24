@@ -224,7 +224,8 @@ export class SQLiteRuntime extends SQLiteClient {
             try { return await this.stepScope.run(true, () => fn(attempt)); }
             catch (error) {
               if (attempt >= retries.maxAttempts || (retries.shouldRetry && !await retries.shouldRetry(error))) throw error;
-              await pause(retries.intervalSeconds * 1000 * retries.backoffRate ** (attempt - 1));
+              const deadline = Date.now() + retries.intervalSeconds * 1000 * retries.backoffRate ** (attempt - 1);
+              while (Date.now() < deadline) { this.check(id); await this.wait(); }
             }
           }
         };

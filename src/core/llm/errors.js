@@ -1,5 +1,20 @@
+import { errorText } from '../redact.js';
+
+const diagnostic = (value, env = process.env) => errorText(value, env).replace(/[\r\n\t\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+
 export function protocolError(message = 'Invalid provider stream') {
-  return Object.assign(new Error(message), { code: 'PROTOCOL_ERROR' });
+  return Object.assign(new Error(message), { code: 'PROTOCOL_ERROR', detail: diagnostic(message) });
+}
+
+export function streamError(error = {}, env = process.env) {
+  const raw = error?.status ?? error?.code ?? (error?.type === 'error' ? undefined : error?.type);
+  const code = typeof raw === 'string' && /^[a-zA-Z0-9_.-]{1,80}$/.test(raw) ? diagnostic(raw, env) : Number.isInteger(raw) ? String(raw) : 'unknown';
+  const providerMessage = diagnostic(error?.message ?? '', env);
+  return Object.assign(new Error('Provider stream error'), { code, providerMessage, streamError: true });
+}
+
+export function incompleteStream(message) {
+  return Object.assign(protocolError(message), { code: 'INCOMPLETE_STREAM' });
 }
 
 const credentialErrors = {
@@ -46,6 +61,17 @@ export function classifyError(error) {
   const status = Number.isInteger(error?.status) ? error.status : null;
   const code = error?.name === 'TimeoutError' ? 'TIMEOUT' : error?.name === 'AbortError' ? 'ABORTED'
     : String(error?.code ?? error?.cause?.code ?? (error instanceof TypeError ? 'NETWORK_ERROR' : 'PROVIDER_ERROR'));
+  if (error?.streamError) {
+    const context = /^(context_(length|window)_exceeded|prompt_too_long|input_too_long|413)$/.test(code.toLowerCase()) ||
+      /prompt is too long|maximum context length|context window (?:is )?exceeded|input token count exceeds (?:the )?maximum/i.test(error.providerMessage ?? '');
+    if (context) return { transient: false, status, code: 'CONTEXT_WINDOW_EXCEEDED', message: 'Provider context window exceeded' };
+    const permanent = /quota|billing|payment|credit|plan|usage_limit|spend_limit|invalid|policy|blocked|safety|permission|unauth|forbidden|not_found|unsupported|content_filter|access_denied|authentication|request_too_large|failed_precondition/i.test(code) || /^(400|401|402|403|404|413|422)$/.test(code);
+    const providerMessage = diagnostic(error.providerMessage);
+    return { transient: !permanent, status, code, streamError: true, providerMessage,
+      message: `Provider stream error (${code}): ${providerMessage || 'No provider message'}` };
+  }
+  if (code === 'INCOMPLETE_STREAM') return { transient: true, status, code, detail: diagnostic(error.detail), message: `Provider stream ended early: ${diagnostic(error.detail)}` };
+  if (code === 'PROTOCOL_ERROR' && error.detail) return { transient: false, status, code, detail: diagnostic(error.detail), message: `Provider stream is invalid: ${diagnostic(error.detail)}` };
   if (Object.hasOwn(credentialErrors, code)) {
     const [transient, message] = credentialErrors[code];
     return { transient, status, code, message };

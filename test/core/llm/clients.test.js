@@ -69,7 +69,7 @@ for (const [api, fixture] of cases) {
   test(`${api}: truncated streams fail closed`, async t => {
     const local = await server(t, (_req, res) => { res.end(sse(fixture.slice(0, 1))); });
     const result = await createLLM().complete(model(api, local.url), context, { auth: authFor(api) });
-    assert.equal(result.stopReason, 'error'); assert.equal(result.error.transient, false);
+    assert.equal(result.stopReason, 'error'); assert.equal(result.error.transient, true);
   });
 }
 

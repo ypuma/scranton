@@ -1,5 +1,5 @@
 import { count, textContent } from './stream.js';
-import { protocolError } from './errors.js';
+import { protocolError, streamError, incompleteStream } from './errors.js';
 
 export function completionsRequest(model, context, options, auth) {
   if (auth.type !== 'api_key') throw Object.assign(protocolError(), { code: 'AUTH_REQUIRED' });
@@ -22,10 +22,10 @@ export function completionsRequest(model, context, options, auth) {
   return { url: `${model.baseUrl.replace(/\/$/, '')}/chat/completions`, headers: { Authorization: `Bearer ${auth.key}` }, body };
 }
 
-export async function* completionsEvents(events, blocks, output) {
+export async function* completionsEvents(events, blocks, output, context, env) {
   let reason;
   for await (const event of events) {
-    if (event.error) throw Object.assign(protocolError(), { status: event.error.code === 'rate_limit_exceeded' ? 429 : undefined });
+    if (event.error) throw streamError(event.error, env);
     const u = event.usage;
     if (u) {
       output.usage.cacheRead = count(u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens);
@@ -51,7 +51,7 @@ export async function* completionsEvents(events, blocks, output) {
     }
     if (choice.finish_reason) reason = choice.finish_reason;
   }
-  if (!reason) throw protocolError('Missing finish_reason');
+  if (!reason) throw incompleteStream('Missing finish_reason');
   if (!['stop', 'length', 'tool_calls', 'function_call'].includes(reason)) throw protocolError('Completion blocked');
   output.stopReason = reason === 'length' ? 'length' : ['tool_calls', 'function_call'].includes(reason) ? 'toolUse' : 'stop';
   yield* blocks.endAll();

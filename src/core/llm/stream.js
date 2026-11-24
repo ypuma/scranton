@@ -56,16 +56,16 @@ export function createResultStream(model, options, produce) {
 export class Blocks {
   constructor(output) { this.output = output; this.open = new Map(); }
   start(key, block) {
-    if (this.open.has(key)) throw protocolError();
+    if (this.open.has(key)) throw protocolError('Duplicate block start');
     const index = this.output.content.push(block) - 1;
     this.open.set(key, { index, raw: '' });
     const type = block.type === 'toolCall' ? 'toolcall' : block.type;
     return { type: `${type}_start`, contentIndex: index, ...(type === 'toolcall' ? { id: block.id, toolName: block.name } : {}) };
   }
-  get(key) { const state = this.open.get(key); if (!state) throw protocolError(); return this.output.content[state.index]; }
+  get(key) { const state = this.open.get(key); if (!state) throw protocolError('Unknown stream block'); return this.output.content[state.index]; }
   delta(key, delta) {
     const state = this.open.get(key), block = this.get(key);
-    if (typeof delta !== 'string') throw protocolError();
+    if (typeof delta !== 'string') throw protocolError('Invalid block delta');
     const type = block.type === 'toolCall' ? 'toolcall' : block.type;
     if (type === 'toolcall') state.raw += delta;
     else block[type] += delta;

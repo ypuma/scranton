@@ -22,7 +22,7 @@ const clients = {
   'google-generative': [googleRequest, googleEvents],
   'google-vertex': [vertexRequest, googleEvents],
   'google-generative-ai': [googleRequest, googleEvents],
-  'google-antigravity': [antigravityRequest, (events, blocks, output) => googleEvents(events, blocks, output, { envelope: true })]
+  'google-antigravity': [antigravityRequest, (events, blocks, output, context, env) => googleEvents(events, blocks, output, { envelope: true }, env)]
 };
 
 async function resolveWithSignal(resolve, provider, signal) {
@@ -57,7 +57,7 @@ export function createLLM({ resolveAuth = () => undefined, fetcher = (...args) =
         headers: { ...model.headers, 'Content-Type': 'application/json', Accept: 'text/event-stream', ...headers }, body: JSON.stringify(body) });
       if (!response.ok) throw await httpError(response);
       try {
-        yield* map(jsonEvents(response.body, { signal }), new Blocks(output), output, context);
+        yield* map(jsonEvents(response.body, { signal }), new Blocks(output), output, context, { ...process.env, PROVIDER_TOKEN: token });
       } finally { if (response.body && !response.body.locked) await response.body.cancel().catch(() => {}); }
     });
   };
