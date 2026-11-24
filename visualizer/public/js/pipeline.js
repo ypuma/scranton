@@ -1,7 +1,7 @@
-// Pipeline panel: Human -> Michael -> Dwight -> the run's gate stages, and the message animation for hive_write.
+// Pipeline panel: Human -> Planner -> Developer -> the run's gate stages, and the message animation for hive_write.
 // A parallel stage is one column of stacked cards; roles the run does not use have no card. A custom gate gets its
 // card from run_started.roles the first time a run uses it.
-import { AGENT_IDS, isFailKeyword, displayName, roleTitle, humanNeeded, roleView, workflowOf, gateView, workflowText, stepNames, settledStatus } from './state.js';
+import { AGENT_IDS, isFailKeyword, displayName, roleTitle, roleDescription, theName, humanNeeded, roleView, workflowOf, gateView, workflowText, stepNames, settledStatus } from './state.js';
 import { formatTokens, formatCost, plural, stripBidi } from './format.js';
 import { statusTone, setTone } from './status-tone.js';
 
@@ -32,17 +32,39 @@ function fact(box, label, ...value) {
   box.replaceChildren(el('span', 'meta-label', `${label} `), v);
 }
 
+// A card's lane count behind what its agent does: it wraps in one piece, its separator stays with the text before.
+function lanesNode(lanes) {
+  const node = el('span', 'role-lanes');
+  node.append('\u00a0· ', el('span', '', lanes));
+  return node;
+}
+
+// A keyword in the pieces it may wrap between: each ends with its underscore ("REPORT_", "READY").
+export function keywordParts(keyword) {
+  return String(keyword).split(/(?<=_)/);
+}
+
+// The keyword as text that wraps after an underscore, never inside a word.
+function keywordNode(keyword, cls) {
+  const node = el('span', cls);
+  keywordParts(keyword).forEach((part, i) => {
+    if (i) node.append(el('wbr'));
+    node.append(part);
+  });
+  return node;
+}
+
 // The pipeline's columns for a run: [['michael'], ['dwight'], ...its gate stages].
 export function pipelineColumns(state) {
   return [['michael'], ['dwight'], ...workflowOf(state?.runId ? state : null).map((stage) => [...stage])];
 }
 
-// What a gate that has not run yet waits for: Dwight, or the stage before its own. Short enough for two lines
+// What a gate that has not run yet waits for: the developer, or the stage before its own. Short enough for two lines
 // of the narrowest card; the column it sits in already says which stage it is. names: stepNames of the run.
 export function waitsFor(cols, id, names = null) {
   const i = cols.findIndex((ids) => ids.includes(id));
   if (i < 2) return null;
-  return i === 2 ? 'Waits for Dwight' : `After ${workflowText([cols[i - 1]], names).toLowerCase()}`;
+  return i === 2 ? `Waits for ${theName('dwight')}` : `After ${workflowText([cols[i - 1]], names).toLowerCase()}`;
 }
 
 export function createPipeline(root) {
@@ -149,12 +171,12 @@ export function createPipeline(root) {
       const status = hasRun ? settledStatus(s, a, { role: true }) : 'idle';
       const name = displayName(id, s);
       if (c.name.textContent !== name) c.name.textContent = name;
-      // a narrow card cuts the name and the role: both are a hover away
-      c.name.title = name;
+      // what the agent does, in full, is a hover away
+      c.name.title = [name, roleDescription(id, s)].filter(Boolean).join(': ');
       // the lane count is said again by the lanes list, so a crowded row drops it (styles.css)
-      const lanes = a?.lanes ? ` · ${plural(a.lanes, 'lane')}` : '';
-      c.role.replaceChildren(roleTitle(id, s), ...(lanes ? [el('span', 'role-lanes', lanes)] : []));
-      c.role.title = `${roleTitle(id, s)}${lanes}`;
+      const lanes = a?.lanes ? plural(a.lanes, 'lane') : '';
+      c.role.replaceChildren(roleTitle(id, s), ...(lanes ? [lanesNode(lanes)] : []));
+      c.role.title = [roleTitle(id, s), lanes].filter(Boolean).join(' · ');
       c.card.dataset.status = status;
       setTone(c.status, statusTone(status));
       c.card.dataset.active = String(status === 'working' || status === 'thinking');
@@ -167,8 +189,8 @@ export function createPipeline(root) {
       if (fresh) activity = waitsFor(cols, id, names) ?? activity;
       if (status === 'unused') activity = 'Not used in this run';
       else if (status === 'stopped') activity = 'Stopped with the run';
-      // the status word already says it ("Idle", "dwight-m1: Idle")
-      if ([status, a?.status].includes(activity?.replace(/^[a-z]+(-[\w-]+)?: /, '').toLowerCase())) activity = '';
+      // the status word already says it ("Idle", "m1: Idle")
+      if ([status, a?.status].includes(activity?.replace(/^[\w.-]+: /, '').toLowerCase())) activity = '';
       if (gate) {
         c.card.dataset.gate = gate.result;
         const where = [gate.milestoneId, gate.cycle && `cycle ${gate.cycle}`].filter(Boolean).join(' · ');
@@ -195,7 +217,7 @@ export function createPipeline(root) {
       if (metaKey === c.metaKey) continue;
       c.metaKey = metaKey;
       c.keyword.replaceChildren();
-      if (keyword) fact(c.keyword, 'Keyword', el('span', bad ? 'keyword-bad' : '', keyword));
+      if (keyword) fact(c.keyword, 'Keyword', keywordNode(keyword, bad ? 'keyword-bad' : ''));
       c.tool.replaceChildren();
       if (tool) fact(c.tool, 'Last tool', el('span', 'tool-name', tool.tool), ` ${tool.detail}`);
       // each figure stays in one piece when the line wraps, with its separator behind it

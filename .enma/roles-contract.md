@@ -1,5 +1,7 @@
 # Roles and Multi-Stage Gate Contract (Core, 2026-11-09)
 
+> Since 2026-11-24 the agents are shown under the names in `.enma/agent-names-contract.md`; the first names below (Michael, Dwight, Oscar, Hank, Angela) are the earlier display names, and the ids are unchanged.
+
 Authoritative integration specification for the three parallel implementation lanes: Backend, Web UI, and Terminal Dashboard.
 Deliverable path: `.enma/roles-contract.md`. Engine default workflow is legacy `[["angela"]]` so existing tests, runs, and recordings remain 100% green.
 

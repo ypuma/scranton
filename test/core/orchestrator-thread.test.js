@@ -40,7 +40,7 @@ test('Michael gets bounded delimited thread context before the new goal, includi
 test('omitted, empty and non-string context preserve the original planning prompt exactly', async (t) => {
   for (const threadContext of [undefined, '', '   ', 123]) {
     const inputs = await planning(t, { threadContext });
-    assert.equal(inputs[0], planRequestBody('New goal') + '\n\n## Instance coordination\n\nYou are michael. Exact recipient IDs: michael. Use agent_chat for short coordination; queued is not delivered.');
+    assert.equal(inputs[0], planRequestBody('New goal') + '\n\n## Instance coordination\n\nYou are michael, the Planner. Exact recipient IDs, each followed by who it is: `michael` (Planner). Use agent_chat for short coordination; queued is not delivered.');
   }
 });
 

@@ -21,12 +21,12 @@ file: "visualizer/public/js/log.js"
 symbol: "createLog"
 ordinal: 0
 kind: "trap"
-text: "The event log is an ARIA grid (one Tab stop, roving cell tabindex keyed by data-seq + column). Tail-follow has three inputs:\n- `follow`: set by user scroll events, toBottom() and readAt().\n- `held`: set when a keyboard move or click lands on an older row. It stops the render's geometric \"at bottom\" check from yanking a reader who is still at the bottom.\n- geometry, used only when neither flag decides.\nKeyboard and click moves must go through readAt(). Relying on scroll events breaks, because an in-view row does not scroll and a scroll event can land while toBottom's one-frame `programmatic` guard is still set. Tests: test/visualizer/log-keyboard.test.js (its `frames` harness mode models that race) and scroll-follow.test.js."
+text: "The event log is an ARIA grid (one Tab stop, roving cell tabindex keyed by data-seq + column). Tail-follow has three inputs:\n- `follow`: set by user scroll events, toBottom() and readAt().\n- `held`: set when a keyboard move or click lands on an older row. It stops the render's geometric \"at bottom\" check from yanking a reader who is still at the bottom.\n- geometry, used only when neither flag decides.\nKeyboard and click moves must go through readAt(). Relying on scroll events breaks, because an in-view row does not scroll and a scroll event can land while toBottom's one-frame `programmatic` guard is still set. Since 0.9.0 a row's detail is a `.t-text` box (two lines closed, whole text open) and an open row has a copy button that is not a grid cell; since the agent rename the Source column shows the Short instance label (\"Developer · m1\") and the raw id only in the opened row. Tests: test/visualizer/log-keyboard.test.js (its `frames` harness mode models that race) and scroll-follow.test.js."
 evidence: "`const wasFollowing = follow || (!held && laidOut() && atBottom());` and `if (tr === visibleRows().at(-1)) return toBottom();` in readAt."
-hash: "span:dcc97c09a82cc9e9"
+hash: "span:d600d28570c8f2c0"
 quote: "quote:a7cbb4a7f98be000"
-written: "2026-11-21"
-commit: "cd0d158"
+written: "2026-11-24"
+commit: "617462f"
 by: "core"
 ---
 
@@ -40,6 +40,19 @@ see_also: "src-tauri/capabilities/dashboard-folder-picker.json; src/core/project
 hash: "span:1077f009fa68e289"
 written: "2026-11-21"
 commit: "cd0d158"
+by: "core"
+---
+
+---
+file: "visualizer/public/js/state.js"
+symbol: "displayName"
+ordinal: 0
+kind: "how"
+text: "How the web dashboard names an agent. state.js holds the only table of the browser (`ROLE_NAMES`, `ROLE_SHORT`, `ROLE_TITLES` = the \"does\" phrase, `ROLE_DESCRIPTIONS`, keyed by the ids michael / dwight / oscar / hank / angela) and every module asks it: `displayName(id, state)` (built-in name, else the custom role's name from the run, else the id), `shortName`, `roleTitle`, `roleDescription`, `instanceLabel(id, state, { short })` (\"Developer · m1\" from an instance id like dwight-m1; the id's own suffix keeps two instances apart), `theName` (\"the Developer (m1)\"; custom agents and Human take no article), `aboutAgent` (tooltip: description plus the raw id). For the five built-ins the UI ignores `name` / `title` sent by the server or stored in a run's `run_started.roles`, so a run saved by an older version shows the new names in every computed label; text the old run wrote into its journal keeps the first names. The model-picker rows in index.html are a static copy of the table (a test compares them)."
+see_also: ".enma/agent-names-contract.md; src/core/workflow.js (the Node table); test/visualizer/agent-names.test.js (parity, no first name in computed labels)"
+hash: "span:f36bb5571e6e3a44"
+written: "2026-11-24"
+commit: "617462f"
 by: "core"
 ---
 

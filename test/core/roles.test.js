@@ -67,8 +67,8 @@ test('changes_once sends one combined report and passes cycle 2; security_issues
       assert.equal(result.status, 'success', result.summary);
       assert.equal(es.filter((e) => e.type === 'cycle_result' && e.result === 'failed').length, 1);
       const report = fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'inbox.md'), 'utf8');
-      assert.match(report, /Gate verification failed/); assert.match(report, /Oscar's Review report/);
-      assert.equal(report.includes("Angela's last QA report"), false, 'gate report keeps its own role label');
+      assert.match(report, /Gate verification failed/); assert.match(report, /Code Reviewer's Review report/);
+      assert.equal(report.includes("QA Tester's last QA report"), false, 'gate report keeps its own role label');
       assert.equal((report.match(/^# (?:Task|Bug report):/gm) ?? []).length, 1, 'one top-level task heading');
     } else {
       assert.equal(result.status, 'aborted');
@@ -117,11 +117,11 @@ test('parallel failures aggregate in listed order independent of finish order, r
     assert.deepEqual(finishOrder, oscar < hank ? ['oscar', 'hank'] : ['hank', 'oscar'], 'forced gate finish order');
     finishOrders.push(finishOrder.join(','));
     const failed = es.find((e) => e.type === 'cycle_result' && e.result === 'failed');
-    assert.equal(failed.reason, 'Stage 1 failed: Oscar [CHANGES_REQUESTED], Hank [SECURITY_ISSUES]');
+    assert.equal(failed.reason, 'Stage 1 failed: Code Reviewer [CHANGES_REQUESTED], Security Auditor [SECURITY_ISSUES]');
     const archives = fs.readdirSync(path.join(config.hiveDir, 'dwight-m1', 'archive'));
     const reports = archives.map((f) => fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'archive', f), 'utf8')).concat(fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'inbox.md'), 'utf8'));
-    const report = reports.find((s) => s.includes("Oscar's Review report"));
-    assert.ok(report.indexOf("Oscar's Review report") < report.indexOf("Hank's Security report"));
+    const report = reports.find((s) => s.includes("Code Reviewer's Review report"));
+    assert.ok(report.indexOf("Code Reviewer's Review report") < report.indexOf("Security Auditor's Security report"));
     const decisions = es.filter((e) => e.type === 'cycle_result').map(({ milestoneId, cycle, result, failedCycles, reason }) => ({ milestoneId, cycle, result, failedCycles, reason }));
     if (reference) assert.deepEqual(decisions, reference); else reference = decisions;
     const gateDecisions = es.filter((e) => e.type === 'gate_result').map(({ milestoneId, cycle, stage, agent, result, keyword }) => ({ milestoneId, cycle, stage, agent, result, keyword })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -157,7 +157,7 @@ test('saved custom prompt stays on host; Docker mounts only worktree and Git mas
   const text = 'Custom reviewer marker [REVIEW_APPROVED] [CHANGES_REQUESTED] [BLOCKED]';
   fs.writeFileSync(path.join(config.promptsDir, 'oscar.md'), text);
   const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_EXPECT_PROMPT: text, SCRANTON_FAKE_FAIL_ROLE: 'oscar' } });
-  // Only Oscar is customized; the fixture validates his argv in a standalone invocation.
+  // Only the Code Reviewer is customized; the fixture validates its argv in a standalone invocation.
   o.standaloneAgent = 'oscar';
   assert.equal((await o.run('check prompt')).status, 'success');
   assert.equal(events(config)[0].prompts.oscar.sha256, createHash('sha256').update(text + '\n\n' + WHO_DECIDES).digest('hex'));
@@ -227,7 +227,7 @@ test('parallel blocked gates await siblings, choose listed first and retry only 
     if (e.type === 'gate_result' && e.agent === 'angela') o.extraEnv.SCRANTON_FAKE_SCENARIO = 'blocked';
   }, hitl: async ({ reason }) => {
     questions++;
-    assert.match(reason, /^Oscar:/, 'first blocked gate is chosen in listed order');
+    assert.match(reason, /^Code Reviewer:/, 'first blocked gate is chosen in listed order');
     assert.deepEqual(events(config).filter((e) => e.type === 'gate_result').map((e) => e.agent).sort(), ['angela', 'hank', 'oscar'], 'sibling finishes before pause');
     o.extraEnv.SCRANTON_FAKE_SCENARIO = 'happy';
     return { decision: 'retry' };
@@ -243,7 +243,7 @@ test('gate output without a keyword fails its stage and skips later stages', asy
   const o = new Orchestrator({ config, noPlan: true, onBreaker: 'abort', extraEnv: { SCRANTON_FAKE_MISSING_KEYWORD_ROLE: 'oscar' } });
   assert.equal((await o.run('missing keyword')).status, 'aborted');
   const es = events(config);
-  assert.match(es.find((e) => e.type === 'cycle_result').reason, /^Oscar reported \[MISSING_KEYWORD\]:/);
+  assert.match(es.find((e) => e.type === 'cycle_result').reason, /^The Code Reviewer reported \[MISSING_KEYWORD\]:/);
   assert.equal(es.find((e) => e.type === 'gate_result' && e.agent === 'oscar').result, 'failed');
   assert.equal(es.some((e) => e.type === 'agent_finished' && e.agent === 'angela'), false);
 });
@@ -362,9 +362,9 @@ test('gate feedback retains per-role labels without Angela attribution or duplic
   const context = { milestone: { id: 'm1', title: 'Review', description: 'Implement', acceptanceCriteria: [] }, request: 'task' };
   const failures = [{ agent: 'oscar', text: 'Review failure' }, { agent: 'hank', text: 'Security failure' }];
   const feedback = dwightMessage({ kind: 'feedback', ...context, gateReports: failures, humanFeedback: 'Fix both' });
-  assert.match(feedback, /Oscar's Review report\n\nReview failure/, 'feedback labels Oscar report');
-  assert.match(feedback, /Hank's Security report\n\nSecurity failure/);
-  assert.equal(feedback.includes("Angela's last QA report"), false);
+  assert.match(feedback, /Code Reviewer's Review report\n\nReview failure/, 'feedback labels the Code Reviewer report');
+  assert.match(feedback, /Security Auditor's Security report\n\nSecurity failure/);
+  assert.equal(feedback.includes("QA Tester's last QA report"), false);
   const report = gateBugReport({ failures, ...context });
   assert.equal(report.includes('# Task:'), false, 'combined report has no duplicate task heading');
   assert.equal(report.includes('Implement this milestone in your current working directory.'), false);
@@ -376,8 +376,8 @@ test('human feedback after a gate failure carries neutral gate reports to Dwight
   const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'changes_once' }, hitl: async () => ({ decision: 'feedback', feedback: 'Address the review' }) });
   assert.equal((await o.run('feedback reports')).status, 'success');
   const body = fs.readFileSync(path.join(config.hiveDir, 'dwight-m1', 'inbox.md'), 'utf8');
-  assert.match(body, /Oscar's Review report/);
-  assert.equal(body.includes("Angela's last QA report"), false, 'Oscar report is not attributed to Angela');
+  assert.match(body, /Code Reviewer's Review report/);
+  assert.equal(body.includes("QA Tester's last QA report"), false, 'Code Reviewer report is not attributed to the QA Tester');
   assert.match(body, /Address the review/);
 });
 

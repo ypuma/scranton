@@ -3,7 +3,7 @@
 // arguments are written by a model: they are only ever shown as text.
 import { stripBidi } from './format.js';
 import { responseError } from './control.js';
-import { displayName } from './state.js';
+import { instanceLabel, theName } from './state.js';
 import { ACCESS_TOOL, accessTitle, protectedOf } from './access.js';
 
 export const APPROVALS_POLL_MS = 1000;
@@ -76,10 +76,10 @@ export function callView(a) {
   return { title, label: 'Arguments', text: clip(clean(text)) || '(none)' };
 }
 
-// Who asks: "Dwight · dwight-m1". state: the reducer state, for the names of custom agents.
+// Who asks: "Developer · m1". state: the reducer state, for the names of custom agents.
 export function whoText(a, state = null) {
-  const name = a?.agent ? displayName(a.agent, state) : '';
-  return [name, a?.instanceId && a.instanceId !== a.agent ? a.instanceId : ''].filter(Boolean).join(' \u00b7 ') || 'An agent';
+  const id = a?.instanceId || a?.agent;
+  return id ? instanceLabel(id, state) : 'An agent';
 }
 
 // Whole seconds until the deadline, never below 0; null without one.
@@ -102,7 +102,8 @@ export function countdownText(a, now = Date.now()) {
 // The live region's sentence for a call that started waiting.
 export function askedText(a, state = null) {
   const v = callView(a);
-  return `Approval needed: ${whoText(a, state)} wants to ${v.title.charAt(0).toLowerCase()}${v.title.slice(1)}: ${clip(v.text.split('\n')[0], 120)}`;
+  const id = a?.instanceId || a?.agent;
+  return `Approval needed: ${id ? theName(id, state) : 'an agent'} wants to ${v.title.charAt(0).toLowerCase()}${v.title.slice(1)}: ${clip(v.text.split('\n')[0], 120)}`;
 }
 
 // POST .../approvals -> { body }. grant: what an allowed request_access gets, 'read' | 'write'; write only when

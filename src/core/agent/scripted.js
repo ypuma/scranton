@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createScriptedProvider, getModel } from '../llm/index.js';
+import { ROLE_NAMES, roleInSentence } from '../workflow.js';
 
 // Test/demo-only; an ambient delay or failure setting never enables this provider.
 export function scriptedSettings(value, env = process.env) {
@@ -133,7 +134,7 @@ export async function createAgentScript(value, options) {
   if (role === 'michael') {
     if (kind === 'progress') answer = settings.progressAnswer ?? (scenario === 'breaker' || scenario === 'security_issues' ? '[STALLED]\nThe underlying problem keeps returning.' : '[PROGRESS]\nThe failure has narrowed.');
     else if (conversation && kind === 'report_request') answer = settings.reportFail === 'missing' ? 'Report without a keyword.' : 'Completed the requested work. The milestone checks passed.\n[REPORT_READY]';
-    else if (conversation && scenario === 'question') answer = 'The Team orchestrator asks Michael to plan the request, Dwight to implement each milestone, and Angela to verify it. Failed checks return to Dwight; repeated failures pause for a human.\n[ANSWER_READY]';
+    else if (conversation && scenario === 'question') answer = `The Team orchestrator asks ${roleInSentence('michael')} to plan the request, ${roleInSentence('dwight')} to implement each milestone, and ${roleInSentence('angela')} to verify it. Failed checks return to ${roleInSentence('dwight')}; repeated failures pause for a human.\n[ANSWER_READY]`;
     else answer = settings.plan === 'invalid' ? 'I could not decide how to split this up.\n[PLAN_READY]' : `Here is the plan: three small milestones.\n\n\`\`\`json\n${JSON.stringify(PLAN(section('Request') || 'the request'), null, 2)}\n\`\`\`\n\n[PLAN_READY]`;
     if (kind !== 'progress' && (!conversation || kind !== 'report_request')) tool('ls', { path: '.' });
   } else if (role === 'angela' || role === 'oscar' || role === 'hank' || options.agentConfig?.kind === 'gate' || options.env.SCRANTON_ROLE_KIND === 'gate') {
@@ -148,7 +149,7 @@ export async function createAgentScript(value, options) {
         ...criteria.map((criterion, i) => `${i + 1}. ${failed && i === 0 ? 'FAIL' : 'PASS'} - ${criterion}${failed ? '' : ' (evidence: node --test, 0 failures)'}`), '',
         ...(failed ? ['### Failure', 'Command: `node cli.js done 1`', 'Output: TypeError: Cannot read properties of undefined (reading "done")', 'Expected: item 1 is marked done and the list is printed', 'Actual: the CLI crashes on an empty todos.json', 'Suspected file: cli.js', ''] : []),
         `[${failed ? fail : pass}]`].join('\n');
-    } else answer = `${role} report: ${failed ? 'Unhandled input crosses a trust boundary; validate cli.js arguments before use.' : 'All checks passed.'}\n[${scenario === 'blocked' ? 'BLOCKED' : failed ? fail : pass}]`;
+    } else answer = `${Object.hasOwn(ROLE_NAMES, role) ? ROLE_NAMES[role] : role} report: ${failed ? 'Unhandled input crosses a trust boundary; validate cli.js arguments before use.' : 'All checks passed.'}\n[${scenario === 'blocked' ? 'BLOCKED' : failed ? fail : pass}]`;
   } else if (scenario === 'access') {
     const request = section('Overall request') || section('Request') || inbox.body;
     const named = /(?:~[\\/]|[a-z]:[\\/]|\/)[^\s\"'`]+/i.exec(request)?.[0];
@@ -165,7 +166,7 @@ export async function createAgentScript(value, options) {
       const files = milestone === 'm1' ? [['todo.js', TODO_JS(rev)]] : milestone === 'm2' ? [['cli.js', CLI_JS(rev)]] : milestone === 'm3' ? [['test/todo.test.js', TEST_JS(rev)], ['README.md', README_MD(rev)]] : [[`${milestone || 'work'}.md`, `# ${milestone || 'work'}\n\n${rev}\n`]];
       for (const [path, content] of files) tool('write', { path, content });
       tool('bash', { command: 'node --test' });
-      answer = `Implemented ${milestone || 'the task'} (cycle ${cycle}).\nFiles: ${files.map(([file]) => file).join(', ')}\n${kind === 'feedback' ? 'Applied the human feedback: ' + section('Human feedback').split('\n')[0] : kind === 'bug_report' ? "Fixed the failures from Angela's report." : ''}\nTest command: node --test\n[TASK_COMPLETE]`;
+      answer = `Implemented ${milestone || 'the task'} (cycle ${cycle}).\nFiles: ${files.map(([file]) => file).join(', ')}\n${kind === 'feedback' ? 'Applied the human feedback: ' + section('Human feedback').split('\n')[0] : kind === 'bug_report' ? `Fixed the failures from ${roleInSentence('angela')}'s report.` : ''}\nTest command: node --test\n[TASK_COMPLETE]`;
     }
   }
   if (settings.keyword && settings.keywordRole === role) answer = answer.replace(/\[[A-Z_]+\](?=\s*$)/, `[${settings.keyword}]`);

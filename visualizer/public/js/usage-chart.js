@@ -311,6 +311,8 @@ export function createUsage({ table = false, height = 150, id = 'usage' } = {}) 
       const tr = el('tr');
       const who = Object.assign(el('th'), { scope: 'row' });
       who.append(swatch(tone(a.id)), a.name);
+      // the column says the name short
+      if (a.full && a.full !== a.name) who.title = a.full;
       tr.append(who, el('td', 'mono', String(a.calls)), el('td', 'mono', formatTokens(a.tokens)),
         el('td', 'mono', a.cost === null ? '-' : formatCost(a.cost)), el('td', 'mono', `${Math.round(a.share * 100)}%`));
       return tr;

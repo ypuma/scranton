@@ -4,6 +4,7 @@ import { CHAT_MAX, DELIVERY_LABEL, outboxStale } from './chat.js';
 import { createSteering } from './chat-steer.js';
 import { formatWhen, plural } from './format.js';
 import { scopedUrl } from './scope.js';
+import { instanceLabel, theName } from './state.js';
 
 const $ = (id) => document.getElementById(id);
 const FOLLOW_SLACK_PX = 24;
@@ -60,18 +61,19 @@ export function createChatPanel({ getState, getControl, refresh, url = (suffix) 
     readTop = e.scroll.scrollTop;
   });
 
-  function entryKey(m, now) {
-    return JSON.stringify([m.from, m.to, m.text, m.delivery, m.reason, m.local ?? false, outboxStale(m, now), expanded.has(m.id)]);
+  function entryKey(m, now, s) {
+    return JSON.stringify([instanceLabel(m.from, s), instanceLabel(m.to, s), m.text, m.delivery, m.reason, m.local ?? false, outboxStale(m, now), expanded.has(m.id)]);
   }
 
-  function fill(li, m, now) {
+  // s: the reducer state, for what the two ends are called (the ids themselves are their tooltip)
+  function fill(li, m, now, s) {
     li.dataset.delivery = m.delivery;
     li.dataset.human = String(m.from === 'human');
     li.toggleAttribute('data-expanded', expanded.has(m.id));
     const head = el('div', 'msg-head');
     const route = el('span', 'msg-route mono');
-    route.append(el('b', '', m.from), ' -> ', el('b', '', m.to));
-    route.title = `${m.from} -> ${m.to}`;
+    route.append(el('b', '', instanceLabel(m.from, s)), ' -> ', el('b', '', instanceLabel(m.to, s)));
+    route.title = `${instanceLabel(m.from, s)} -> ${instanceLabel(m.to, s)} (${m.from} -> ${m.to})`;
     const stale = outboxStale(m, now);
     const state = el('span', 'badge msg-state', stale ? 'queued · not picked up yet' : DELIVERY_LABEL[m.delivery] ?? m.delivery);
     if (m.delivery === 'rejected') state.dataset.tone = 'loud';
@@ -117,7 +119,7 @@ export function createChatPanel({ getState, getControl, refresh, url = (suffix) 
     let added = false;
     for (const m of entries) {
       let li = items.get(m.id);
-      const key = entryKey(m, now);
+      const key = entryKey(m, now, s);
       if (!li) {
         li = el('li', 'msg');
         items.set(m.id, li);
@@ -127,7 +129,7 @@ export function createChatPanel({ getState, getControl, refresh, url = (suffix) 
         continue;
       }
       li.dataset.key = key;
-      fill(li, m, now);
+      fill(li, m, now, s);
     }
     e.empty.hidden = entries.length > 0;
     e.tabCount.textContent = String(entries.length);
@@ -164,7 +166,8 @@ export function createChatPanel({ getState, getControl, refresh, url = (suffix) 
   function compose(id) {
     render();
     if (!steer.recipients().some((r) => r.id === id)) {
-      composer.status(`${id} cannot get messages right now`, 'error');
+      const who = theName(id, getState());
+      composer.status(`${who.charAt(0).toUpperCase()}${who.slice(1)} cannot get messages right now`, 'error');
       return;
     }
     e.to.value = id;

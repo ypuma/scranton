@@ -236,7 +236,7 @@ function renderThinking(rv) {
   const saved = engine === 'team' && !log.off;
   const tools = engine === 'team' ? [...(thread?.details() ?? []), ...liveEvents].filter((e) => e.type === 'agent_tool' && e.runId === rv.runId) : [];
   const columns = thoughtColumns({
-    agents: rv.agents, thoughts: log.runId === rv.runId ? log.thoughts : [], tools, saved,
+    agents: rv.agents, thoughts: log.runId === rv.runId ? log.thoughts : [], tools, saved, state: engine === 'team' ? view() : null,
     tails: engine === 'team' && !replay ? liveTails(liveNow(), rv.runId) : null,
   });
   // without /live tails of its own, a pipeline agent's open block is the text of its run view entry

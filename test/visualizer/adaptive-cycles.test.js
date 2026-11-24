@@ -98,7 +98,7 @@ test('the log shows progress_check lines', () => {
   const s = add(reduceAll(events), e, [check(), check({ cycle: 2, verdict: 'stalled', source: 'rule', rule: 'repeat', reason: 'Same failure.', stalledCycles: 1, tokenBudget: 0 })]);
   const lines = s.log.filter((l) => l.type === 'progress_check');
   assert.deepEqual(lines.map((l) => [l.tone, l.category, l.text]), [
-    ['info', 'results', 'm1 cycle 1 progress (judged by Michael): The token leak is fixed; a narrower finding is left. · no progress 0 of 2 · 120.0k of 500.0k tokens'],
+    ['info', 'results', 'm1 cycle 1 progress (judged by the Planner): The token leak is fixed; a narrower finding is left. · no progress 0 of 2 · 120.0k of 500.0k tokens'],
     ['warn', 'results', 'm1 cycle 2 no progress (same failure again): Same failure. · no progress 1 of 2 · 120.0k tokens'],
   ]);
   assert.equal(typeLabel('progress_check'), 'Progress');
@@ -129,7 +129,7 @@ test('the breaker tile: cycle, verdict and reason, no progress X of N, tokens of
   assert.equal($('kpi-breaker-label').textContent, 'Progress');
   assert.equal($('kpi-breaker').textContent, 'No progress');
   assert.equal($('kpi-breaker-sub').textContent, 'cycle 3 · no progress 2 of 2 · 120.0k of 500.0k tokens');
-  assert.equal($('kpi-breaker-reason').textContent, 'No progress, judged by Michael: <img src=x onerror=alert(1)> again');
+  assert.equal($('kpi-breaker-reason').textContent, 'No progress, judged by the Planner: <img src=x onerror=alert(1)> again');
   assert.equal($('kpi-breaker-reason').children.length, 0, 'model text stays text');
   assert.equal($('kpi-breaker-tile').dataset.progress, 'true');
   assert.equal($('kpi-breaker-meter').children.filter((i) => i.dataset.fill === 'full').length, 2);
@@ -142,7 +142,7 @@ test('board cards count cycles without progress instead of failed ones', () => {
   const { e, events } = failedOnce(true);
   const s = add(reduceAll(events), e, [check()]);
   const card = teamBoard(s).columns.flatMap((c) => c.cards).find((c) => c.id === 'm1');
-  assert.deepEqual(card.check, { word: 'Progress', how: 'judged by Michael', reason: 'The token leak is fixed; a narrower finding is left.', meter: 'no progress 0 of 2 · 120.0k of 500.0k tokens' });
+  assert.deepEqual(card.check, { word: 'Progress', how: 'judged by the Planner', reason: 'The token leak is fixed; a narrower finding is left.', meter: 'no progress 0 of 2 · 120.0k of 500.0k tokens' });
   assert.equal(attemptText(card, 'milestone'), 'cycle 1 · no progress 0 of 2 · 120.0k of 500.0k tokens');
   assert.equal(teamBoard(s).columns.flatMap((c) => c.cards).find((c) => c.id === 'm2').check, null);
 });

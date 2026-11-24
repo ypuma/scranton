@@ -1,6 +1,6 @@
 // Event log grid: incremental rows whose detail is cut after two lines (click, Enter or Space to expand), filter
 // buttons, auto-scroll that pauses while the user reads back. total: where the count of all events goes (the tab).
-import { displayName } from './state.js';
+import { instanceLabel } from './state.js';
 import { formatWhen } from './format.js';
 import { copyButton } from './copy.js';
 
@@ -119,7 +119,7 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
     r.more = null;
     if (!open) return;
     r.more = el('div', 't-more');
-    for (const [label, value] of [['Time', r.entry.ts ?? '-'], ['Source', r.source], ['Type', r.entry.type]]) {
+    for (const [label, value] of [['Time', r.entry.ts ?? '-'], ['Source', r.sourceFull], ['Type', r.entry.type]]) {
       const part = el('span', 't-fact');
       part.append(el('span', 'meta-label', `${label} `), el('span', '', value));
       r.more.append(part);
@@ -194,12 +194,17 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
     if (!body.contains(ev.relatedTarget) && stop?.parentNode === visibleRows().at(-1)) current = null;
   });
 
-  function row(entry) {
+  // s: the reducer state, for the names of custom agents
+  function row(entry, s) {
     const tr = el('tr');
     tr.dataset.cat = rowCategory(entry);
     tr.dataset.tone = entry.tone;
     tr.dataset.seq = String(entry.seq);
-    const source = entry.source === 'orchestrator' ? 'run' : displayName(entry.source).toLowerCase();
+    // the column says who in the short form ("Security · m1"); the opened row says it in full, with the id
+    const run = entry.source === 'orchestrator';
+    const source = run ? 'run' : instanceLabel(entry.source, s, { short: true });
+    const full = run ? 'run' : instanceLabel(entry.source, s);
+    const sourceFull = run || full === entry.source ? full : `${full} (${entry.source})`;
     const type = el('td', 't-type');
     type.append(el('span', '', typeLabel(entry.type)));
     // the text has a box of its own: a table cell cannot cut after two lines
@@ -214,7 +219,7 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
       td.setAttribute('aria-expanded', 'false');
     }
     tr.append(...cells);
-    rows.set(tr, { entry, source, cell, cells, more: null });
+    rows.set(tr, { entry, source, sourceFull, cell, cells, more: null });
     return tr;
   }
 
@@ -276,7 +281,7 @@ export function createLog({ table, body, scroller, empty, jump, filters, total =
       const frag = document.createDocumentFragment();
       const animate = fresh.length <= 3;
       for (const e of fresh) {
-        const tr = row(e);
+        const tr = row(e, s);
         if (animate) tr.classList.add('fresh');
         frag.append(tr);
       }

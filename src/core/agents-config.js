@@ -5,15 +5,15 @@ import { AGENT_IDS } from './state.js';
 import { KEYWORDS } from './keywords.js';
 import { THINKING_LEVELS } from './config.js';
 import { writeFileAtomicSync } from './util.js';
+import { ROLE_NAMES, ROLE_TITLES, roleInSentence } from './workflow.js';
 
+const reports = `${roleInSentence('dwight', ROLE_NAMES.dwight, true)} reports the milestone as complete.`;
 export const GATE_INSTRUCTIONS = {
-  oscar: 'Dwight reports the milestone as complete. Review the changes for correctness, edge cases, error handling, regressions, maintainability, and test coverage; do not create or modify files in the project.',
-  hank: 'Dwight reports the milestone as complete. Audit the changes for security vulnerabilities, including input validation, authorization, secret exposure, injection, and unsafe file or process operations; do not create or modify files in the project.',
-  angela: 'Dwight reports the milestone as complete. Verify every acceptance criterion independently; do not create or modify files in the project.'
+  oscar: `${reports} Review the changes for correctness, edge cases, error handling, regressions, maintainability, and test coverage; do not create or modify files in the project.`,
+  hank: `${reports} Audit the changes for security vulnerabilities, including input validation, authorization, secret exposure, injection, and unsafe file or process operations; do not create or modify files in the project.`,
+  angela: `${reports} Verify every acceptance criterion independently; do not create or modify files in the project.`
 };
-const names = ['Michael', 'Dwight', 'Oscar', 'Hank', 'Angela'];
-const titles = ['Planner', 'Developer', 'Code Reviewer', 'Security Auditor', 'Quality Assurance'];
-export const BUILTIN_ROLES = AGENT_IDS.map((id, i) => ({ id, name: names[i], title: titles[i], kind: i === 0 ? 'planner' : i === 1 ? 'developer' : 'gate', builtin: true, keywords: KEYWORDS[id], ...(i > 1 ? { passKeyword: KEYWORDS[id][0], failKeyword: KEYWORDS[id][1], instruction: GATE_INSTRUCTIONS[id] } : {}) }));
+export const BUILTIN_ROLES = AGENT_IDS.map((id, i) => ({ id, name: ROLE_NAMES[id], title: ROLE_TITLES[id], kind: i === 0 ? 'planner' : i === 1 ? 'developer' : 'gate', builtin: true, keywords: KEYWORDS[id], ...(i > 1 ? { passKeyword: KEYWORDS[id][0], failKeyword: KEYWORDS[id][1], instruction: GATE_INSTRUCTIONS[id] } : {}) }));
 const reserved = new Set([...AGENT_IDS, ...'human runs sessions prompts isolation control events state plan run orchestrator system default agents models auth providers hitl chat'.split(' ')]);
 const device = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

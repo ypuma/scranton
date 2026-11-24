@@ -63,22 +63,22 @@ test('parallel run: lanes, parallel milestones and the message summary', () => {
   const out = render(parallelState());
   for (const text of [
     'Milestones 2 in parallel: m1 Todo storage module · m2 Command line interface',
-    'Lanes  3 live, 1 done', 'dwight-m1', 'WORKING', 'Writing todo.js  write', 'm1 · worktree · docker · 0ccce64c',
-    'dwight-m2', 'THINKING', 'm2 · worktree · host · a7ffc7c7', 'angela-m2', 'WAITING',
-    'Messages  2, 1 queued', 'dwight-m1 -> dwight-m2  delivered  I export load() and save() from todo.js',
-    'human -> dwight-m2  queued  Keep the CLI flags short',
-    'dwight-m1  started  m1  worktree  docker', 'dwight-m2  started  m2  worktree  host',
-    'dwight-m1  write  todo.js', 'message c1  delivered', 'milestone m0 integrated', 'dwight-m2  thinking  Reading bug report...',
+    'Lanes  3 live, 1 done', 'Developer · m1', 'WORKING', 'Writing todo.js  write', 'm1 · worktree · docker · 0ccce64c',
+    'Developer · m2', 'THINKING', 'm2 · worktree · host · a7ffc7c7', 'QA · m2', 'WAITING',
+    'Messages  2, 1 queued', 'Developer · m1 -> Developer · m2  delivered  I export load() and save() from todo.js',
+    'Human -> Developer · m2  queued  Keep the CLI flags short',
+    'Developer · m1  started  m1  worktree  docker', 'Developer · m2  started  m2  worktree  host',
+    'Developer · m1  write  todo.js', 'message c1  delivered', 'milestone m0 integrated', 'Developer · m2  thinking  Reading bug report...',
   ]) assert.ok(out.includes(text), `missing ${JSON.stringify(text)}\n${out}`);
   // the finished planner lane is counted but takes no row while live lanes need them
-  assert.doesNotMatch(out, /^ . michael +DONE/m);
+  assert.doesNotMatch(out, /^ . Planner +DONE/m);
 });
 
 test('a role box follows its busiest live lane, not the stale aggregate', () => {
   const out = render(parallelState());
-  const box = out.split('\n').find((l) => l.includes('2 lanes: dwight-m1, dwight-m2'));
+  const box = out.split('\n').find((l) => l.includes('2 lanes: m1, m2'));
   assert.ok(box, out);
-  assert.ok(out.includes('● WORKING'), 'DWIGHT box shows the working lane');
+  assert.ok(out.includes('● WORKING'), 'DEVELOPER box shows the working lane');
   // without instances the aggregate is shown as before
   const legacy = render(parallelState({ instances: {}, activeMilestoneIds: [], chat: [] }));
   assert.doesNotMatch(legacy, /Lanes|Messages {2}/);
@@ -138,8 +138,8 @@ test('parallel fixture (the recorded RPC demo, cut mid-run) renders lanes, both 
   const out = renderDashboard(state, events, { width: 120, height: 40, color: false, now: Date.parse(state.updatedAt) + 2000 });
   for (const text of [
     '[RUNNING]', 'Milestones 2 in parallel: m1 Todo storage module · m2 Command line interface', 'Lanes  2 live, 1 done',
-    'm1 · worktree · host', 'm2 · worktree · host', 'Messages  1', 'human -> dwight-m2  delivered  Keep the commands short: add, list and done.',
-    'Overseeing m2: Command line interface', '2 lanes: dwight-m1, dwight-m2',
+    'm1 · worktree · host', 'm2 · worktree · host', 'Messages  1', 'Human -> Developer · m2  delivered  Keep the commands short: add, list and done.',
+    'Overseeing m2: Command line interface', '2 lanes: m1, m2',
   ]) assert.ok(out.includes(text), `missing ${JSON.stringify(text)}\n${out}`);
 });
 

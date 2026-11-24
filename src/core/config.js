@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_IDS } from './state.js';
-import { normalizeWorkflow } from './workflow.js';
+import { normalizeWorkflow, roleWithId } from './workflow.js';
 import { loadAgentsConfig, roleDefinitions } from './agents-config.js';
 import { isFile } from './util.js';
 
@@ -242,10 +242,10 @@ export function loadConfig({
     if (nativeWindows && f.tools !== undefined && agent.tools.includes('bash')) throw new ConfigError(`agents.${id}.tools: bash is unavailable in the Windows Scranton sandbox; use powershell, or select --sandbox docker or --sandbox host --trusted-host`);
     if (role.kind === 'gate') validateGateTools({ ...agent, id });
     if (agent.thinking && !THINKING_LEVELS.includes(agent.thinking)) {
-      throw new ConfigError(`${id} thinking level "${agent.thinking}" is not one of: ${THINKING_LEVELS.join(', ')}`);
+      throw new ConfigError(`${roleWithId(id)} thinking level "${agent.thinking}" is not one of: ${THINKING_LEVELS.join(', ')}`);
     }
     if (agent.provider && !agent.model) {
-      warnings.push(`${id}: provider "${agent.provider}" is set without a model - Scranton needs both, so the provider is ignored`);
+      warnings.push(`${roleWithId(id)}: provider "${agent.provider}" is set without a model - Scranton needs both, so the provider is ignored`);
       agent.provider = null;
     }
     const modelSource = !blank(env[`SCRANTON_${upper}_PROVIDER`]) || !blank(env[`SCRANTON_${upper}_MODEL`]) ? 'env' : !blank(f.provider) || !blank(f.model) ? 'config' : saved.model ? 'settings' : 'none';

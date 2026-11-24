@@ -72,14 +72,14 @@ test('a role card speaks for its loudest live lane, not for whichever lane wrote
   assert.equal(view.lanes, 2);
   assert.equal(view.busy, 2);
   assert.equal(view.status, 'working');
-  assert.match(view.activity, /^2 lanes: dwight-m1 working, dwight-m2 thinking$/);
+  assert.match(view.activity, /^2 lanes: m1 working, m2 thinking$/);
   // dwight-m2 going idle must not make the role look idle while dwight-m1 still works
   const s = reduce(state, e('agent_status', { agent: 'dwight', instanceId: 'dwight-m2', status: 'idle', activity: 'Idle' }));
   assert.equal(s.agents.dwight.status, 'working', 'aggregate follows the busy instance like state.json');
   view = roleView(s, 'dwight');
   assert.equal(view.status, 'working');
   assert.equal(view.focus, 'dwight-m1');
-  assert.equal(view.activity, 'dwight-m1: Writing todo.js');
+  assert.equal(view.activity, 'm1: Writing todo.js');
   // a role without instances keeps the plain aggregate
   assert.equal(roleView(s, 'angela').lanes, 0);
   assert.equal(roleView(s, 'angela').status, 'idle');
@@ -220,7 +220,7 @@ test('new event types have readable log lines', () => {
     e('milestone_integrated', { milestoneId: 'm1' }),
   ], state);
   const started = state.log.find((l) => l.type === 'instance_started');
-  assert.equal(started.text, 'dwight-m1 started for m1 · worktree · sandbox docker');
+  assert.equal(started.text, 'Developer started for m1 · worktree · sandbox docker');
   assert.equal(started.source, 'dwight-m1');
   assert.equal(s.log.at(-1).text, 'm1 integrated into the workspace');
   assert.equal(state.log.find((l) => l.type === 'agent_tool').source, 'dwight-m1');

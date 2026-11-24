@@ -95,7 +95,7 @@ function harness({ answer = DOC, fail = {}, on = { value: true }, control = null
     const [head, detail, actions] = rows()[i].childNodes;
     return {
       name: head.childNodes[0], title: head.childNodes[1], source: head.childNodes[2], kind: head.childNodes[3],
-      keywords: detail.childNodes[0], tools: detail.childNodes[1], model: detail.childNodes[2], edit: actions.childNodes[0], settings: actions.childNodes[1],
+      about: detail.childNodes[0], keywords: detail.childNodes[1], tools: detail.childNodes[2], model: detail.childNodes[3], edit: actions.childNodes[0], settings: actions.childNodes[1],
     };
   };
   const ready = async () => {
@@ -134,7 +134,8 @@ test('parseAgents: catalog order, custom agents after the built-ins, settings an
   assert.equal(roleView(hank).model, 'anthropic/claude-x (scranton.config.json)');
   assert.equal(roleView(p.roles[1]).model, 'Automatic');
   assert.equal(roleView({ ...p.roles[0], title: 'Planner' }).kind, '', 'a title that says the kind is not repeated');
-  assert.equal(roleView(p.roles[0]).kind, 'Planner');
+  assert.equal(roleView(p.roles[0]).kind, '', 'nor a name that says it: the Planner');
+  assert.equal(roleView(hank).kind, 'Gate', 'a kind the name does not say stays');
 });
 
 test('validation: the id and keyword rules of the contract, reserved words included', () => {
@@ -215,11 +216,11 @@ test('list: built-in and custom agents with kind, keywords, model and prompt sou
     return [r.name.textContent, r.title.textContent, r.kind.textContent, r.source.textContent, r.model.textContent];
   });
   assert.deepEqual(seen, [
-    ['Michael', 'Orchestrator', 'Planner', 'Built-in', 'openai/gpt-a (set here) \u00b7 thinking high'],
-    ['Dwight', 'Developer', '', 'Built-in', 'Automatic'],
-    ['Oscar', 'Reviewer', 'Gate', 'Built-in', 'Automatic'],
-    ['Hank', 'Security', 'Gate', 'Built-in', 'anthropic/claude-x (scranton.config.json)'],
-    ['Angela', 'QA', 'Gate', 'Built-in', 'Automatic \u00b7 thinking low'],
+    ['Planner', 'Plans the work', '', 'Built-in', 'openai/gpt-a (set here) \u00b7 thinking high'],
+    ['Developer', 'Writes the code', '', 'Built-in', 'Automatic'],
+    ['Code Reviewer', 'Reviews the changes', 'Gate', 'Built-in', 'Automatic'],
+    ['Security Auditor', 'Checks security', 'Gate', 'Built-in', 'anthropic/claude-x (scranton.config.json)'],
+    ['QA Tester', 'Tests the result', 'Gate', 'Built-in', 'Automatic \u00b7 thinking low'],
     ['Seclint', 'Lint', 'Gate \u00b7 custom', 'Starter', 'Automatic'],
   ]);
   assert.deepEqual(h.row(5).keywords.childNodes.map((c) => c.textContent), ['SECLINT_PASSED', 'SECLINT_FAILED', 'BLOCKED']);
@@ -319,7 +320,7 @@ test('settings of a built-in gate: model and thinking with PATCH, the instructio
   await h.row(2).settings.fire('click');
   assert.equal(h.panel.settings(), 'oscar');
   assert.equal(h.$('settings-panel').hidden, false);
-  assert.equal(h.$('settings-title').textContent, "Oscar's settings");
+  assert.equal(h.$('settings-title').textContent, "The Code Reviewer's settings");
   assert.equal(h.$('settings-identity').hidden, true, 'a built-in keeps its name, keywords and tools');
   assert.equal(h.$('settings-delete').hidden, true);
   assert.equal(h.$('settings-instruction-row').hidden, false);
@@ -344,7 +345,7 @@ test('settings of a built-in gate: model and thinking with PATCH, the instructio
   assert.deepEqual(patch.body, { model: PICK, instruction: null });
   assert.equal(h.panel.settings(), null);
   assert.equal(h.row(2).model.textContent, 'openai/gpt-a (set here)');
-  assert.equal(h.$('agents-status').textContent, "Saved Oscar's settings. Runs started from now on use them.");
+  assert.equal(h.$('agents-status').textContent, "Saved the Code Reviewer's settings. Runs started from now on use them.");
   assert.equal(globalThis.document.activeElement, h.row(2).settings);
   assert.equal(h.changes.length, 1);
 });
@@ -484,7 +485,7 @@ test('a settings reply that arrives after the drawer was closed and reopened act
   await h.tick();
   assert.equal(h.panel.settings(), 'seclint', 'the other form stays open');
   assert.equal(h.$('settings-name').value, 'Lintel');
-  assert.equal(h.$('agents-status').textContent, '', "no \"Saved Oscar's settings\" for a drawer that is gone");
+  assert.equal(h.$('agents-status').textContent, '', "no \"Saved the Code Reviewer's settings\" for a drawer that is gone");
   assert.equal(h.$('settings-save').disabled, false, 'the new form is not left busy');
   assert.equal(h.row(2).model.textContent, 'openai/gpt-a (set here)', 'the reopened rows learn about the save');
 });

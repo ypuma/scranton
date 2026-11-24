@@ -107,7 +107,7 @@ test('a conversation run with milestones: reply, totals and statuses as state.js
   const replies = entries.filter((x) => x.kind === 'reply');
   assert.equal(replies.length, 1, 'exactly one reply entry');
   assert.equal(entries.at(-1), replies[0], 'and it is the last entry');
-  assert.deepEqual([replies[0].replyKind, replies[0].text, replies[0].tone, replies[0].who.name], ['report', snapshot.reply.text, 'ok', 'Michael']);
+  assert.deepEqual([replies[0].replyKind, replies[0].text, replies[0].tone, replies[0].who.name], ['report', snapshot.reply.text, 'ok', 'Planner']);
   assert.match(replies[0].context, /^Success · 3\/3 milestones · \d+ files? written · [\d.]+k tokens · \$\d+\.\d+ · \d+s$/);
 
   // every agent message of the run is an agent entry, and no mailbox summary doubles one
@@ -128,12 +128,12 @@ test('a conversation run with milestones: reply, totals and statuses as state.js
   assert.ok(entries.some((x) => x.kind === 'activity' && x.text === 'm3 passed' && x.tone === 'ok'));
 });
 
-test('a question: Michael answers directly, without a plan, and the reply is the answer', () => {
+test('a question: the Planner answers directly, without a plan, and the reply is the answer', () => {
   const { s, events, snapshot, entries } = parity('answer');
   assert.deepEqual(events.slice(-2).map((e) => e.type), ['run_reply', 'run_finished']);
   assert.deepEqual([snapshot.reply.from, snapshot.reply.kind], ['michael', 'answer']);
   assert.doesNotMatch(snapshot.reply.text, /\[ANSWER_READY\]/);
-  assert.equal(events.at(-1).summary, 'Answered by Michael');
+  assert.equal(events.at(-1).summary, 'Answered by the Planner');
   assert.deepEqual(s.milestones, [], 'no milestone ran');
   assert.equal(events.some((e) => e.type === 'plan_ready' || e.type === 'milestone_started'), false);
   assert.deepEqual(entries.filter((x) => x.kind === 'reply').map((x) => [x.replyKind, x.text, x.tone]), [['answer', snapshot.reply.text, 'ok']]);

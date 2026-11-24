@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { scratchDir, createRun, capture, until, spoolChat, readEvents } from '../visualizer/fixtures/real-orchestrator.js';
 import { initialState, reduce } from '../../src/core/state.js';
+import { ROLE_SHORT } from '../../src/core/workflow.js';
 import { renderDashboard } from '../../src/dashboard/index.js';
 
 const runs = {};
@@ -46,11 +47,12 @@ before(async () => {
 
 const fold = (events) => events.reduce(reduce, initialState());
 const at = (events) => Date.parse(events.at(-1).ts) + 1000;
-// compact panels put each role on one line: "<glyph> MICHAEL  <STATUS>  <activity>"
+// compact panels put each role on one line: "<glyph> PLANNER  <STATUS>  <activity>" (the Short name)
+const shortName = (id) => ROLE_SHORT[id].toUpperCase();
 function roleLine(events, role, state = fold(events)) {
   // a short screen keeps the panels compact
   const out = renderDashboard(state, events, { width: 90, height: 12, color: false, now: at(events) });
-  const line = out.split('\n').find((l) => new RegExp(`^ \\S+ ${role.toUpperCase()} `).test(l));
+  const line = out.split('\n').find((l) => new RegExp(`^ \\S+ ${shortName(role)} `).test(l));
   assert.ok(line, out);
   return line;
 }
@@ -63,31 +65,31 @@ test('every role-only status of the real run is what the MICHAEL box shows, even
     if (e.type !== 'agent_status' || e.instanceId) return;
     const prefix = events.slice(0, i + 1);
     const line = roleLine(prefix, e.agent);
-    assert.match(line, new RegExp(`${e.agent.toUpperCase()} +${e.status.toUpperCase()}\\b`), `after seq ${e.seq}: ${line}`);
+    assert.match(line, new RegExp(`${shortName(e.agent)} +${e.status.toUpperCase()}\\b`), `after seq ${e.seq}: ${line}`);
     checked += 1;
   });
   assert.ok(checked >= 6, `${checked} role-only statuses`);
   const ask = events.findIndex((e) => e.type === 'hitl_request');
   const st = fold(events.slice(0, ask + 1));
   assert.equal(st.instances.michael.status, 'error');
-  assert.match(roleLine(events.slice(0, ask + 1), 'michael'), /MICHAEL +BLOCKED +Needs a human!/);
+  assert.match(roleLine(events.slice(0, ask + 1), 'michael'), /PLANNER +BLOCKED +Needs a human!/);
 });
 
 test('mid-run: MICHAEL waits while the planner lane is done or (older producers) idle', () => {
   const { events, state } = runs.parallel;
   assert.equal(state.instances.michael.status, 'done');
-  assert.match(roleLine(events, 'michael', state), /MICHAEL +WAITING +Overseeing m2/);
+  assert.match(roleLine(events, 'michael', state), /PLANNER +WAITING +Overseeing m2/);
   const older = events.filter((e) => !(e.type === 'agent_status' && e.instanceId === 'michael' && e.status === 'done'));
   assert.equal(fold(older).instances.michael.status, 'idle');
-  assert.match(roleLine(older, 'michael'), /MICHAEL +WAITING +Overseeing m2/);
-  assert.match(roleLine(events, 'dwight', state), /DWIGHT +(THINKING|WORKING) +2 lanes: dwight-m1, dwight-m2/);
+  assert.match(roleLine(older, 'michael'), /PLANNER +WAITING +Overseeing m2/);
+  assert.match(roleLine(events, 'dwight', state), /DEVELOPER +(THINKING|WORKING) +2 lanes: m1, m2/);
 });
 
 test('lanes, worktrees and messages of the real parallel run', () => {
   const { events, state } = runs.parallel;
   const out = renderDashboard(state, events, { width: 120, height: 40, color: false, now: at(events) });
-  for (const text of ['Lanes  2 live, 1 done', 'dwight-m1', 'm1 · worktree · host', 'm2 · worktree · host', 'Messages  1',
-    'human -> dwight-m2  delivered  Keep the CLI flags short', 'dwight-m1  started  m1  worktree  host']) {
+  for (const text of ['Lanes  2 live, 1 done', 'Developer · m1', 'm1 · worktree · host', 'm2 · worktree · host', 'Messages  1',
+    'Human -> Developer · m2  delivered  Keep the CLI flags short', 'Developer · m1  started  m1  worktree  host']) {
     assert.ok(out.includes(text), `missing ${JSON.stringify(text)}\n${out}`);
   }
 });
@@ -114,7 +116,7 @@ test('unknown deliveries and refused chat commands are shown for what they are',
     { v: 1, seq: 901, ts: st.updatedAt, runId: st.runId, type: 'chat_command_rejected', delivery: 'rejected', reason: 'Stale chat command' },
   ];
   const out = renderDashboard(st, [...events, ...extra], { width: 120, height: 40, color: false, now: at(events) });
-  for (const text of ['Messages  2, 1 unknown', 'dwight-m1 -> angela-m1  unknown  ping', 'message u1  unknown  not resent automatically  steer ACK timed out',
+  for (const text of ['Messages  2, 1 unknown', 'Developer · m1 -> QA · m1  unknown  ping', 'message u1  unknown  not resent automatically  steer ACK timed out',
     'chat command rejected  Stale chat command']) {
     assert.ok(out.includes(text), `missing ${JSON.stringify(text)}\n${out}`);
   }

@@ -254,7 +254,7 @@ test('deliveryNews announces settled deliveries of own messages once', () => {
   const entries = [{ id: 'a', to: 'dwight-m1' }, { id: 'b', to: 'angela-m1', reason: 'Recipient completed before acknowledgement' }];
   const prev = new Map([['a', 'queued'], ['b', 'queued']]);
   assert.equal(deliveryNews(prev, new Map([['a', 'delivered'], ['b', 'rejected']]), entries),
-    'Message to dwight-m1 delivered. Message to angela-m1 rejected: Recipient completed before acknowledgement');
+    'Message to the Developer (m1) delivered. Message to the QA Tester (m1) rejected: Recipient completed before acknowledgement');
   assert.equal(deliveryNews(new Map([['a', 'delivered']]), new Map([['a', 'delivered']]), entries), '');
   assert.equal(deliveryNews(new Map(), new Map([['a', 'queued']]), entries), '');
 });

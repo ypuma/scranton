@@ -1,7 +1,7 @@
 // Run line (status, elapsed, connection, key figures), alert bar and mailboxes. The milestones are the cards of
 // the board (board.js).
 import {
-  PARTICIPANTS, displayName, totals, humanNeeded, lanesOf, isBusy, workflowOf, workflowText, stepNames, customRoles,
+  PARTICIPANTS, displayName, theName, totals, humanNeeded, lanesOf, isBusy, workflowOf, workflowText, stepNames, customRoles,
   breakerTitle, checkView, stalledText, TRIP_WORD,
 } from './state.js';
 import { formatTokens, formatCost, formatDuration, formatWhen, runElapsed, plural } from './format.js';
@@ -226,8 +226,9 @@ export function createDashboard({ hasRun = () => null } = {}) {
       const meta = el('div', 'mb-meta');
       const kind = el('span', 'mb-kind', String(m.kind ?? 'note').replace('_', ' '));
       kind.dataset.kind = m.kind;
-      const inst = m.instance && m.instance !== id ? ` to ${m.instance}` : '';
-      meta.append(kind, `from ${displayName(m.from, s)}${inst}${m.read ? ' · read' : ' · unread'}`);
+      // "from the Planner to the Developer (m2)"
+      const inst = m.instance && m.instance !== id ? ` to ${theName(m.instance, s)}` : '';
+      meta.append(kind, `from ${theName(m.from, s)}${inst}${m.read ? ' · read' : ' · unread'}`);
       const sum = el('p', 'mb-summary', m.summary);
       sum.title = m.summary;
       li.append(head, meta, sum);

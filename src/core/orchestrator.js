@@ -1,5 +1,5 @@
 import { auditRole, BUILTIN_ROLES } from './agents-config.js';
-import { activeRoles, normalizeWorkflow, PASS_KEYWORDS, ROLE_NAMES, GATE_ROLES } from './workflow.js';
+import { activeRoles, normalizeWorkflow, PASS_KEYWORDS, ROLE_NAMES, GATE_ROLES, promptName, roleInSentence } from './workflow.js';
 import { stagePrompt, promptAudit, resolvePrompt, promptForRun } from './prompts.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,7 +33,7 @@ class RunAborted extends Error {
 }
 
 /**
- * Michael: the orchestrator. Plans, hands work between Dwight and Angela through the Hive,
+ * The orchestrator: plans with the Planner, hands work between the Developer and the gates through the Hive,
  * counts failed cycles, trips the circuit breaker and asks the human.
  *
  * Options: config, request handling flags (noPlan, onBreaker 'ask'|'abort'|'skip'), `hitl(ctx, {signal})`
@@ -142,7 +142,7 @@ export class Orchestrator {
       return { runId: this.runId, status: 'failed', summary: `cannot prepare workspace/hive: ${err.message}`, signaled: false };
     }
     let started = false, stopTimer;
-    // Skipping planning still needs Michael's audited prompt for progress checks.
+    // Skipping planning still needs the Planner's audited prompt for progress checks.
     const roles = this.standaloneAgent ? [this.standaloneAgent] : activeRoles(config);
     const auditedRoles = roles.map((id) => auditRole({ ...this.roleMap[id], tools: config.agents[id].tools }));
     try {
@@ -166,11 +166,11 @@ export class Orchestrator {
       this.#prepare();
       this.runtime = await this.runtimeFactory({ hiveDir: this.hive.dir, markerDir: path.join(this.hive.dir, 'agent-step-markers'), executorId: `run:${this.runId}`, appVersion: await agentAppVersion() });
       this.chat = new ChatRouter({ hiveDir: this.hive.dir, runId: this.runId, emit: (type, fields) => this.emit(type, fields) });
-      this.chat.register('michael');
+      this.#register('michael');
       this.chatTimer = setInterval(() => void this.chat.consume().catch((err) => this.log('error', err.message)), 100);
       if (this.standaloneAgent) {
         const role = this.standaloneAgent;
-        this.chat.register(role);
+        this.#register(role);
         this.#deliver({ to: role, from: 'human', kind: 'task', body: this.request, summary: oneLine(this.request) });
         const agentResult = await this.#runAgent(role, { milestone: null, cycle: null });
         result = { status: agentResult.ok ? 'success' : 'failed', summary: agentResult.failure?.message ?? 'Standalone isolated invocation complete; changes retained in private worktree, not integrated', text: agentResult.text, keyword: agentResult.keyword };
@@ -180,9 +180,9 @@ export class Orchestrator {
       this.setStatus('michael', 'done', 'Planning complete', this.instances.has('michael') ? 'michael' : undefined);
       if (plan.answer !== undefined) {
         this.reply = this.#reply('michael', 'answer', plan.answer);
-        result = { status: 'success', summary: 'Answered by Michael' };
+        result = { status: 'success', summary: `Answered by ${roleInSentence('michael')}` };
       } else {
-      for (const m of plan.milestones) for (const role of ['dwight', ...this.workflow.gates.flat()]) this.chat.register(`${role}-${m.id}`);
+      for (const m of plan.milestones) for (const role of ['dwight', ...this.workflow.gates.flat()]) this.#register(role, m.id);
       const outcomes = await runDag(plan.milestones, {
         maxParallel: config.execution?.maxParallel ?? 1,
         paused: () => this.humanPending > 0,
@@ -250,6 +250,16 @@ export class Orchestrator {
     }
   }
 
+  #register(role, milestone = null) {
+    const name = this.names[role] ?? role;
+    this.chat.register(milestone ? `${role}-${milestone}` : role, name, milestone);
+  }
+
+  // A role at the start of a sentence: "The Developer", or a custom agent's own name.
+  #subject(id) {
+    return roleInSentence(id, this.names[id], true);
+  }
+
   // ---- planning -------------------------------------------------------------------------
 
   #planWithoutMichael() {
@@ -279,8 +289,8 @@ export class Orchestrator {
       this.#deliver({ to: 'michael', from, kind, body, summary: `Plan: ${oneLine(this.request)}` });
       const result = await this.#runAgent('michael', { milestone: null, cycle: null });
       if (!result.ok) {
-        const reason = `Michael could not plan: ${result.failure.message}`;
-        const choice = await this.#askHuman({ milestoneId: null, title: 'Planning failed', reason, feedbackTarget: 'Michael', skipLabel: 'skip planning (one milestone)' });
+        const reason = `${this.#subject('michael')} could not plan: ${result.failure.message}`;
+        const choice = await this.#askHuman({ milestoneId: null, title: 'Planning failed', reason, feedbackTarget: roleInSentence('michael'), skipLabel: 'skip planning (one milestone)' });
         if (choice.decision === 'abort') throw new RunAborted('Aborted by the human during planning');
         if (choice.decision === 'skip') {
           this.log('warn', 'Planning skipped by the human; using one milestone for the whole request');
@@ -296,10 +306,10 @@ export class Orchestrator {
         continue;
       }
       if (this.conversation && result.keyword === 'ANSWER_READY') return { answer: result.text };
-      if (result.keyword !== 'PLAN_READY') this.log('warn', "Michael's answer did not end with [PLAN_READY]; using the plan it contains");
+      if (result.keyword !== 'PLAN_READY') this.log('warn', `${this.#subject('michael')}'s answer did not end with [PLAN_READY]; using the plan it contains`);
       const parsed = parsePlan(result.text);
       if (parsed.error) {
-        this.log('warn', `Michael's plan is unusable (${parsed.error}); falling back to one milestone for the whole request`);
+        this.log('warn', `${this.#subject('michael')}'s plan is unusable (${parsed.error}); falling back to one milestone for the whole request`);
         return this.#planWithoutMichael();
       }
       this.#publishPlan(parsed);
@@ -324,7 +334,7 @@ export class Orchestrator {
       const body = (this.#digest(result) + '\nLast agent reports:\n' + reports).slice(0, 8000 - instruction.length) + instruction;
       this.setStatus('michael', 'thinking', 'Writing the report...');
       this.#deliver({ to: 'michael', from: 'human', kind: 'report_request', body, summary: 'Closing report' });
-      this.chat.register('michael');
+      this.#register('michael');
       if (this.instances.has('michael')) this.instances.get('michael').sessionId = randomUUID();
       const report = await this.#runAgent('michael', { milestone: null, cycle: null, report: true });
       if (!this.aborting && report.ok && report.keyword === 'REPORT_READY') this.reply = this.#reply('michael', 'report', report.text);
@@ -387,11 +397,11 @@ export class Orchestrator {
       inbox = next;
       const rule = changed === false ? 'no_change' : history.length && normalizeFailure(failureText) === normalizeFailure(history.at(-1).text) ? 'repeat' : null;
       history.push({ cycle, text: failureText, changed });
-      let verdict = 'stalled', source = rule ? 'rule' : 'michael', progressReason = rule === 'no_change' ? 'Dwight delivered no file changes' : 'The full failure repeats';
+      let verdict = 'stalled', source = rule ? 'rule' : 'michael', progressReason = rule === 'no_change' ? `${this.#subject('dwight')} delivered no file changes` : 'The full failure repeats';
       if (!rule) {
         try {
           const instanceId = `michael-${m.id}`;
-          this.chat.register(instanceId);
+          this.#register('michael', m.id);
           this.#deliver({ to: 'michael', from: 'michael', kind: 'progress', milestone: m.id, cycle, body: progressRequestBody(m, history), summary: `Progress check for ${m.id} cycle ${cycle}` });
           const result = await this.#runAgent('michael', { milestone: m.id, cycle, progress: true });
           const keywords = [...String(result.text).matchAll(/\[(PROGRESS|STALLED)\]/g)];
@@ -426,11 +436,11 @@ export class Orchestrator {
       return null;
     };
 
-    // Handles a Dwight/Angela pause (infrastructure failure or [BLOCKED]); returns 'skipped' to skip.
+    // Handles a Developer/QA Tester pause (infrastructure failure or [BLOCKED]); returns 'skipped' to skip.
     const pause = async (agent, reason, text) => {
       const choice = await this.#askHuman({
         milestoneId: m.id,
-        title: `${this.names[agent]} needs a human on ${m.id}`,
+        title: `${this.#subject(agent)} needs a human on ${m.id}`,
         reason,
         excerpt: text ? excerpt(text) : null,
         excerptLabel: `${this.names[agent]}'s output`
@@ -457,9 +467,9 @@ export class Orchestrator {
           }
           const r = await this.#runAgent('dwight', { milestone: m.id, cycle });
           if (!r.ok) {
-            if ((await pause('dwight', `Dwight could not run: ${r.failure.message}`, null)) === 'skipped') break;
+            if ((await pause('dwight', `${this.#subject('dwight')} could not run: ${r.failure.message}`, null)) === 'skipped') break;
           } else if (r.keyword === 'BLOCKED') {
-            if ((await pause('dwight', `Dwight reported [BLOCKED]: ${summaryLine(r.text)}`, r.text)) === 'skipped') break;
+            if ((await pause('dwight', `${this.#subject('dwight')} reported [BLOCKED]: ${summaryLine(r.text)}`, r.text)) === 'skipped') break;
           } else if (r.keyword === 'TASK_COMPLETE') {
             if (this.worktrees) {
               try {
@@ -480,7 +490,7 @@ export class Orchestrator {
             stage = 0;
             phase = 'angela';
             needDeliver = true;
-            inbox = { kind: 'handoff', from: 'dwight', body: handoffBody({ milestone: m, request: this.request, cycle, dwightReport, role: 'angela', definition: this.roleMap.angela }), summary: `Dwight finished ${m.id}: ${summaryLine(r.text)}` };
+            inbox = { kind: 'handoff', from: 'dwight', body: handoffBody({ milestone: m, request: this.request, cycle, dwightReport, role: 'angela', definition: this.roleMap.angela }), summary: `${this.#subject('dwight')} finished ${m.id}: ${summaryLine(r.text)}` };
           } else {
             try {
               if (this.worktrees) await this.worktrees.snapshotWorktree({ agent: 'dwight', milestoneId: m.id });
@@ -490,7 +500,7 @@ export class Orchestrator {
               continue;
             }
             const next = { kind: 'task', from: 'michael', body: dwightMessage({ kind: 'task', ...ctx, angelaReport, gateReports, note: `Your previous attempt ended without the [TASK_COMPLETE] keyword. Finish the work and end your final message with [TASK_COMPLETE] (or [BLOCKED] if you cannot continue).\n\nIts last output:\n\n${excerpt(r.text, 30, 2000)}` }), summary: `${m.id}: previous attempt had no [TASK_COMPLETE]` };
-            if ((await failCycle('Dwight finished without [TASK_COMPLETE]', next)) === 'skipped') break;
+            if ((await failCycle(`${this.#subject('dwight')} finished without [TASK_COMPLETE]`, next)) === 'skipped') break;
           }
         } else {
           if (!this.legacyGates) {
@@ -535,7 +545,7 @@ export class Orchestrator {
             const failures = results.flatMap((r, i) => r.keyword === this.passes[roles[i]] ? [] : [{ agent: roles[i], name: this.roleMap[roles[i]].name, title: this.roleMap[roles[i]].builtin ? undefined : this.roleMap[roles[i]].title, ...r }]);
             if (failures.length) {
               gateReports = failures;
-              const reason = failures.length === 1 ? `${this.names[failures[0].agent]} reported [${failures[0].keyword ?? 'MISSING_KEYWORD'}]: ${summaryLine(failures[0].text)}` : `Stage ${stage + 1} failed: ${failures.map((r) => `${this.names[r.agent]} [${r.keyword ?? 'MISSING_KEYWORD'}]`).join(', ')}`;
+              const reason = failures.length === 1 ? `${this.#subject(failures[0].agent)} reported [${failures[0].keyword ?? 'MISSING_KEYWORD'}]: ${summaryLine(failures[0].text)}` : `Stage ${stage + 1} failed: ${failures.map((r) => `${this.names[r.agent]} [${r.keyword ?? 'MISSING_KEYWORD'}]`).join(', ')}`;
               const body = gateBugReport({ failures, ...ctx });
               gateFailureInbox = { kind: 'bug_report', from: failures[0].agent, body, summary: reason };
               if ((await failCycle(reason, gateFailureInbox, failures.map((r) => `${this.names[r.agent]}:\n${r.text}`).join('\n\n'))) === 'skipped') break;
@@ -565,9 +575,9 @@ export class Orchestrator {
           }
           const r = await this.#runAgent('angela', { milestone: m.id, cycle });
           if (!r.ok) {
-            if ((await pause('angela', `Angela could not run: ${r.failure.message}`, null)) === 'skipped') break;
+            if ((await pause('angela', `${this.#subject('angela')} could not run: ${r.failure.message}`, null)) === 'skipped') break;
           } else if (r.keyword === 'BLOCKED') {
-            if ((await pause('angela', `Angela reported [BLOCKED]: ${summaryLine(r.text)}`, r.text)) === 'skipped') break;
+            if ((await pause('angela', `${this.#subject('angela')} reported [BLOCKED]: ${summaryLine(r.text)}`, r.text)) === 'skipped') break;
           } else if (r.keyword === 'TEST_PASSED') {
             if (this.worktrees) {
               try {
@@ -584,12 +594,12 @@ export class Orchestrator {
                 continue;
               }
             }
-            this.emit('cycle_result', { milestoneId: m.id, cycle, result: 'passed', failedCycles: 0, reason: summaryLine(r.text) || 'Angela reported [TEST_PASSED]' });
+            this.emit('cycle_result', { milestoneId: m.id, cycle, result: 'passed', failedCycles: 0, reason: summaryLine(r.text) || `${this.#subject('angela')} reported [TEST_PASSED]` });
             this.emit('milestone_finished', { milestoneId: m.id, status: 'passed' });
             return 'passed';
           } else {
             angelaReport = r.text;
-            const reason = r.keyword ? `Angela reported [TEST_FAILED]: ${summaryLine(r.text)}` : 'Angela finished without a status keyword';
+            const reason = r.keyword ? `${this.#subject('angela')} reported [TEST_FAILED]: ${summaryLine(r.text)}` : `${this.#subject('angela')} finished without a status keyword`;
             const next = { kind: 'bug_report', from: 'angela', body: dwightMessage({ kind: 'bug_report', ...ctx, angelaReport }), summary: `QA failed: ${summaryLine(r.text)}` };
             if ((await failCycle(reason, next, r.text)) === 'skipped') break;
           }
@@ -608,7 +618,8 @@ export class Orchestrator {
   #deliver({ to, from, kind, body, summary, milestone = null, cycle = null }) {
     this.#checkAbort();
     const instanceId = milestone && (kind === 'progress' || ['dwight', ...this.workflow.gates.flat()].includes(to)) ? `${to}-${milestone}` : to;
-    if (to !== 'human' && kind !== 'report_request') body += `\n\n## Instance coordination\n\nYou are ${instanceId}. Exact recipient IDs: ${[...(this.chat?.instances.keys() ?? [])].join(', ')}. Use agent_chat for short coordination; queued is not delivered.\n`;
+    const reader = `${roleInSentence(to, promptName(this.names[to], to))}${instanceId === to ? '' : ` for ${milestone}`}`;
+    if (to !== 'human' && kind !== 'report_request') body += `\n\n## Instance coordination\n\nYou are ${instanceId}, ${reader}. Exact recipient IDs, each followed by who it is: ${this.chat?.recipients() ?? ''}. Use agent_chat for short coordination; queued is not delivered.\n`;
     const file = this.hive.deliver({ to: instanceId, from, kind, runId: this.runId, milestone, cycle, body });
     this.emit('hive_write', { from, to, file, kind, summary, instanceId, milestoneId: milestone, cycle });
   }
@@ -715,7 +726,7 @@ export class Orchestrator {
 
     if (result.failure) {
       this.setStatus(agentId, 'error', `Failed: ${result.failure.message.split('\n')[0]}`, instanceId);
-      this.log('error', `${agentId}: ${result.failure.message}`);
+      this.log('error', `${this.names[agentId] ?? agentId}: ${result.failure.message}`);
       if (!report && result.failure.kind === 'interrupted') this.#checkAbort();
     } else if (result.keyword === 'BLOCKED') {
       this.setStatus(agentId, 'blocked', `Blocked: ${summaryLine(result.text, 300)}`, instanceId);
@@ -747,7 +758,7 @@ export class Orchestrator {
     });
   }
 
-  async #askHumanNow({ milestoneId, title, reason, excerpt: shown = null, excerptLabel, feedbackTarget = 'Dwight', skipLabel }) {
+  async #askHumanNow({ milestoneId, title, reason, excerpt: shown = null, excerptLabel, feedbackTarget = roleInSentence('dwight'), skipLabel }) {
     this.setStatus('michael', 'blocked', 'Needs a human!');
     this.#deliver({ to: 'human', from: 'michael', kind: 'hitl', body: humanNote({ title, reason, excerpt: shown, excerptLabel }), summary: reason.split('\n')[0] });
     if (this.onBreaker === 'hive') rejectResponse(this.hive.dir, (level, message) => this.log(level, message));

@@ -2,7 +2,7 @@
 // and 6): the roles document, what a row says, the prompt, settings and new-agent requests and their checks.
 // No DOM, so Node can test it. Prompt text only ever lives in the open editor and the request body.
 import { stripBidi } from './format.js';
-import { AGENT_IDS, GATE_ROLES, ROLE_TITLES, ROLE_ID_RE, displayName } from './state.js';
+import { AGENT_IDS, GATE_ROLES, ROLE_ID_RE, displayName, roleTitle, roleDescription, theName } from './state.js';
 import { modelKey, parseModelKey, AUTOMATIC } from './accounts.js';
 
 export const AGENTS_URL = '/api/agents';
@@ -46,7 +46,11 @@ const KEYWORD_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const str = (v) => (typeof v === 'string' ? stripBidi(v) : '');
 // the prompt is edited as it is stored: bidi controls in it are the author's, not something to hide
 const raw = (v) => (typeof v === 'string' ? v : '');
-const whose = (role) => (role?.name ? `${role.name}'s prompt` : 'This prompt');
+const capital = (t) => `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
+// "The Developer's prompt", "Seclint's prompt"
+// the name inside a sentence; a role that was not parsed here has only its name
+const said = (role) => role.inText ?? role.name;
+const whose = (role) => (role?.name ? `${capital(said(role))}'s prompt` : 'This prompt');
 const list = (v, re) => [...new Set((Array.isArray(v) ? v : []).filter((x) => typeof x === 'string' && re.test(x)))];
 // a textarea turns CRLF into LF, so line endings alone are no change
 const lines = (t) => raw(t).replace(/\r\n?/g, '\n');
@@ -66,10 +70,17 @@ function parseRole(r) {
   const source = PROMPT_SOURCES.includes(p.source) ? p.source : 'builtin';
   const builtin = typeof r.builtin === 'boolean' ? r.builtin : AGENT_IDS.includes(r.id);
   const gate = r.gate === true;
+  // one of the five built-ins is called what the table says, whatever the server sends
+  const known = AGENT_IDS.includes(r.id);
+  const name = known ? displayName(r.id) : str(r.name) || r.id;
   return {
     id: r.id,
-    name: str(r.name) || displayName(r.id),
-    title: str(r.title) || ROLE_TITLES[r.id] || '',
+    name,
+    // the name inside a sentence: "the Developer"; a custom agent by the name its author gave it
+    inText: known ? theName(r.id) : name,
+    title: known ? roleTitle(r.id) : str(r.title),
+    // what the agent does, in full; a custom agent has none
+    description: known ? roleDescription(r.id) : '',
     kind: Object.hasOwn(KIND_LABEL, r.kind) ? r.kind : gate ? 'gate' : r.id === 'michael' ? 'planner' : r.id === 'dwight' ? 'developer' : null,
     builtin,
     keywords: list(r.keywords, KEYWORD_RE),
@@ -150,8 +161,8 @@ export function roleView(r) {
   return {
     source: starter ? 'Starter' : SOURCE_LABEL[r.prompt.source],
     sourceTone: r.prompt.source === 'custom' ? 'on' : 'quiet',
-    // the kind once: a title that already says it ("Planner") needs no second word for it
-    kind: [r.title.toLowerCase() === KIND_LABEL[r.kind]?.toLowerCase() ? null : KIND_LABEL[r.kind], r.builtin === false && 'custom'].filter(Boolean).join(' · '),
+    // the kind once: a name or a title that already says it ("Planner") needs no second word for it
+    kind: [[r.name, r.title].some((t) => t.toLowerCase() === KIND_LABEL[r.kind]?.toLowerCase()) ? null : KIND_LABEL[r.kind], r.builtin === false && 'custom'].filter(Boolean).join(' · '),
     model: modelSummary(r),
     tools: r.tools.join(' · '),
     action: r.prompt.editable ? 'Edit prompt' : 'View prompt',
@@ -179,15 +190,15 @@ export function isDirty(role, draft) {
 export function resetConfirm(role) {
   const starter = role.builtin === false;
   return {
-    title: `Reset ${role.name}'s prompt?`,
-    detail: `Deletes the custom prompt on this computer, so runs started from now on use the ${starter ? 'starter' : 'built-in'} prompt for ${role.name}. A run in progress keeps the prompt it started with.`,
+    title: `Reset ${said(role)}'s prompt?`,
+    detail: `Deletes the custom prompt on this computer, so runs started from now on use the ${starter ? 'starter' : 'built-in'} prompt for ${said(role)}. A run in progress keeps the prompt it started with.`,
     ok: starter ? 'Reset to starter' : 'Reset to built-in',
   };
 }
 
 export function discardConfirm(role) {
   return {
-    title: `Discard changes to ${role.name}'s prompt?`,
+    title: `Discard changes to ${said(role)}'s prompt?`,
     detail: 'The edits in the editor were not saved. Nothing on the server changes.',
     ok: 'Discard changes',
   };
@@ -195,7 +206,7 @@ export function discardConfirm(role) {
 
 export function discardSettingsConfirm(role) {
   return {
-    title: role ? `Discard changes to ${role.name}'s settings?` : 'Discard the new agent?',
+    title: role ? `Discard changes to ${said(role)}'s settings?` : 'Discard the new agent?',
     detail: role ? 'The changes in the form were not saved. Nothing on the server changes.' : 'The agent was not created. Nothing on the server changes.',
     ok: 'Discard changes',
   };
@@ -261,7 +272,7 @@ function textField(v, field, what, max) {
 
 function instructionField(v) {
   const t = lines(v).trim();
-  if (!t) return { error: 'Write the handoff instruction: what this agent checks in Dwight\'s work.', field: 'instruction' };
+  if (!t) return { error: `Write the handoff instruction: what this agent checks in ${theName('dwight')}'s work.`, field: 'instruction' };
   if (t.length > INSTRUCTION_MAX) return { error: `The handoff instruction is ${t.length} characters; the limit is ${INSTRUCTION_MAX}.`, field: 'instruction' };
   return { value: t };
 }
@@ -383,7 +394,7 @@ export function agentErrorField(message, fields) {
 
 // Error text for a failed settings, create or delete request.
 export function agentError(status, message, role = null) {
-  if (status === 404) return `${role ? role.name : 'This agent'} is no longer on the server. Close and open the drawer to see the agents there are.`;
+  if (status === 404) return `${role ? capital(said(role)) : 'This agent'} is no longer on the server. Close and open the drawer to see the agents there are.`;
   if (status === 409 && !message) return role ? 'That setting is set by scranton.config.json or the environment, so it cannot be changed here.' : `There is an agent with that id already, or there are ${CUSTOM_MAX} custom agents.`;
   return message || `The request failed (HTTP ${status}).`;
 }

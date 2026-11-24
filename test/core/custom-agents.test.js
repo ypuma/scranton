@@ -223,7 +223,7 @@ test('review: CLI log uses sanitized custom names and resets on the next run', (
   send('run_started', { roles: [{ id: 'seclint', name: 'Li\nnt\x1b', builtin: false }] });
   send('hive_write', { from: 'dwight', to: 'seclint', kind: 'handoff', summary: '' });
   send('agent_finished', { agent: 'seclint', exitCode: 0, keyword: 'SECLINT_PASSED', durationMs: 1 });
-  assert.match(output, /Dwight -> Lint/); assert.match(output, /Lint\s+finished \[SECLINT_PASSED\]/);
+  assert.match(output, /Developer -> Lint/); assert.match(output, /Lint\s+finished \[SECLINT_PASSED\]/);
   assert.doesNotMatch(output, /seclint|\x1b/);
   output = ''; send('run_started', {}); send('agent_finished', { agent: 'seclint', exitCode: 0, durationMs: 1 });
   assert.match(output, /seclint\s+finished/);

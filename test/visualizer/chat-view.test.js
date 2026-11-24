@@ -82,9 +82,9 @@ test('each entry is drawn as its kind: a labelled article, one quiet line for ac
   ]);
   for (const x of h.items().filter((n) => n.tagName === 'ARTICLE')) assert.ok(x.getAttribute('aria-label'), `${x.dataset.kind} has a label`);
   // The fixture is yesterday in this fixed clock and timezone.
-  assert.equal(h.item('agent').getAttribute('aria-label'), 'Michael, Orchestrator, 2026-11-11 09:00');
+  assert.equal(h.item('agent').getAttribute('aria-label'), 'Planner, Plans the work, 2026-11-11 09:00');
   assert.equal(h.item('activity').getAttribute('aria-label'), null, 'an activity line is read as the text it is');
-  assert.equal(h.item('activity').querySelector('.chat-act').textContent, 'Michael · read bin/scranton.js');
+  assert.equal(h.item('activity').querySelector('.chat-act').textContent, 'Planner · read bin/scranton.js');
 
   // what a model wrote goes through the Markdown subset, what a person typed is shown as typed
   const agent = h.item('agent');
@@ -93,10 +93,10 @@ test('each entry is drawn as its kind: a labelled article, one quiet line for ac
   assert.equal(agent.querySelector('pre').textContent, 'parseArgs()');
   assert.equal(h.item('human').querySelector('.chat-body').children.length, 0);
   assert.equal(h.item('human').querySelector('.chat-body').textContent, 'Check **src/core/cli.js**');
-  assert.equal(h.item('human').querySelector('.chat-context').textContent, 'to michael');
+  assert.equal(h.item('human').querySelector('.chat-context').textContent, 'to the Planner');
 
   const reply = h.item('reply');
-  assert.deepEqual(reply.querySelector('.chat-head').children.map((n) => [n.className, n.textContent]).slice(0, 2), [['chat-kind', 'Answer'], ['chat-who', 'Michael']]);
+  assert.deepEqual(reply.querySelector('.chat-head').children.map((n) => [n.className, n.textContent]).slice(0, 2), [['chat-kind', 'Answer'], ['chat-who', 'Planner']]);
   assert.equal(reply.querySelector('.chat-body').querySelector('code').textContent, 'parseArgs');
   assert.match(reply.querySelector('.chat-outcome').textContent, /^Success · \d+s$/);
   assert.equal(reply.dataset.tone, 'ok');
@@ -201,7 +201,7 @@ test('an agent message: the keyword as a quiet chip, an intermediate one lighter
   const chip = final.querySelector('.chat-keyword');
   assert.deepEqual([chip.textContent, chip.dataset.tone, chip.dataset.keyword, chip.title], ['Work done', 'quiet', 'TASK_COMPLETE', '[TASK_COMPLETE]']);
   assert.equal(final.querySelector('.chat-body').textContent, 'Implemented m2.', 'the keyword line is not shown twice');
-  assert.deepEqual(final.querySelector('.chat-head').children.map((n) => n.textContent).slice(0, 3), ['Dwight', 'Developer', 'm2 · cycle 1']);
+  assert.deepEqual(final.querySelector('.chat-head').children.map((n) => n.textContent).slice(0, 3), ['Developer', 'Writes the code', 'm2 · cycle 1']);
   assert.equal(final.querySelector('.chat-note').textContent, 'This text was shortened.');
   assert.equal(note.querySelector('.chat-note'), null);
 });
@@ -435,7 +435,7 @@ test('a render that changes nothing about an entry leaves its nodes alone, so th
   assert.equal(h.item('agent'), entry, 'the same node');
   assert.equal(entry.querySelector('button[data-toggle]'), more, 'with the same button');
   assert.equal(document.activeElement, more);
-  assert.equal(h.item('activity').querySelector('.chat-act').textContent, 'Dwight · 2 tools, last: read a.js', 'the tool line was updated in place');
+  assert.equal(h.item('activity').querySelector('.chat-act').textContent, 'Developer · 2 tools, last: read a.js', 'the tool line was updated in place');
   // nothing changed at all: not even a look at the nodes
   const before = h.items();
   h.view.render();
@@ -483,7 +483,7 @@ test('only a new reply and a question that waits are announced, once, and never 
   assert.deepEqual(h.said, [], 'messages, tools, verdicts and steering are not announced');
 
   h.add(['hitl_request', { milestoneId: 'm2', reason: 'Two failed cycles on m2.', options: ['retry'] }]);
-  assert.deepEqual(h.said, [['question', 'Michael asks: Two failed cycles on m2.']]);
+  assert.deepEqual(h.said, [['question', 'The Planner asks: Two failed cycles on m2.']]);
   h.add(msg('dwight', 'Still here.'));
   h.view.render();
   assert.equal(h.said.length, 1, 'not again on the next render');
@@ -491,7 +491,7 @@ test('only a new reply and a question that waits are announced, once, and never 
   assert.equal(h.said.length, 1, 'the answer is the human\'s own');
 
   h.add(['run_reply', { from: 'michael', kind: 'report', text: 'All done.\n\nDetails follow.' }]);
-  assert.deepEqual(h.said.at(-1), ['reply', 'Report from Michael: All done. Details follow.']);
+  assert.deepEqual(h.said.at(-1), ['reply', 'Report from the Planner: All done. Details follow.']);
   h.add(['run_finished', { status: 'success', summary: 'All 1 milestones passed' }]);
   assert.equal(h.said.length, 2, 'the outcome line under the reply is not a second announcement');
 
@@ -920,7 +920,7 @@ test('the Messages composer and the Chat composer are one implementation: the sa
   assert.deepEqual(messages.posted, [{ url: '/api/projects/core/chats/a/chat', body: { runId: 'run-a', to: 'dwight-m1', text: 'Use todos.json' } }]);
 
   const by = Object.fromEntries(chat.trace);
-  assert.deepEqual(by.start.options, [['dwight-m1', 'dwight-m1 (working)']]);
+  assert.deepEqual(by.start.options, [['dwight-m1', 'Developer · m1 (working)']]);
   assert.deepEqual([by.start.off, by.start.block], ['false', 'Ctrl+Enter sends']);
   assert.deepEqual(by.empty.status, ['Pick the agent instance that should get the message.', 'error']);
   assert.deepEqual(by.empty.invalid, ['true', null]);
@@ -928,10 +928,10 @@ test('the Messages composer and the Chat composer are one implementation: the sa
   assert.deepEqual(by['too long'].invalid, [null, 'true']);
   assert.equal(by['too long'].count, '16001 / 16000');
   assert.deepEqual(by.typed.invalid, [null, null], 'typing clears the mark');
-  assert.deepEqual([by.sending.status, by.sending.send, by.sending.to], [['Sending to dwight-m1...', 'busy'], [true, 'Sending...'], true]);
+  assert.deepEqual([by.sending.status, by.sending.send, by.sending.to], [['Sending to the Developer (m1)...', 'busy'], [true, 'Sending...'], true]);
   assert.deepEqual([by.queued.draft, by.queued.count, by.queued.send], ['', '0 / 16000', [false, 'Send']]);
-  assert.match(by.queued.status[0], /^Queued for dwight-m1\./);
-  assert.deepEqual(by.delivered.status, ['Message to dwight-m1 delivered', '']);
+  assert.match(by.queued.status[0], /^Queued for the Developer \(m1\)\./);
+  assert.deepEqual(by.delivered.status, ['Message to the Developer (m1) delivered', '']);
   assert.deepEqual([by.refused.status, by.refused.draft], [['dwight-m1 is not running any more', 'error'], 'Again']);
   assert.deepEqual([by.over.off, by.over.block, by.over.send[0]], ['true', 'No run is in progress.', true]);
 
@@ -941,7 +941,7 @@ test('the Messages composer and the Chat composer are one implementation: the sa
   // delivery news comes from the stream, so both composers have it, whichever is on screen
   for (const run of [messages, chat]) {
     const after = Object.fromEntries(run.trace).delivered;
-    assert.deepEqual(after.status, ['Message to dwight-m1 delivered', '']);
+    assert.deepEqual(after.status, ['Message to the Developer (m1) delivered', '']);
   }
   assert.equal(chat.h.page.sent, 1, 'the Chat view is told when its message was taken, to show it');
   assert.equal(messages.h.page.sent, 0);
@@ -1012,8 +1012,8 @@ test('consecutive same-speaker/context messages share a name line while tools an
   assert.deepEqual(agents.map((x) => x.dataset.cont), ['false', 'true', 'false', 'false']);
   const tool = h.item('activity');
   assert.equal(tool.dataset.cont, 'true');
-  assert.match(tool.querySelector('.sr-only').textContent, /^Dwight · /);
-  assert.match(agents[1].getAttribute('aria-label'), /^Dwight, Developer, m2 · cycle 1/);
+  assert.match(tool.querySelector('.sr-only').textContent, /^Developer · /);
+  assert.match(agents[1].getAttribute('aria-label'), /^Developer, Writes the code, m2 · cycle 1/);
   assert.equal(agents[1].querySelector('.chat-body').textContent, 'Implemented.');
   const css = read('styles.css');
   assert.match(css, /\.chat-entry\[data-cont="true"\] \.chat-head > :not\(\.badge, \.copy-btn\) \{ display: none; \}/);

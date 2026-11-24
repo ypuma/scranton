@@ -98,7 +98,7 @@ export function createRunRail({
     else delete it.el.dataset.gate;
     say(it.glyph, STATUS_GLYPH[a.status] ?? (a.status === 'rejected' ? STATUS_GLYPH.cancelled : '○'));
     say(it.name, a.name);
-    it.name.title = a.name;
+    it.name.title = [a.name, a.about].filter(Boolean).join(': ');
     say(it.role, a.role);
     it.role.title = a.role;
     say(it.status, a.status);

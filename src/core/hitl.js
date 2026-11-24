@@ -1,5 +1,6 @@
 import readline from 'node:readline/promises';
 import { styler } from './log.js';
+import { ROLE_NAMES, roleInSentence } from './workflow.js';
 
 export const HITL_OPTIONS = ['feedback', 'retry', 'skip', 'abort'];
 
@@ -19,11 +20,11 @@ export function createTerminalHitl({ stdin = process.stdin, stdout = process.std
     stdout.write(`\n${c.red(c.bold(`!! ${ctx.title}`))}\n`);
     stdout.write(`   ${c.bold('Reason:')} ${ctx.reason}\n`);
     if (ctx.excerpt) {
-      stdout.write(`   ${c.dim(`${ctx.excerptLabel ?? "Angela's last report"} (excerpt):`)}\n`);
+      stdout.write(`   ${c.dim(`${ctx.excerptLabel ?? `${ROLE_NAMES.angela}'s last report`} (excerpt):`)}\n`);
       for (const line of ctx.excerpt.split(/\r?\n/)) stdout.write(`   ${c.dim('|')} ${line}\n`);
     }
     stdout.write(
-      `   ${c.cyan('[f]')} feedback for ${ctx.feedbackTarget ?? 'Dwight'}   ${c.cyan('[r]')} retry   ` +
+      `   ${c.cyan('[f]')} feedback for ${ctx.feedbackTarget ?? roleInSentence('dwight')}   ${c.cyan('[r]')} retry   ` +
         `${c.cyan('[s]')} ${ctx.skipLabel ?? 'skip milestone'}   ${c.cyan('[a]')} abort\n`
     );
     const rl = readline.createInterface({ input: stdin, output: stdout, terminal: Boolean(stdin.isTTY) });
@@ -52,7 +53,7 @@ export function createTerminalHitl({ stdin = process.stdin, stdout = process.std
         if (decision === 'feedback') {
           let text = '';
           try {
-            text = (await read(`   Feedback for ${ctx.feedbackTarget ?? 'Dwight'} (one line): `)).trim();
+            text = (await read(`   Feedback for ${ctx.feedbackTarget ?? roleInSentence('dwight')} (one line): `)).trim();
           } catch {
             return aborted();
           }

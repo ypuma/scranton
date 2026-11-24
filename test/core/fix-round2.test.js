@@ -76,7 +76,7 @@ test('failure activities in durable events and state are capped at 300; diagnost
 test('unknown standalone agent is a usage error before Docker model selection', async (t) => {
   const dir = fixture(t); let output = ''; const stream = { write: (s) => output += s };
   assert.equal(await runCli(['agent', 'bob', 'x'], { cwd: dir, env: {}, stdout: stream, stderr: stream }), 2);
-  assert.match(output, /agent must be one of: michael, dwight, oscar, hank, angela/); assert.doesNotMatch(output, /explicit provider and model/);
+  assert.match(output, /agent must be one of: Planner \(id michael\), Developer \(id dwight\), Code Reviewer \(id oscar\), Security Auditor \(id hank\), QA Tester \(id angela\)/); assert.doesNotMatch(output, /explicit provider and model/);
   assert.equal(fs.existsSync(path.join(dir, 'hive')), false);
 });
 

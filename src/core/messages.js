@@ -1,5 +1,8 @@
 import { clip } from './util.js';
-import { ROLE_NAMES } from './workflow.js';
+import { ROLE_NAMES, roleInSentence } from './workflow.js';
+
+const developer = roleInSentence('dwight');
+const Developer = roleInSentence('dwight', ROLE_NAMES.dwight, true);
 
 const KEYWORD_ONLY = /^\W*\[[A-Z][A-Z0-9_]*\]\W*$/;
 
@@ -44,17 +47,17 @@ function criteriaList(m) {
 const DWIGHT_INTRO = {
   task: 'Implement this milestone in your current working directory.',
   bug_report: 'Gate verification failed for your previous work. Fix the reported failures first, then make sure every acceptance criterion holds.',
-  legacy_bug_report: "Angela's QA failed your previous work. Fix the reported failures first, then make sure every acceptance criterion holds.",
+  legacy_bug_report: `${roleInSentence('angela', ROLE_NAMES.angela, true)}'s QA failed your previous work. Fix the reported failures first, then make sure every acceptance criterion holds.`,
   feedback: 'A human intervened. Follow their feedback, then make sure every acceptance criterion holds.'
 };
 
-/** Dwight's inbox. Sessions are fresh per run, so every message carries the full milestone context. */
+/** The Developer's inbox. Sessions are fresh per run, so every message carries the full milestone context. */
 export function dwightMessage({ kind, milestone: m, request, completed = [], angelaReport = null, gateReports = null, humanFeedback = null, note = null, chatContext = '' }) {
   const parts = [`# ${kind === 'task' ? 'Task' : kind === 'bug_report' ? 'Bug report' : 'Feedback'}: milestone ${m.id} - ${m.title}`, '', DWIGHT_INTRO[kind === 'bug_report' && !gateReports ? 'legacy_bug_report' : kind]];
   if (humanFeedback) parts.push('', '## Human feedback', '', humanFeedback);
-  if (note) parts.push('', '## Note from Michael', '', note);
+  if (note) parts.push('', `## Note from ${roleInSentence('michael')}`, '', note);
   if (gateReports) for (const { agent, text, name, title } of gateReports) parts.push('', `## ${name ?? ROLE_NAMES[agent]}'s ${title ?? { oscar: 'Review', hank: 'Security', angela: 'QA' }[agent]} report`, '', text);
-  if (angelaReport) parts.push('', "## Angela's last QA report", '', angelaReport);
+  if (angelaReport) parts.push('', `## ${ROLE_NAMES.angela}'s last QA report`, '', angelaReport);
   parts.push('', '## Milestone', '', m.description, '', '## Acceptance criteria', '', criteriaList(m));
   parts.push('', '## Overall request (context only)', '', request);
   if (completed.length) parts.push('', '## Already completed milestones', '', completed.map((c) => `- ${c}`).join('\n'));
@@ -69,16 +72,16 @@ export function gateBugReport({ failures, ...context }) {
 export function handoffBody({ milestone: m, request, cycle, dwightReport, role = 'angela', definition = null, changedFiles = null, isolation = 'worktree', docker = false }) {
   const purpose = { oscar: 'review milestone', hank: 'security audit of milestone', angela: 'verify milestone' }[role] ?? (definition?.kind === 'gate' ? 'review milestone' : null);
   const instruction = {
-    oscar: 'Dwight reports the milestone as complete. Review the changes for correctness, edge cases, error handling, regressions, maintainability, and test coverage; do not create or modify files in the project.',
-    hank: 'Dwight reports the milestone as complete. Audit the changes for security vulnerabilities, including input validation, authorization, secret exposure, injection, and unsafe file or process operations; do not create or modify files in the project.',
-    angela: 'Dwight reports the milestone as complete. Verify every acceptance criterion independently; do not create or modify files in the project.'
+    oscar: `${Developer} reports the milestone as complete. Review the changes for correctness, edge cases, error handling, regressions, maintainability, and test coverage; do not create or modify files in the project.`,
+    hank: `${Developer} reports the milestone as complete. Audit the changes for security vulnerabilities, including input validation, authorization, secret exposure, injection, and unsafe file or process operations; do not create or modify files in the project.`,
+    angela: `${Developer} reports the milestone as complete. Verify every acceptance criterion independently; do not create or modify files in the project.`
   }[role];
   if (!purpose) throw new Error(`Invalid gate role: ${role}`);
   const guidance = role === 'angela' ? [] : [
     '## How to see the changes', '',
     isolation === 'shared'
-      ? "You are in the shared workspace. Dwight's changes are uncommitted: `git status --short` and `git diff` show them. The working tree can also contain earlier milestones' changes; use Dwight's report to focus on this milestone."
-      : "You are in your own checkout of Dwight's snapshot. The Changed files list below is authoritative; where Git is available, `git diff HEAD^ HEAD` shows the same delta." + (docker ? ' Docker masks `.git`, so rely on the list there.' : ''),
+      ? `You are in the shared workspace. ${Developer}'s changes are uncommitted: \`git status --short\` and \`git diff\` show them. The working tree can also contain earlier milestones' changes; use ${developer}'s report to focus on this milestone.`
+      : `You are in your own checkout of ${developer}'s snapshot. The Changed files list below is authoritative; where Git is available, \`git diff HEAD^ HEAD\` shows the same delta.` + (docker ? ' Docker masks `.git`, so rely on the list there.' : ''),
     ''
   ];
   const files = role !== 'angela' && changedFiles ? [
@@ -105,7 +108,7 @@ export function handoffBody({ milestone: m, request, cycle, dwightReport, role =
     '',
     ...guidance,
     ...files,
-    "## Dwight's report",
+    `## ${ROLE_NAMES.dwight}'s report`,
     '',
     dwightReport,
     '',
@@ -117,7 +120,7 @@ export function handoffBody({ milestone: m, request, cycle, dwightReport, role =
 
 export function humanNote({ title, reason, excerpt, excerptLabel }) {
   const parts = [`# ${title}`, '', `Reason: ${reason}`];
-  if (excerpt) parts.push('', `## ${excerptLabel ?? "Angela's last report"} (excerpt)`, '', excerpt);
+  if (excerpt) parts.push('', `## ${excerptLabel ?? `${ROLE_NAMES.angela}'s last report`} (excerpt)`, '', excerpt);
   parts.push('', 'Decide in the terminal running `scranton`: [f]eedback, [r]etry, [s]kip, [a]bort.');
   return parts.join('\n');
 }

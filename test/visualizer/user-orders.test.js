@@ -61,9 +61,9 @@ test('reducer: requests, decisions (an order with its quote, a narrowed write, a
     ['access_request', 'warn', 'results'],
     ['outside_write', 'warn', 'tools'], ['outside_write', 'warn', 'tools'], ['outside_write', 'warn', 'tools'],
   ]);
-  assert.equal(log[0].text, 'Dwight asks to read outside the project: C:\\Users\\me\\Documents - The human said: look in Documents');
+  assert.equal(log[0].text, 'The Developer asks to read outside the project: C:\\Users\\me\\Documents - The human said: look in Documents');
   assert.equal(log[1].text, 'Access granted: read C:\\Users\\me\\Documents (you asked for it) \u00b7 "Look in ~/Documents"');
-  assert.equal(log[4].text, 'Dwight asks to read outside the project: C:\\Users\\me\\.ssh (protected: credentials) - keys');
+  assert.equal(log[4].text, 'The Developer asks to read outside the project: C:\\Users\\me\\.ssh (protected: credentials) - keys');
   assert.equal(log[5].text, 'Access denied: read C:\\Users\\me\\.ssh (no answer in time)');
   assert.equal(log[7].text, 'Wrote outside the project, not covered by undo: C:\\Users\\me\\Desktop\\out\\a.md');
   assert.ok(log[6].text.includes(SCRIPT), 'the path stays the text it was');
@@ -151,7 +151,7 @@ test('verdict bodies: the grant of request_access, narrowed to read unless write
     'Read access allowed - the agent goes on', 'Write access allowed - the agent goes on', 'Approved - the agent goes on', 'Denied - the agent is told so',
   ]);
   assert.deepEqual(callView(write), { title: 'Change files outside the project', label: 'Path', text: 'D:\\out' });
-  assert.equal(askedText(read), 'Approval needed: Dwight \u00b7 dwight-m1 wants to read files outside the project: ~/Documents');
+  assert.equal(askedText(read), 'Approval needed: the Developer (m1) wants to read files outside the project: ~/Documents');
 });
 
 function manualTimers() {
@@ -193,7 +193,7 @@ test('card states: a read request offers Allow read and Deny, a write request Al
   assert.equal(h.find(read, 'approval-title').textContent, 'Read files outside the project');
   assert.equal(h.find(read, 'approval-args').textContent, '~/Documents');
   assert.equal(h.find(read, 'approval-reason').textContent, 'The human asked for it');
-  assert.equal(h.find(read, 'approval-who').textContent, 'Dwight \u00b7 dwight-m1');
+  assert.equal(h.find(read, 'approval-who').textContent, 'Developer \u00b7 m1');
   assert.deepEqual(['approve', 'read', 'write', 'deny'].map((v) => h.button(read, v).hidden), [true, false, true, false]);
   assert.equal(h.find(read, 'approval-warnings').hidden, true);
   assert.equal(h.button(read, 'read').className, 'btn btn-primary');
@@ -289,10 +289,10 @@ test('run panel: the grants with who decided and the quote, the outside writes, 
   const v = accessView(reduceAll(stream()));
   assert.equal(v.label, 'Permissions: Ask');
   assert.deepEqual(v.entries.map((x) => [x.path, x.line, x.quote]), [
-    ['C:\\Users\\me\\Documents', 'Read \u00b7 granted: you asked for it \u00b7 Dwight', 'Look in ~/Documents'],
-    ['C:\\Users\\me\\Desktop\\out', 'Read (write was asked) \u00b7 allowed by you \u00b7 Dwight', ''],
-    ['C:\\Users\\me\\.ssh', 'Read \u00b7 denied: no answer in time \u00b7 Dwight \u00b7 protected: credentials', ''],
-    [SCRIPT, 'Write \u00b7 waiting for your answer \u00b7 Dwight', ''],
+    ['C:\\Users\\me\\Documents', 'Read \u00b7 granted: you asked for it \u00b7 Developer', 'Look in ~/Documents'],
+    ['C:\\Users\\me\\Desktop\\out', 'Read (write was asked) \u00b7 allowed by you \u00b7 Developer', ''],
+    ['C:\\Users\\me\\.ssh', 'Read \u00b7 denied: no answer in time \u00b7 Developer \u00b7 protected: credentials', ''],
+    [SCRIPT, 'Write \u00b7 waiting for your answer \u00b7 Developer', ''],
   ]);
   assert.equal(v.writeCount, 2);
   assert.equal(decisionText('granted', 'mode', 'auto'), 'granted by the permission mode (Auto-approve)');
@@ -310,7 +310,7 @@ test('run panel: the grants with who decided and the quote, the outside writes, 
   assert.equal($('rail-access-aside').textContent, 'Permissions: Ask');
   const first = $('rail-access-list').children[0];
   assert.deepEqual(first.children.map((n) => [n.tagName, n.textContent]), [
-    ['SPAN', 'C:\\Users\\me\\Documents'], ['SPAN', 'Read \u00b7 granted: you asked for it \u00b7 Dwight'], ['Q', 'Look in ~/Documents'],
+    ['SPAN', 'C:\\Users\\me\\Documents'], ['SPAN', 'Read \u00b7 granted: you asked for it \u00b7 Developer'], ['Q', 'Look in ~/Documents'],
   ]);
   assert.equal($('rail-access-list').children[2].dataset.status, 'denied');
   assert.equal($('rail-writes-title').textContent, '2 files written outside the project, not covered by undo');

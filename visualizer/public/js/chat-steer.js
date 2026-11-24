@@ -8,6 +8,7 @@ import {
 import { postJson } from './control-panel.js';
 import { scopedUrl } from './scope.js';
 import { shortcut } from './platform.js';
+import { theName } from './state.js';
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -30,6 +31,8 @@ export function createSteering({ getState, getControl, refresh, url = (suffix) =
   let staleTimer = 0;
   // bumped by reset(): an answer to a message sent from the previous chat is dropped
   let gen = 0;
+  // what an instance is called in a sentence: "the Developer (m1)", a custom agent by its name
+  const called = (id) => theName(id, getState());
 
   // Called on every render: who can be messaged now, each composer, then the outbox and the delivery news.
   // -> the transcript of the run on screen (state.chat plus what the stream has not echoed yet)
@@ -48,7 +51,7 @@ export function createSteering({ getState, getControl, refresh, url = (suffix) =
     const entries = transcript(s, outbox);
     const own = entries.filter((m) => mine.has(m.id));
     const next = new Map(own.map((m) => [m.id, m.delivery]));
-    const news = deliveryNews(deliveries, next, own);
+    const news = deliveryNews(deliveries, next, own, called);
     deliveries = next;
     // news comes from the stream, so every composer says it: only the one on screen is seen and heard
     if (news) for (const m of mounts) m.status(news, /rejected|unknown/.test(news) ? 'error' : '');
@@ -85,13 +88,13 @@ export function createSteering({ getState, getControl, refresh, url = (suffix) =
         const prev = e.to.value;
         e.to.replaceChildren(...(recipients.length
           ? recipients.map((r) => {
-            const o = el('option', '', `${r.id} (${r.status})`);
+            const o = el('option', '', `${r.name ?? r.id} (${r.status})`);
             o.value = r.id;
             return o;
           })
           : [el('option', '', 'no running instance')]));
         if (recipients.some((r) => r.id === prev)) e.to.value = prev;
-        else if (prev && recipients.length && document.activeElement === e.to) status(`${prev} is not running any more - pick another instance`, 'error');
+        else if (prev && recipients.length && document.activeElement === e.to) status(`${called(prev)} is not running any more - pick another instance`, 'error');
       }
       e.to.disabled = !recipients.length || sending;
       e.send.disabled = Boolean(blocked) || sending;
@@ -120,7 +123,7 @@ export function createSteering({ getState, getControl, refresh, url = (suffix) =
       const s = getState();
       const snap = getControl();
       const live = snap?.control?.run?.runId === s?.runId ? s.runId : null;
-      const built = buildChatRequest({ to: e.to.value, text: e.text.value }, { runId: live, recipients });
+      const built = buildChatRequest({ to: e.to.value, text: e.text.value }, { runId: live, recipients, name: called });
       if (built.error) {
         status(built.error, 'error');
         const field = built.field === 'to' ? e.to : built.field === 'text' ? e.text : null;
@@ -132,7 +135,7 @@ export function createSteering({ getState, getControl, refresh, url = (suffix) =
       }
       const at = gen;
       sending = true;
-      status(`Sending to ${built.body.to}...`, 'busy');
+      status(`Sending to ${called(built.body.to)}...`, 'busy');
       onChange();
       const r = await postJson(url('chat'), built.body);
       if (at !== gen) return;
@@ -155,8 +158,8 @@ export function createSteering({ getState, getControl, refresh, url = (suffix) =
       e.text.value = '';
       updateCount();
       status(delivery === 'queued'
-        ? `Queued for ${built.body.to}. It shows as delivered once the orchestrator hands it over.`
-        : `Message to ${built.body.to} ${delivery}`, delivery === 'rejected' ? 'error' : '');
+        ? `Queued for ${called(built.body.to)}. It shows as delivered once the orchestrator hands it over.`
+        : `Message to ${called(built.body.to)} ${delivery}`, delivery === 'rejected' ? 'error' : '');
       onChange();
       onSent();
       e.text.focus();

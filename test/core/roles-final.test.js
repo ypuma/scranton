@@ -26,7 +26,7 @@ test('unused pinned Hank prompt cannot break legacy runs or change their event s
   Object.assign(config.agents.hank, { skillSource: 'config', skill: path.join(dir, 'missing-hank.md') });
   const run = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'happy' } });
   const result = await run.run('legacy');
-  assert.equal(result.status, 'success', 'unused pinned Hank prompt must not fail a legacy run');
+  assert.equal(result.status, 'success', 'unused pinned Security Auditor prompt must not fail a legacy run');
   const events = readEvents(config.hiveDir);
   assert.deepEqual(Object.keys(events[0].prompts), ['michael', 'dwight', 'angela']);
   assert.deepEqual(events.map((e) => [e.type, e.agent, e.status, e.kind]), sequence);
@@ -45,11 +45,11 @@ test('active pinned Hank prompt fails cleanly and releases lease; legacy retry i
   assert.equal(events[0].prompts, undefined);
   assert.equal(events.some((e) => e.type === 'instance_started' || e.type === 'agent_finished'), false);
   assert.equal(events.at(-1).status, 'failed');
-  assert.match(events.at(-1).summary, /Cannot read hank prompt/);
+  assert.match(events.at(-1).summary, /Cannot read Security Auditor \(id hank\) prompt/);
   assert.ok(events.at(-1).summary.includes(missing));
   assert.equal(fs.existsSync(path.join(config.hiveDir, 'control', 'owner.json')), false, 'failed prompt releases lease');
   const retry = await exec(process.execPath, [...args, 'angela'], { cwd: dir, env: process.env, timeout: 30000 }).then(() => true, () => false);
-  assert.equal(retry, true, 'legacy retry must succeed with the same unreadable Hank pin');
+  assert.equal(retry, true, 'legacy retry must succeed with the same unreadable Security Auditor pin');
   assert.equal(readEvents(config.hiveDir).at(-1).status, 'success');
   assert.equal(fs.existsSync(path.join(config.hiveDir, 'control', 'owner.json')), false);
 });

@@ -29,7 +29,7 @@ test('happy path: three milestones pass in the contract event order', async (t) 
   assert.deepEqual(writes.slice(0, 4), ['human>michael:plan_request', 'michael>dwight:task', 'dwight>angela:handoff', 'michael>dwight:task']);
   assert.equal(ofType(run.events, 'agent_finished').find((e) => e.agent === 'michael').keyword, 'PLAN_READY');
 
-  // Dwight really wrote files into the workspace; mailboxes and plan exist
+  // The Developer really wrote files into the workspace; mailboxes and plan exist
   for (const f of ['todo.js', 'cli.js', 'README.md', path.join('test', 'todo.test.js')]) {
     assert.ok(fs.existsSync(path.join(run.config.workspace, f)), f);
   }
@@ -76,7 +76,7 @@ test('flaky: Angela fails m2 once, Dwight gets a bug report, then it passes', as
   const kinds = ofType(run.events, 'hive_write').map((e) => `${e.from}>${e.to}:${e.kind}`);
   assert.ok(kinds.includes('angela>dwight:bug_report'));
   assert.equal(ofType(run.events, 'circuit_breaker').length, 0);
-  // the bug report carries Angela's report
+  // the bug report carries the QA Tester's report
   const archived = fs.readdirSync(path.join(run.config.hiveDir, 'dwight-m2', 'archive'));
   const bug = archived.find((f) => f.includes('angela-bug_report'));
   assert.match(fs.readFileSync(bug ? path.join(run.config.hiveDir, 'dwight-m2', 'archive', bug) : path.join(run.config.hiveDir, 'dwight-m2', 'inbox.md'), 'utf8'), /Suspected file: cli\.js/);
@@ -93,7 +93,7 @@ test('breaker: 3 failed cycles trip it, the injected human feedback resets it an
   assert.match(calls[0].reason, /^m2 reached the cycle limit \(3\): QA report for m2/);
   assert.ok(calls[0].reason.length <= 300);
   assert.match(calls[0].excerpt, /Suspected file: cli\.js/);
-  assert.equal(calls[0].feedbackTarget, 'Dwight');
+  assert.equal(calls[0].feedbackTarget, 'the Developer');
 
   const idx = (pred) => run.events.findIndex(pred);
   const tripped = idx((e) => e.type === 'circuit_breaker' && e.state === 'tripped');
@@ -114,12 +114,12 @@ test('breaker: 3 failed cycles trip it, the injected human feedback resets it an
     ofType(run.events, 'cycle_result').filter((e) => e.milestoneId === 'm2').map((e) => [e.cycle, e.result, e.failedCycles]),
     [[1, 'failed', 1], [2, 'failed', 2], [3, 'failed', 3], [4, 'passed', 0]]
   );
-  // the human note landed in the hive, and Dwight's feedback inbox holds the text + Angela's report
+  // the human note landed in the hive, and the Developer's feedback inbox holds the text + the QA Tester's report
   assert.ok(fs.existsSync(path.join(run.config.hiveDir, 'human', 'inbox.md')));
   const feedbackInbox = fs.readdirSync(path.join(run.config.hiveDir, 'dwight-m2', 'archive')).find((f) => f.includes('human-feedback'));
   const text = fs.readFileSync(feedbackInbox ? path.join(run.config.hiveDir, 'dwight-m2', 'archive', feedbackInbox) : path.join(run.config.hiveDir, 'dwight-m2', 'inbox.md'), 'utf8');
   assert.match(text, /Store todos\.json in the current directory/);
-  assert.match(text, /Angela's last QA report/);
+  assert.match(text, /QA Tester's last QA report/);
 });
 
 test('breaker: --on-breaker skip skips the milestone and the run is partial', async (t) => {
@@ -178,7 +178,7 @@ test('blocked: Dwight [BLOCKED] pauses immediately (no failed cycle) and human f
   assert.equal(run.result.status, 'success');
   assertContract(run.events, run.state);
   assert.equal(calls.length, 1);
-  assert.match(calls[0].reason, /Dwight reported \[BLOCKED\]/);
+  assert.match(calls[0].reason, /The Developer reported \[BLOCKED\]/);
   assert.equal(ofType(run.events, 'circuit_breaker').length, 0);
   assert.equal(ofType(run.events, 'cycle_result').filter((e) => e.result === 'failed').length, 0);
   const dwightM2 = ofType(run.events, 'agent_finished').filter((e) => e.agent === 'dwight' && e.milestoneId === 'm2');
@@ -219,7 +219,7 @@ test('infra failure: scripted agent exit code 1 pauses immediately - one run, no
   // contract order: agent_finished, agent_status(error), log(error), then the HITL sequence
   const at = (pred) => run.events.findIndex(pred);
   const errorStatus = at((e) => e.type === 'agent_status' && e.agent === 'dwight' && e.status === 'error');
-  const errorLog = at((e) => e.type === 'log' && e.level === 'error' && /^dwight: /.test(e.message));
+  const errorLog = at((e) => e.type === 'log' && e.level === 'error' && /^Developer: /.test(e.message));
   assert.ok(errorStatus >= 0 && errorLog >= 0);
   assert.equal(errorLog, errorStatus + 1, 'log(error) directly follows agent_status(error)');
   assert.ok(at((e) => e.type === 'agent_finished') < errorStatus);
@@ -332,7 +332,7 @@ test('--no-plan skips Michael entirely but still emits plan_ready', async (t) =>
 test('planning failure asks the human; "skip" continues with one milestone', async (t) => {
   const run = await runFake(t, { env: { SCRANTON_FAKE_FAIL: 'exit1', SCRANTON_FAKE_FAIL_ROLE: 'michael' }, onBreaker: 'skip' });
   assert.equal(run.result.status, 'success');
-  assert.match(ofType(run.events, 'hitl_request')[0].reason, /Michael could not plan/);
+  assert.match(ofType(run.events, 'hitl_request')[0].reason, /The Planner could not plan/);
   assert.equal(run.state.milestones.length, 1);
 });
 
@@ -408,7 +408,7 @@ test('hive human request is atomic, correlated and removed after response or abo
       for (let i = 0; i < 200 && !fs.existsSync(file) && !events.some((e) => e.type === 'run_finished'); i++) await delay(10);
       assert.ok(fs.existsSync(file), 'waiting human request is discoverable without parsing events');
       const request = JSON.parse(fs.readFileSync(file, 'utf8')), event = events.find((e) => e.type === 'hitl_request');
-      assert.deepEqual(request, { v: 1, runId: event.runId, requestSeq: event.seq, milestoneId: event.milestoneId, title: 'Dwight needs a human on m1', reason: event.reason, options: event.options, ts: event.ts });
+      assert.deepEqual(request, { v: 1, runId: event.runId, requestSeq: event.seq, milestoneId: event.milestoneId, title: 'The Developer needs a human on m1', reason: event.reason, options: event.options, ts: event.ts });
       assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.endsWith('.tmp')), false);
       if (interrupt) o.abort();
       else {

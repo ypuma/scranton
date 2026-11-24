@@ -1,6 +1,6 @@
 // The agent team as a conversation: Contract v1 events (docs/EVENTS.md, conversation mode included) and the run list
 // of a chat -> the engine-neutral entries of the Chat view (chat-entries.js). Pure: no DOM, no fetch.
-import { displayName, roleTitle, roleOf, gateLabel, writtenFile, countWritten } from './state.js';
+import { displayName, roleTitle, roleOf, theName, gateLabel, writtenFile, countWritten } from './state.js';
 import { formatTokens, formatCost, formatDuration } from './format.js';
 import { DECISION_LABEL } from './control.js';
 import { CHAT_MAX } from './chat.js';
@@ -32,19 +32,20 @@ function namesFor(runId, events, state) {
   return { roles: Array.isArray(started?.roles) ? started.roles : [], instances: {} };
 }
 
+// inText: the name as a sentence says it ("the Planner")
 function sender(id, names) {
   if (id === 'human') return YOU;
   if (id === 'system' || typeof id !== 'string' || !id) return SYSTEM;
   const role = roleOf(id, names) ?? id;
-  return { id: cleanLine(role, 64), name: cleanLine(displayName(role, names), 60), title: cleanLine(roleTitle(role, names), 60) };
+  return { id: cleanLine(role, 64), name: cleanLine(displayName(role, names), 60), title: cleanLine(roleTitle(role, names), 60), inText: cleanLine(theName(role, names), 64) };
 }
 
-// "to dwight-m2", and how the delivery stands unless it simply arrived
-function route(to, delivery, reason, stale = false) {
+// "to the Developer (m2)", and how the delivery stands unless it simply arrived
+function route(to, delivery, reason, names, stale = false) {
   const state = delivery === 'rejected' ? `rejected${reason ? `: ${cleanLine(reason, 120)}` : ''}`
     : delivery === 'unknown' ? 'delivery unknown'
       : delivery === 'queued' ? (stale ? 'queued, not picked up yet' : 'queued') : '';
-  return [`to ${cleanLine(to, 64) || '?'}`, state].filter(Boolean).join(' · ');
+  return [`to ${cleanLine(typeof to === 'string' && to ? theName(to, names) : '', 80) || '?'}`, state].filter(Boolean).join(' · ');
 }
 const routeTone = (delivery) => (delivery === 'rejected' ? 'fail' : delivery === 'unknown' ? 'warn' : null);
 // delivered and rejected are final, and a late queued echo does not undo an unknown outcome (as the reducer)
@@ -164,7 +165,7 @@ function detail(runId, events, { state, listed, outbox }) {
         if (conversation || e.from === 'human' || e.kind === 'hitl' || !cleanLine(e.summary)) break;
         out.push({
           id: `note-${runId}-${e.seq}`, runId, kind: 'agent', ts: ts(e), who: sender(e.from, names),
-          context: [cleanLine(e.milestoneId, 40), `${HIVE_KIND[e.kind] ?? cleanLine(e.kind, 24)} to ${sender(e.to, names).name}`].filter(Boolean).join(' · '),
+          context: [cleanLine(e.milestoneId, 40), `${HIVE_KIND[e.kind] ?? cleanLine(e.kind, 24)} to ${sender(e.to, names).inText ?? sender(e.to, names).name}`].filter(Boolean).join(' · '),
           ...cleanText(e.summary), final: true,
         });
         break;
@@ -212,7 +213,7 @@ function detail(runId, events, { state, listed, outbox }) {
         const entry = known?.entry ?? {};
         Object.assign(entry, {
           id: `chat-${runId}-${id}`, runId, kind: human ? 'human' : 'agent', ts: ts(e), who: sender(e.from, names),
-          context: route(e.to, delivery, reason), ...cleanText(e.text, CHAT_MAX), tone: routeTone(delivery),
+          context: route(e.to, delivery, reason, names), ...cleanText(e.text, CHAT_MAX), tone: routeTone(delivery),
           ...(human ? {} : { final: false }),
         });
         if (!known) out.push(entry);
@@ -225,7 +226,7 @@ function detail(runId, events, { state, listed, outbox }) {
         if (!c || keeps(c.delivery, e.delivery)) break;
         c.delivery = e.delivery;
         c.reason = e.reason;
-        c.entry.context = route(c.to, c.delivery, c.reason);
+        c.entry.context = route(c.to, c.delivery, c.reason, names);
         c.entry.tone = routeTone(c.delivery);
         break;
       }
@@ -291,7 +292,7 @@ function detail(runId, events, { state, listed, outbox }) {
     if (o.runId !== runId || chats.has(o.id)) continue;
     out.push({
       id: `chat-${runId}-${o.id}`, runId, kind: 'human', ts: typeof o.ts === 'string' ? o.ts : '', who: YOU,
-      context: route(o.to, o.delivery, o.reason, o.stale === true), ...cleanText(o.text, CHAT_MAX), tone: routeTone(o.delivery),
+      context: route(o.to, o.delivery, o.reason, names, o.stale === true), ...cleanText(o.text, CHAT_MAX), tone: routeTone(o.delivery),
     });
   }
   return out;

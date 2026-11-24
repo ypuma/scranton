@@ -116,11 +116,12 @@ tests independently run their real node:test suite. Tool allowlists are never wi
 | `FAKE_PI_DETERMINISTIC` | `SCRANTON_FAKE_DETERMINISTIC` | `deterministic`, accepted; scripted usage is always deterministic |
 
 Scenario inputs come from the immutable inbox frontmatter (`kind`, `milestone`, `cycle`) with
-runner metadata fallbacks. Flaky fails Angela's first m2 cycle; breaker keeps failing m2 until
-human feedback; blocked stops Dwight at m2 until feedback; question lets Michael answer
-directly in `SCRANTON_CONVERSATION=1` mode. Closing reports and report-failure injection
-also require conversation mode; otherwise Michael produces a plan. Non-Angela gates
-produce verdicts without tool calls. Oscar/Hank/custom gate verdicts
+runner metadata fallbacks. Flaky fails the QA Tester's (id `angela`) first m2 cycle; breaker keeps
+failing m2 until human feedback; blocked stops the Developer (id `dwight`) at m2 until feedback;
+question lets the Planner (id `michael`) answer directly in `SCRANTON_CONVERSATION=1` mode. Closing
+reports and report-failure injection also require conversation mode; otherwise the Planner produces
+a plan. Gates other than the QA Tester produce verdicts without tool calls. Code Reviewer, Security
+Auditor and custom gate verdicts
 use role keywords, including SCRANTON_PASS_KEYWORD / SCRANTON_FAIL_KEYWORD overrides.
 
 Failures reproduce runner outcomes, not an obsolete Pi process/protocol: `exit1` -> `exit`,

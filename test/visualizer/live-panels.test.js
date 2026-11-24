@@ -68,9 +68,9 @@ test('board: five labelled columns; a card says id, title, state, who works on i
   for (const c of cols) assert.equal(c.getAttribute('aria-labelledby'), c.querySelector('h3').id, 'each column is a labelled region');
   const card = cardsOf(root, 'in_progress')[0];
   assert.deepEqual([card.querySelector('.card-id').textContent, card.querySelector('.card-title').textContent, card.querySelector('.card-state').textContent, card.dataset.loud], ['m1', 'Storage', 'in progress', 'false']);
-  assert.deepEqual(card.querySelector('.card-agents').children.map((li) => li.children.map((n) => n.textContent)), [['●', 'dwight-m1', 'Editing src/cli.js']]);
+  assert.deepEqual(card.querySelector('.card-agents').children.map((li) => li.children.map((n) => n.textContent)), [['●', 'Developer', 'Editing src/cli.js']]);
   assert.equal(card.querySelector('.card-attempt').textContent, 'cycle 1');
-  assert.deepEqual(card.querySelectorAll('.card-gate').map((g) => [g.dataset.result, g.textContent, g.title]), [['pending', '○ Oscar not run yet', 'Oscar: not run yet'], ['pending', '○ Angela not run yet', 'Angela: not run yet']]);
+  assert.deepEqual(card.querySelectorAll('.card-gate').map((g) => [g.dataset.result, g.textContent, g.title]), [['pending', '○ Reviewer not run yet', 'Code Reviewer: not run yet'], ['pending', '○ QA not run yet', 'QA Tester: not run yet']]);
   assert.equal(card.querySelector('summary').textContent, '1 acceptance criterion');
   const todo = cardsOf(root, 'todo')[0];
   assert.deepEqual([todo.querySelector('.card-state').textContent, todo.querySelector('.card-note').textContent], ['waiting', 'waiting on m1']);
@@ -92,7 +92,7 @@ test('board: five labelled columns; a card says id, title, state, who works on i
   const blocked = cardsOf(root, 'blocked')[0];
   assert.deepEqual([blocked.dataset.loud, blocked.querySelector('.card-state').textContent, blocked.querySelector('.card-attempt').textContent], ['true', 'breaker tripped', 'cycle 1 · 1 failed']);
   assert.equal(blocked.querySelector('.card-reason').textContent, 'last failure Oscar requested changes');
-  assert.deepEqual(blocked.querySelectorAll('.card-gate').map((g) => g.textContent), ['✕ Oscar failed', '○ Angela not run yet']);
+  assert.deepEqual(blocked.querySelectorAll('.card-gate').map((g) => g.textContent), ['✕ Reviewer failed', '○ QA not run yet']);
   const notice = root.querySelector('.board-notice');
   assert.deepEqual([notice.textContent, notice.hidden, notice.dataset.loud, notice.getAttribute('role'), notice.getAttribute('aria-live')], ['Waiting for your answer: One cycle failed.', false, 'true', 'status', 'polite']);
   assert.deepEqual([GATE_MARK.passed, GATE_MARK.failed, GATE_MARK.blocked, GATE_MARK.running, GATE_MARK.pending], ['✓', '✕', '■', '◐', '○'], 'the glyphs the lanes use');
@@ -204,15 +204,15 @@ test('rail, wide window: beside the transcript, with every agent\'s name, role, 
   assert.equal(h.$('run-live-line').hidden, true, 'no second line while the rail says it');
   // the active ones first, then the rest in reading order
   assert.deepEqual(h.acts().map((li) => [li.querySelector('.act-name').textContent, li.querySelector('.act-role').textContent, li.querySelector('.act-status').textContent, li.querySelector('.act-line').textContent, li.dataset.live]), [
-    ['michael', 'Planner', 'waiting', 'Overseeing', 'true'],
-    ['dwight-m1', 'Developer · m1', 'working', 'Editing src/cli.js', 'true'],
-    ['oscar-m1', 'Reviewer · m1', 'thinking', 'Thinking', 'true'],
+    ['Planner', 'Plans the work', 'waiting', 'Overseeing', 'true'],
+    ['Developer · m1', 'Writes the code', 'working', 'Editing src/cli.js', 'true'],
+    ['Code Reviewer · m1', 'Reviews the changes', 'thinking', 'Thinking', 'true'],
   ]);
-  const dwight = h.act('dwight-m1');
+  const dwight = h.act('Developer · m1');
   assert.deepEqual([dwight.querySelector('.live-label').textContent, dwight.querySelector('.live-text').textContent], ['Reasoning', 'The parser needs a second pass.']);
   assert.equal(dwight.querySelector('.live-body').getAttribute('aria-live'), 'off');
   assert.deepEqual(dwight.querySelector('.live-files').children.map((li) => li.textContent), ['editedsrc/cli.js', 'readREADME.md'], 'the newest file first');
-  assert.equal(h.act('michael').querySelector('.live').hidden, true);
+  assert.equal(h.act('Planner').querySelector('.live').hidden, true);
   assert.equal(h.$('rail-agents-aside').textContent, '3 active');
   assert.equal(h.$('rail-status').textContent, 'live · 3 active');
   assert.equal(h.$('rail-agents-empty').hidden, true);
@@ -224,8 +224,8 @@ test('rail, wide window: beside the transcript, with every agent\'s name, role, 
   // the next tick: the same nodes, written in place
   const before = { li: dwight, text: dwight.querySelector('.live-text'), line: dwight.querySelector('.act-line'), usage: h.$('rail-usage').children[0] };
   h.rail.render(teamRunView({ state, live: LIVE('The parser needs a second pass. Then the tests.') }));
-  assert.equal(h.act('dwight-m1'), before.li, 'no entry is built again');
-  assert.equal(h.act('dwight-m1').querySelector('.live-text'), before.text);
+  assert.equal(h.act('Developer · m1'), before.li, 'no entry is built again');
+  assert.equal(h.act('Developer · m1').querySelector('.live-text'), before.text);
   assert.equal(before.text.textContent, 'The parser needs a second pass. Then the tests.');
   assert.equal(h.$('rail-usage').children[0], before.usage);
   assert.equal(h.acts().length, 3);
@@ -253,7 +253,7 @@ test('rail: closing it is remembered like the view switch; the toggle and the li
   h.$('rail-close').click();
   assert.deepEqual([document.body.dataset.rail, h.$('run-rail').hidden, h.$('rail-toggle').getAttribute('aria-expanded'), h.storage.map.get(RAIL_KEY)], ['closed', true, 'false', 'closed']);
   assert.equal(document.activeElement, h.$('rail-toggle'), 'the focus goes to the control that brings it back');
-  assert.deepEqual([h.$('run-live-line').hidden, h.$('run-live-text').textContent], [false, 'dwight-m1 · Editing src/cli.js']);
+  assert.deepEqual([h.$('run-live-line').hidden, h.$('run-live-text').textContent], [false, 'Developer · m1 · Editing src/cli.js']);
   h.$('rail-toggle').click();
   assert.deepEqual([document.body.dataset.rail, h.storage.map.get(RAIL_KEY), h.$('run-live-line').hidden], ['open', 'open', true]);
 
@@ -300,9 +300,11 @@ test('rail: the folder of the run is a path that wraps between its folders, says
   rail.render(teamRunView({ state: over }));
   assert.equal(text.querySelector('.path-line'), line);
   assert.equal(copy.dataset.state, 'copied');
-  // names that are cut say themselves in a title
+  // a name that is cut says itself in its title, with what the agent does and its id; a cut role says itself
   const act = $('rail-agents').querySelectorAll('.act')[0];
-  assert.deepEqual([act.querySelector('.act-name').title, act.querySelector('.act-role').title], [act.querySelector('.act-name').textContent, act.querySelector('.act-role').textContent]);
+  assert.deepEqual([act.querySelector('.act-name').textContent, act.querySelector('.act-name').title],
+    ['Planner', 'Planner: Breaks the request into milestones, judges progress when a milestone fails and, in a chat, writes the final reply. (id michael)']);
+  assert.equal(act.querySelector('.act-role').title, act.querySelector('.act-role').textContent);
   assert.equal($('rail-status').title, $('rail-status').textContent);
   const css = read('styles.css');
   assert.match(css, /\.path-line \{[^}]*border: 1px solid var\(--line\);/);
@@ -407,18 +409,18 @@ test('usage: the run\'s cost and tokens as figures, the diagram as SVG built in 
   assert.ok(svg.querySelectorAll('text').every((t) => t.textContent), 'labelled ticks');
   assert.equal(readout.textContent, 'Latest: $0.035 after 4s');
   assert.equal(readout.getAttribute('aria-live'), 'off', 'the diagram redraws as the run goes: not a live region');
-  assert.equal(chart.getAttribute('aria-label'), 'Cumulative cost over 4s: $0.035 (Dwight $0.030, Angela $0.005). Arrow keys read the points.');
+  assert.equal(chart.getAttribute('aria-label'), 'Cumulative cost over 4s: $0.035 (Developer $0.030, QA $0.005). Arrow keys read the points.');
   assert.deepEqual([chart.tabIndex, chart.getAttribute('role'), chart.getAttribute('aria-describedby')], [0, 'group', readout.id]);
 
   // the table every agent has a row in: calls, tokens, cost, share
   const table = root.querySelector('table.usage-table');
   assert.deepEqual(table.querySelector('thead').querySelectorAll('th').map((th) => th.textContent), ['Agent', 'Calls', 'Tokens', 'Cost', 'Cost share']);
-  assert.deepEqual(table.querySelector('tbody').children.map((tr) => tr.children.map((c) => c.textContent)), [['Dwight', '2', '3.0k', '$0.030', '86%'], ['Angela', '1', '500', '$0.005', '14%']]);
+  assert.deepEqual(table.querySelector('tbody').children.map((tr) => tr.children.map((c) => c.textContent)), [['Developer', '2', '3.0k', '$0.030', '86%'], ['QA', '1', '500', '$0.005', '14%']]);
   assert.deepEqual(table.querySelector('tbody').querySelectorAll('.chart-swatch').map((x) => x.dataset.tone), ['0', '1'], 'the swatch of its band');
   // the diagram as a table, for whoever cannot use the picture
   const data = root.querySelector('.chart-data');
   assert.deepEqual([data.hidden, data.querySelector('summary').textContent], [false, 'Diagram as a table']);
-  assert.deepEqual(data.querySelector('thead').querySelectorAll('th').map((th) => th.textContent), ['Elapsed', 'Total', 'Dwight', 'Angela']);
+  assert.deepEqual(data.querySelector('thead').querySelectorAll('th').map((th) => th.textContent), ['Elapsed', 'Total', 'Developer', 'QA']);
   assert.deepEqual(data.querySelector('tbody').children.at(-1).children.map((c) => c.textContent), ['4s', '$0.035', '$0.030', '$0.005']);
 });
 
@@ -437,15 +439,15 @@ test('usage: the diagram is read with the pointer and with the keys, and switche
 
   // keys: the newest point first, then back and forth; each point is shown and said once
   chart.dispatch('keydown', { key: 'ArrowLeft' });
-  assert.equal(readout.textContent, '3s · $0.030 total · Dwight $0.030');
+  assert.equal(readout.textContent, '3s · $0.030 total · Developer $0.030');
   assert.equal(spoken.textContent, readout.textContent, 'what the keys reach is announced politely');
   assert.equal(root.querySelector('svg').children.at(-1).getAttribute('class'), 'chart-cursor', 'a marker on the point');
   chart.dispatch('keydown', { key: 'Home' });
-  assert.equal(readout.textContent, '0s · $0.010 total · Dwight $0.010');
+  assert.equal(readout.textContent, '0s · $0.010 total · Developer $0.010');
   chart.dispatch('keydown', { key: 'ArrowLeft' });
-  assert.equal(readout.textContent, '0s · $0.010 total · Dwight $0.010', 'it stops at the first point');
+  assert.equal(readout.textContent, '0s · $0.010 total · Developer $0.010', 'it stops at the first point');
   chart.dispatch('keydown', { key: 'End' });
-  assert.equal(readout.textContent, '4s · $0.035 total · Dwight $0.030 · Angela $0.005');
+  assert.equal(readout.textContent, '4s · $0.035 total · Developer $0.030 · QA $0.005');
   let prevented = 0;
   chart.dispatch('keydown', { key: 'ArrowRight', preventDefault: () => { prevented += 1; } });
   chart.dispatch('keydown', { key: 'Tab', preventDefault: () => { prevented += 1; } });
@@ -468,7 +470,7 @@ test('usage: the diagram is read with the pointer and with the keys, and switche
   root.querySelectorAll('button[data-metric]')[1].click();
   assert.deepEqual(pressed().map((p) => p[1]), ['false', 'true']);
   assert.equal(readout.textContent, 'Latest: 3.5k after 4s');
-  assert.match(chart.getAttribute('aria-label'), /^Cumulative tokens over 4s: 3\.5k \(Dwight 3\.0k, Angela 500\)/);
+  assert.match(chart.getAttribute('aria-label'), /^Cumulative tokens over 4s: 3\.5k \(Developer 3\.0k, QA 500\)/);
   // the choice holds when the next figures come in
   u.render(teamRunView({ state: reduce(s, e('agent_usage', { agent: 'dwight', instanceId: 'dwight-m1', usage: { input: 500, output: 0, cost: 0.001 } })) }).usage, {});
   assert.equal(readout.textContent, 'Latest: 4.0k after 5s');
@@ -746,9 +748,9 @@ test('serial JSON rail and Dashboard show role tails, current tools and recent f
     dashboard.render(state, view);
   };
   draw();
-  assert.equal(h.act('Dwight').querySelector('.live-text').textContent, 'The serial edit.');
-  assert.equal(h.act('Dwight').querySelector('.act-line').textContent, 'Editing src/a.js');
-  assert.deepEqual(h.act('Dwight').querySelector('.live-files').children.map((li) => li.textContent), ['editedsrc/a.js']);
+  assert.equal(h.act('Developer').querySelector('.live-text').textContent, 'The serial edit.');
+  assert.equal(h.act('Developer').querySelector('.act-line').textContent, 'Editing src/a.js');
+  assert.deepEqual(h.act('Developer').querySelector('.live-files').children.map((li) => li.textContent), ['editedsrc/a.js']);
   assert.equal(heading.textContent, 'Role activity');
   assert.equal(block.hidden, false, 'serial runs without execution metadata still show their activity');
   assert.equal(h.$('lanes-exec').textContent, '3 roles · 1 busy');
@@ -756,7 +758,7 @@ test('serial JSON rail and Dashboard show role tails, current tools and recent f
   assert.equal(list.querySelectorAll('button[data-message]').length, 0, 'JSON roles are not RPC chat targets');
   const row = (id) => list.querySelector(`[data-role="${id}"]`);
   const dwight = row('dwight');
-  assert.equal(dwight.querySelector('.lane-name').textContent, 'Dwight');
+  assert.equal(dwight.querySelector('.lane-name').textContent, 'Developer');
   assert.equal(dwight.querySelector('.lane-activity').textContent, 'Editing src/a.js');
   assert.equal(dwight.querySelector('.live-text').textContent, 'The serial edit.');
   assert.deepEqual(dwight.querySelector('.live-files').children.map((li) => li.textContent), ['editedsrc/a.js']);
@@ -776,7 +778,7 @@ test('serial JSON rail and Dashboard show role tails, current tools and recent f
   assert.equal(row('angela').querySelector('.lane-activity').textContent, 'Reading src/a.js');
   assert.equal(row('angela').querySelector('.live-text').textContent, 'The serial check.');
   assert.deepEqual(row('angela').querySelector('.live-files').children.map((li) => li.textContent), ['readsrc/a.js']);
-  assert.equal(h.act('Angela').querySelector('.live-text').textContent, 'The serial check.');
+  assert.equal(h.act('QA Tester').querySelector('.live-text').textContent, 'The serial check.');
   assert.deepEqual(state.instances, {});
 
   const rpc = run().state;

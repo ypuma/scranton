@@ -101,8 +101,8 @@ export function createBoard(root, { name = 'board' } = {}) {
         glyph.setAttribute('aria-hidden', 'true');
         const line = el('span', 'card-line', a.line);
         line.title = a.line;
-        const agent = el('span', 'card-agent mono', a.id);
-        agent.title = a.id;
+        const agent = el('span', 'card-agent mono', a.name ?? a.id);
+        agent.title = a.about ?? a.id;
         row.append(glyph, agent, line);
         return row;
       }));
@@ -120,7 +120,7 @@ export function createBoard(root, { name = 'board' } = {}) {
           const glyph = el('span', '', GATE_MARK[g.result] ?? '○');
           glyph.setAttribute('aria-hidden', 'true');
           s.append(glyph, ` ${g.name}`, el('span', 'sr-only', ` ${GATE_WORD[g.result] ?? g.result}`));
-          s.title = `${g.name}: ${GATE_WORD[g.result] ?? g.result}`;
+          s.title = `${g.full ?? g.name}: ${GATE_WORD[g.result] ?? g.result}`;
           return s;
         }));
         foot.append(gates);

@@ -2,6 +2,7 @@ import {
   fitSegments, makePainter, padSegments, renderSegments, sanitize, segWidth, spread, textWidth,
   truncate, truncateStart,
 } from './text.js';
+import { ROLE_NAMES, ROLE_SHORT, ROLE_TITLES } from '../core/workflow.js';
 
 const BRAND = 'SCRANTON';
 const TAGLINE = 'Agent Orchestration';
@@ -30,16 +31,14 @@ const MUTED = 'fg:245';
 const FAINT = 'fg:240';
 const LOUD = 'bold inverse';
 
-const AGENTS = [
-  { id: 'michael', name: 'MICHAEL', role: 'Orchestrator' },
-  { id: 'dwight', name: 'DWIGHT', role: 'Developer' },
-  { id: 'angela', name: 'ANGELA', role: 'QA' },
-];
+// label: lanes, routes and stages (Short, where a column cannot grow); short: the name when a box title has no room.
+const builtinAgent = (id) => ({ id, name: ROLE_NAMES[id].toUpperCase(), short: ROLE_SHORT[id].toUpperCase(), label: ROLE_SHORT[id], role: ROLE_TITLES[id] });
+const AGENTS = ['michael', 'dwight', 'angela'].map(builtinAgent);
 
 const DISPLAY_AGENTS = [
   ...AGENTS.slice(0, 2),
-  { id: 'oscar', name: 'OSCAR', role: 'Code Reviewer' },
-  { id: 'hank', name: 'HANK', role: 'Security Auditor' },
+  builtinAgent('oscar'),
+  builtinAgent('hank'),
   AGENTS[2],
 ];
 const GATE_LABEL = {
@@ -214,7 +213,7 @@ function normalizeChat(raw) {
 // A role box of a parallel run speaks for its loudest live instance, not for whichever lane wrote last.
 // state.json has no event order per lane, so a role-level status no live lane reports (Michael overseeing,
 // or blocked on a human after his lane ended idle or in error) is taken as the newer news while no lane is busy.
-function withLanes(agent, id, instances) {
+function withLanes(agent, id, instances, name) {
   const live = instances.filter((i) => i.agent === id && !TERMINAL.has(i.status));
   if (!live.length) return agent;
   const busy = live.filter((i) => ANIMATED.has(i.status));
@@ -222,8 +221,19 @@ function withLanes(agent, id, instances) {
   if (roleSaid) return { ...agent, lanes: live.length };
   const top = [...live].sort((a, b) => (LANE_PRIORITY[b.status] ?? 0) - (LANE_PRIORITY[a.status] ?? 0))[0];
   const status = has(STATUS_STYLE, top.status) ? top.status : agent.status;
-  const activity = busy.length > 1 ? `${busy.length} lanes: ${busy.map((i) => i.id).join(', ')}` : `${top.id}: ${top.activity || top.status}`;
+  // The box already names the role, so a lane is told apart by where it works.
+  const where = (i) => i.milestoneId || name(i.id);
+  const activity = busy.length > 1 ? `${busy.length} lanes: ${busy.map(where).join(', ')}` : `${where(top)}: ${top.activity || top.status}`;
   return { ...agent, status, activity, lanes: live.length };
+}
+
+// An instance id ("dwight-m1") as people read it ("Developer · m1"); ids no known role owns stay as they are.
+function instanceName(raw, roles, dot) {
+  const id = sanitize(raw);
+  const m = /^([a-z][a-z0-9]{1,19})(?:-(.+))?$/.exec(id);
+  const role = m && (m[1] === 'human' ? { label: 'Human' } : roles.find((r) => r.id === m[1]));
+  if (!role) return id;
+  return m[2] ? `${role.label} ${dot} ${m[2]}` : role.label;
 }
 
 function workflowGates(raw, roles = DISPLAY_AGENTS) {
@@ -244,7 +254,7 @@ function normalizeReply(raw) {
   return { kind: raw.kind, text: sanitize(raw.text.slice(0, 16000)) };
 }
 
-function normalizeState(state, events) {
+function normalizeState(state, events, g) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
   if (!state.runId || state.status === 'idle' || !has(RUN_BADGE, state.status)) return null;
   const agents = state.agents && typeof state.agents === 'object' ? state.agents : {};
@@ -263,7 +273,8 @@ function normalizeState(state, events) {
   const snapshot = started?.roles ?? state.roles;
   const catalog = Array.isArray(snapshot) ? snapshot.filter((role, i, all) => role && role.builtin === false && !DISPLAY_AGENTS.some((a) => a.id === role.id) && /^[a-z][a-z0-9]{1,19}$/.test(role.id)
     && all.findIndex((other) => other?.id === role.id) === i).slice(0, 17).map((role) => {
-    return { id: role.id, name: sanitize(role.name).toUpperCase() || role.id.toUpperCase(),
+    const name = sanitize(role.name).toUpperCase() || role.id.toUpperCase();
+    return { id: role.id, name, short: name, label: sanitize(role.name) || role.id,
       role: sanitize(role.title) || 'Gate', kind: 'gate', builtin: false,
       passKeyword: role.passKeyword, failKeyword: role.failKeyword };
   }) : [];
@@ -272,6 +283,7 @@ function normalizeState(state, events) {
   const legacy = workflow?.length === 1 && workflow[0].length === 1 && workflow[0][0] === 'angela';
   const gates = legacy ? null : workflow;
   const roles = gates ? ['michael', 'dwight', ...gates.flat()].map((id) => available.find((a) => a.id === id)) : AGENTS;
+  const name = (id) => instanceName(id, available, g.dot);
   const gateResults = Object.create(null);
   for (const e of events) {
     if (e.type !== 'gate_result' || e.runId !== state.runId || !Number.isInteger(e.stage) || e.stage < 0 || !gates?.[e.stage]?.includes(e.agent)) continue;
@@ -281,7 +293,7 @@ function normalizeState(state, events) {
     if (!gateResults[e.agent] || e.seq > gateResults[e.agent].seq) gateResults[e.agent] = e;
   }
   return {
-    gates, roles, gateResults,
+    gates, roles, gateResults, name,
     runId: String(state.runId),
     status: state.status,
     request: sanitize(state.request),
@@ -302,7 +314,7 @@ function normalizeState(state, events) {
     milestoneTokenBudget: num(state.milestoneTokenBudget, 500000),
     adaptive: Number.isFinite(state.maxStalledCycles),
     breaker: state.breaker === 'tripped' ? 'tripped' : 'closed',
-    agents: Object.fromEntries(roles.map((a) => [a.id, withLanes(normalizeAgent(agents[a.id]), a.id, instances)])),
+    agents: Object.fromEntries(roles.map((a) => [a.id, withLanes(normalizeAgent(agents[a.id]), a.id, instances, name)])),
   };
 }
 
@@ -516,7 +528,7 @@ function agentBits(meta, agent, events, ctx) {
       [formatTokens(agent.totals.input + agent.totals.output), null], [' tok', MUTED], [` ${g.dot} `, FAINT],
       [formatCost(agent.totals.cost), null],
     ],
-    title: [[meta.name, 'bold'], [` ${g.dot} `, FAINT], [meta.role, MUTED]],
+    titles: [[[meta.name, 'bold'], [` ${g.dot} `, FAINT], [meta.role, MUTED]], [[meta.name, 'bold']], [[meta.short ?? meta.name, 'bold']]],
   };
 }
 
@@ -533,9 +545,9 @@ function gateText(event, meta) {
 
 function workflowLine(ctx) {
   const join = ctx.ascii ? ' || ' : ' ∥ ';
-  const text = ctx.gates.map((stage, i) => `Stage ${i + 1}: ${stage.join(join)}${stage.length > 1 ? ' (parallel)' : ''}`).join(' -> ');
+  const text = ctx.gates.map((stage, i) => `Stage ${i + 1}: ${stage.map(ctx.name).join(join)}${stage.length > 1 ? ' (parallel)' : ''}`).join(' -> ');
   if (ctx.roles.length > 5 && textWidth(text) > ctx.cw) {
-    return [[ctx.gates.map((stage, i) => `Stage ${i + 1}: ${stage.length > 1 ? `${stage.length} gates (parallel)` : stage[0]}`).join(' -> '), MUTED]];
+    return [[ctx.gates.map((stage, i) => `Stage ${i + 1}: ${stage.length > 1 ? `${stage.length} gates (parallel)` : ctx.name(stage[0])}`).join(' -> '), MUTED]];
   }
   return [[text, MUTED]];
 }
@@ -545,11 +557,13 @@ function workflowPanels(mode, agents, events, ctx) {
     if (!roles.length) return [];
     const gap = 2;
     const base = Math.floor((ctx.cw - gap * (roles.length - 1)) / roles.length);
-    const boxes = roles.map((meta, i) => {
-      const w = i === roles.length - 1 ? ctx.cw - (base + gap) * i : base;
-      const b = agentBits(meta, agents[meta.id], events, ctx);
+    const widths = roles.map((_, i) => i === roles.length - 1 ? ctx.cw - (base + gap) * i : base);
+    const bits = roles.map((meta) => agentBits(meta, agents[meta.id], events, ctx));
+    const form = titleForm(bits.map((b, i) => ({ titles: b.titles, right: [], width: widths[i] })));
+    const boxes = bits.map((b, i) => {
+      const w = widths[i];
       return [
-        boxTop(b.title, [], w, b.border, ctx),
+        boxTop(b.titles[form], [], w, b.border, ctx),
         boxRow(spread(b.status, b.elapsed, w - 4, ctx.ell), w, b.border, ctx),
         boxRow(b.activity, w, b.border, ctx),
         ...(!mode.endsWith('-short') ? [boxRow(b.tool, w, b.border, ctx)] : []),
@@ -564,6 +578,19 @@ function workflowPanels(mode, agents, events, ctx) {
     : [...group(ctx.roles.slice(0, 2)), ...group(ctx.roles.slice(2))];
 }
 
+// One title form for a whole row of boxes (name and role, the name, the Short name), so neighbours never mix
+// forms: the longest that fits every box beside its right side, else the longest that fits every box alone.
+function titleForm(boxes) {
+  const count = boxes[0].titles.length;
+  for (const beside of [true, false]) {
+    for (let i = 0; i < count; i++) {
+      if (boxes.every(({ titles, right, width }) => segWidth(titles[i]) + (beside && right.length ? segWidth(right) + 3 : 0) <= width - 6)) return i;
+    }
+  }
+  return count - 1;
+}
+
+// When the title leaves no room for the right side, the right side goes.
 function boxTop(title, right, width, border, ctx) {
   const g = ctx.g;
   const room = width - 6;
@@ -592,11 +619,12 @@ function columnPanels(agents, events, ctx) {
   const gap = 2;
   const base = Math.floor((ctx.cw - gap * 2) / 3);
   const widths = [base, base, ctx.cw - gap * 2 - base * 2];
-  const boxes = AGENTS.map((meta, i) => {
+  const bits = AGENTS.map((meta) => agentBits(meta, agents[meta.id], events, ctx));
+  const form = titleForm(bits.map((b, i) => ({ titles: b.titles, right: [], width: widths[i] })));
+  const boxes = bits.map((b, i) => {
     const w = widths[i];
-    const b = agentBits(meta, agents[meta.id], events, ctx);
     return [
-      boxTop(b.title, [], w, b.border, ctx),
+      boxTop(b.titles[form], [], w, b.border, ctx),
       boxRow(spread(b.status, b.elapsed, w - 4, ctx.ell), w, b.border, ctx),
       boxRow(b.activity, w, b.border, ctx),
       boxRow(b.tool, w, b.border, ctx),
@@ -612,14 +640,16 @@ function columnPanels(agents, events, ctx) {
 function stackedPanels(agents, events, ctx) {
   const w = ctx.cw;
   const lines = [];
-  for (const meta of AGENTS) {
-    const b = agentBits(meta, agents[meta.id], events, ctx);
+  const bits = AGENTS.map((meta) => agentBits(meta, agents[meta.id], events, ctx));
+  // The stack reads as one column, so its boxes share a title form too.
+  const form = titleForm(bits.map((b) => ({ titles: b.titles, right: b.totals, width: w })));
+  for (const b of bits) {
     const status = [...b.status, ...(b.elapsed.length ? [[' ', null], ...b.elapsed] : [])];
     let left = [...status, ['  ', null], ...b.activity];
     // The last tool only goes in when there is room to make it readable.
     if (w - 4 - segWidth(b.keyword) - 2 - segWidth(left) >= 3 + 12) left = [...left, ['   ', null], ...b.tool];
     lines.push(
-      boxTop(b.title, b.totals, w, b.border, ctx),
+      boxTop(b.titles[form], b.totals, w, b.border, ctx),
       boxRow(spread(left, b.keyword, w - 4, ctx.ell), w, b.border, ctx),
       boxBottom(w, b.border, ctx),
     );
@@ -630,14 +660,18 @@ function stackedPanels(agents, events, ctx) {
 function compactPanels(agents, events, ctx) {
   const roles = ctx.roles || AGENTS;
   const shown = ctx.roleRows && roles.length > ctx.roleRows ? roles.slice(0, Math.max(0, ctx.roleRows - 1)) : roles;
-  const lines = shown.map((meta) => {
+  // A one-row role has no room to grow: built-ins take their Short name, and the column keeps a cell of air.
+  // Nine cells fit every Short name; a longer custom name is cut on its own row so it never starves the others.
+  const limit = roles.length > 5 ? Math.min(20, Math.max(9, Math.floor(ctx.cw / 4))) : 9;
+  const names = shown.map((meta) => truncate(meta.short ?? meta.name, limit, ctx.ell));
+  const column = Math.max(9, ...names.map((name) => textWidth(name) + 1));
+  const lines = shown.map((meta, i) => {
     const b = agentBits(meta, agents[meta.id], events, ctx);
     const word = b.status[2];
-    const left = [
-      b.status[0], [' ', null], [(roles.length > 5 ? truncate(meta.name, Math.min(20, Math.max(9, Math.floor(ctx.cw / 4))), ctx.ell) : meta.name).padEnd(9), 'bold'],
-      word, [' '.repeat(Math.max(1, 10 - textWidth(word[0]))), null], ...b.activity,
-    ];
-    return spread(left, [b.keyword[1]], ctx.cw, ctx.ell);
+    const head = [b.status[0], [' ', null], [names[i].padEnd(column), 'bold'], word, [' '.repeat(Math.max(1, 10 - textWidth(word[0]))), null]];
+    // The verdict keyword outranks the activity: each row cuts its own activity first and drops the keyword only
+    // when the keyword alone cannot fit.
+    return spread([...head, ...b.activity], [b.keyword[1]], ctx.cw, ctx.ell);
   });
   if (shown.length < roles.length) lines.push([[`+${roles.length - shown.length} more roles`, MUTED]]);
   return lines;
@@ -714,7 +748,7 @@ function laneLine(inst, ctx, idWidth) {
   const glyph = has(g, status) && typeof g[status] === 'string' ? g[status] : TERMINAL.has(status) ? g.done : g.idle;
   const word = status.toUpperCase();
   const left = [
-    [glyph, style === LOUD ? 'bold' : style], [' ', null], [inst.id.padEnd(idWidth), TERMINAL.has(status) ? MUTED : 'bold'], ['  ', null],
+    [glyph, style === LOUD ? 'bold' : style], [' ', null], [ctx.name(inst.id).padEnd(idWidth), TERMINAL.has(status) ? MUTED : 'bold'], ['  ', null],
     label(word, style, ctx), [' '.repeat(Math.max(1, 10 - textWidth(word))), null],
     [inst.activity || '-', TERMINAL.has(status) || status === 'idle' ? MUTED : null],
     ...(inst.tool && ANIMATED.has(status) ? [['  ', null], [inst.tool, MUTED]] : []),
@@ -741,13 +775,13 @@ function laneLines(st, ctx, room) {
     const busy = live.filter((i) => ANIMATED.has(i.status));
     return [fitSegments([
       ['Lanes  ', MUTED], [`${live.length} live`, 'bold'], ...(done ? [[`  ${done} done`, MUTED]] : []),
-      ...(busy.length ? [['  ', null], [busy.map((i) => `${i.id} ${i.status}`).join(', '), null]] : []),
+      ...(busy.length ? [['  ', null], [busy.map((i) => `${ctx.name(i.id)} ${i.status}`).join(', '), null]] : []),
     ], ctx.cw, ctx.ell)];
   }
   const shown = live.length ? live : lanes;
   const rows = Math.min(room - 1, MAX_LANE_ROWS);
   const head = rule(`Lanes  ${live.length} live${done ? `, ${done} done` : ''}`, ctx);
-  const idWidth = Math.min(14, Math.max(...shown.map((i) => textWidth(i.id))));
+  const idWidth = Math.min(14, Math.max(...shown.map((i) => textWidth(ctx.name(i.id)))));
   const fit = shown.length <= rows ? shown : shown.slice(0, Math.max(0, rows - 1));
   const lines = fit.map((i) => laneLine(i, ctx, idWidth));
   if (fit.length < shown.length) lines.push([[`+${shown.length - fit.length} more lanes`, MUTED]]);
@@ -764,7 +798,7 @@ function chatLines(st, ctx, room) {
   const title = `Messages  ${chat.length}${queued ? `, ${queued} queued` : ''}${rejected ? `, ${rejected} rejected` : ''}${unknown ? `, ${unknown} unknown` : ''}`;
   const recent = chat.slice(-Math.min(2, room - 1));
   return [rule(title, ctx), ...recent.map((c) => fitSegments([
-    [clock(c.ts), MUTED], ['   ', null], who(c.from), [' -> ', FAINT], who(c.to), ['  ', null], deliveryLabel(c.delivery, ctx),
+    [clock(c.ts), MUTED], ['   ', null], who(ctx.name(c.from)), [' -> ', FAINT], who(ctx.name(c.to)), ['  ', null], deliveryLabel(c.delivery, ctx),
     ['  ' + (c.delivery === 'rejected' && c.reason ? `${c.reason}: ${c.text}` : c.text), null],
   ], ctx.cw, ctx.ell))];
 }
@@ -793,11 +827,11 @@ function eventSegments(e, st, ctx) {
       return [[`milestone ${sanitize(e.milestoneId)} `, 'bold'], ['integrated', null]];
     case 'instance_started': {
       const sb = sandboxMode(e.sandbox);
-      return [who(e.instanceId || e.id, 7), ['  started', 'bold'], ...(e.milestoneId ? [['  ' + sanitize(e.milestoneId), null]] : []),
+      return [who(ctx.name(e.instanceId || e.id), 7), ['  started', 'bold'], ...(e.milestoneId ? [['  ' + sanitize(e.milestoneId), null]] : []),
         ...(isWorktree(e.worktree, st && st.workspace) ? [['  worktree', MUTED]] : []), ...(sb ? [['  ' + sb, sb === 'host' ? 'bold' : MUTED]] : [])];
     }
     case 'chat_message':
-      return [who(e.from), [' -> ', FAINT], who(e.to), ['  ', null], deliveryLabel(e.delivery, ctx), ['  ' + sanitize(e.text), null]];
+      return [who(ctx.name(e.from)), [' -> ', FAINT], who(ctx.name(e.to)), ['  ', null], deliveryLabel(e.delivery, ctx), ['  ' + sanitize(e.text), null]];
     case 'chat_delivery':
       return [['message ', 'bold'], [sanitize(e.id).slice(0, 8), MUTED], ['  ', null], deliveryLabel(e.delivery, ctx),
         ...(e.delivery === 'unknown' ? [['  not resent automatically', MUTED]] : []),
@@ -806,22 +840,22 @@ function eventSegments(e, st, ctx) {
     case 'chat_command_rejected':
       return [['chat command ', 'bold'], deliveryLabel('rejected', ctx), ...(e.reason ? [['  ' + sanitize(e.reason), MUTED]] : [])];
     case 'hive_write':
-      return [who(e.from), [' -> ', FAINT], who(e.to), ['  ', null],
+      return [who(ctx.name(e.from)), [' -> ', FAINT], who(ctx.name(e.to)), ['  ', null],
         [sanitize(e.kind), has(KIND_STYLE, e.kind) ? KIND_STYLE[e.kind] : MUTED], ['  ' + sanitize(e.summary), null]];
     case 'agent_status':
-      return [who(e.instanceId || e.agent, 7), ['  ', null], label(sanitize(e.status), has(STATUS_STYLE, e.status) ? STATUS_STYLE[e.status] : null, ctx),
+      return [who(ctx.name(e.instanceId || e.agent), 7), ['  ', null], label(sanitize(e.status), has(STATUS_STYLE, e.status) ? STATUS_STYLE[e.status] : null, ctx),
         ['  ' + sanitize(e.activity), MUTED]];
     case 'agent_tool':
-      return [who(e.instanceId || e.agent, 7), ['  ', null], [sanitize(e.tool), null], ['  ' + sanitize(e.detail), MUTED]];
+      return [who(ctx.name(e.instanceId || e.agent), 7), ['  ', null], [sanitize(e.tool), null], ['  ' + sanitize(e.detail), MUTED]];
     case 'agent_finished': {
       const usage = e.usage && typeof e.usage === 'object' ? e.usage : null;
       const kw = sanitize(e.keyword);
-      return [who(e.instanceId || e.agent, 7), ['  finished  ', null], [kw || 'no keyword', keywordStyle(kw)],
+      return [who(ctx.name(e.instanceId || e.agent), 7), ['  finished  ', null], [kw || 'no keyword', keywordStyle(kw)],
         [`  exit ${num(e.exitCode)}  ${formatDuration(e.durationMs)}`, MUTED],
         ...(usage ? [[`  ${formatTokens(num(usage.input) + num(usage.output))} tok  ${formatCost(usage.cost)}`, MUTED]] : [])];
     }
     case 'gate_result':
-      return [who(e.agent), [' gate ', null], [sanitize(e.result), 'bold'], [' ' + (sanitize(e.keyword) || '-'), MUTED]];
+      return [who(ctx.name(e.agent)), [' gate ', null], [sanitize(e.result), 'bold'], [' ' + (sanitize(e.keyword) || '-'), MUTED]];
     case 'cycle_result': {
       const failed = e.result === 'failed';
       return [[`cycle ${num(e.cycle)} `, 'bold'], label(failed ? 'FAILED' : 'PASSED', failed ? LOUD : 'bold', ctx),
@@ -954,12 +988,12 @@ export function renderDashboard(state, events, { width, height, color = true, as
   const margin = width >= 40 ? 1 : 0;
   const ctx = {
     width, height, color: Boolean(color), ascii: Boolean(ascii), now: num(now, Date.now()), hiveDir,
-    g, ell: g.ell, cw: width - margin * 2,
+    g, ell: g.ell, cw: width - margin * 2, name: (id) => instanceName(id, DISPLAY_AGENTS, g.dot),
   };
   const paint = makePainter(ctx.color);
   const list = Array.isArray(events) ? events.filter((e) => e && typeof e === 'object') : [];
-  const st = normalizeState(state, list);
-  if (st) Object.assign(ctx, { roles: st.roles, gates: st.gates, gateResults: st.gateResults });
+  const st = normalizeState(state, list, g);
+  if (st) Object.assign(ctx, { roles: st.roles, gates: st.gates, gateResults: st.gateResults, name: st.name });
   const lines = st ? runScreen(st, list, ctx) : idleScreen(ctx);
   const pad = margin ? [[' '.repeat(margin), null]] : [];
   return lines.map((segs) => {

@@ -45,7 +45,7 @@ test('buildPrompt: trimmed non-empty, at most 32 KiB of UTF-8, read only refused
   assert.equal(buildPrompt('a'.repeat(PROMPT_MAX_BYTES), oscar).body.text.length, PROMPT_MAX_BYTES);
   const wide = '\u00e9'.repeat(PROMPT_MAX_BYTES / 2 + 1);
   assert.equal(buildPrompt(wide, oscar).error, `The prompt is ${PROMPT_MAX_BYTES + 2} bytes; the limit is ${PROMPT_MAX_BYTES}.`, 'bytes, not characters');
-  assert.equal(buildPrompt('Audit', hank).error, "Hank's prompt is read only here.");
+  assert.equal(buildPrompt('Audit', hank).error, "The Security Auditor's prompt is read only here.");
   assert.equal(isDirty(hank, 'other'), false, 'a read-only prompt has nothing to lose');
   assert.equal(roleView(hank).source, 'Set by config');
   assert.equal(roleView(oscar).source, 'Custom');
@@ -77,7 +77,7 @@ function harness({ answer = DOC, put = { ok: true }, on = { value: true } } = {}
   const rows = () => $('agents-list').childNodes;
   const row = (i) => {
     const [head, detail, actions] = rows()[i].childNodes;
-    return { name: head.childNodes[0], title: head.childNodes[1], source: head.childNodes[2], keywords: detail.childNodes[0], tools: detail.childNodes[1], edit: actions.childNodes[0] };
+    return { name: head.childNodes[0], title: head.childNodes[1], source: head.childNodes[2], about: detail.childNodes[0], keywords: detail.childNodes[1], tools: detail.childNodes[2], edit: actions.childNodes[0] };
   };
   const ready = async () => {
     panel.render();
@@ -125,11 +125,11 @@ test('list: one row per role with name, title, keyword chips, tools and the prom
     return [r.name.textContent, r.title.textContent, r.source.textContent, r.keywords.childNodes.map((c) => c.textContent).join(' '), r.edit.textContent];
   });
   assert.deepEqual(seen, [
-    ['Michael', 'Orchestrator', 'Built-in', 'PLAN_READY', 'Edit prompt'],
-    ['Dwight', 'Developer', 'Built-in', 'TASK_COMPLETE BLOCKED', 'Edit prompt'],
-    ['Oscar', 'Reviewer', 'Custom', 'REVIEW_APPROVED CHANGES_REQUESTED BLOCKED', 'Edit prompt'],
-    ['Hank', 'Security', 'Set by config', 'SECURITY_PASSED SECURITY_ISSUES BLOCKED', 'View prompt'],
-    ['Angela', 'QA', 'Built-in', 'TEST_PASSED TEST_FAILED BLOCKED', 'Edit prompt'],
+    ['Planner', 'Plans the work', 'Built-in', 'PLAN_READY', 'Edit prompt'],
+    ['Developer', 'Writes the code', 'Built-in', 'TASK_COMPLETE BLOCKED', 'Edit prompt'],
+    ['Code Reviewer', 'Reviews the changes', 'Custom', 'REVIEW_APPROVED CHANGES_REQUESTED BLOCKED', 'Edit prompt'],
+    ['Security Auditor', 'Checks security', 'Set by config', 'SECURITY_PASSED SECURITY_ISSUES BLOCKED', 'View prompt'],
+    ['QA Tester', 'Tests the result', 'Built-in', 'TEST_PASSED TEST_FAILED BLOCKED', 'Edit prompt'],
   ]);
   assert.ok(h.row(2).keywords.childNodes.every((c) => c.className === 'kw-chip mono'));
   assert.equal(h.row(2).tools.textContent, 'read · grep · find · ls · bash');
@@ -141,7 +141,7 @@ test('edit and save: PUT with the control headers and the text only, then the ro
   await h.ready();
   await h.row(1).edit.fire('click');
   assert.equal(h.$('prompt-panel').hidden, false);
-  assert.equal(h.$('prompt-title').textContent, "Dwight's system prompt");
+  assert.equal(h.$('prompt-title').textContent, "The Developer's system prompt");
   assert.equal(h.$('prompt-text').value, 'Build. [TASK_COMPLETE] [BLOCKED]');
   assert.equal(h.$('prompt-text').readOnly, false);
   assert.equal(globalThis.document.activeElement, h.$('prompt-text'));
@@ -161,7 +161,7 @@ test('edit and save: PUT with the control headers and the text only, then the ro
   assert.equal(h.$('prompt-panel').hidden, true);
   assert.equal(h.$('prompt-text').value, '', 'the editor lets go of the text');
   assert.equal(h.row(1).source.textContent, 'Custom', 'reloaded from the server');
-  assert.equal(h.$('agents-status').textContent, "Saved Dwight's prompt. Runs started from now on use it.");
+  assert.equal(h.$('agents-status').textContent, "Saved the Developer's prompt. Runs started from now on use it.");
   assert.equal(globalThis.document.activeElement, h.row(1).edit);
 });
 
@@ -172,7 +172,7 @@ test('reset to built-in asks first and only then sends DELETE', async () => {
   assert.equal(h.$('prompt-reset').hidden, false, 'a custom prompt can be reset');
   await h.$('prompt-reset').fire('click');
   assert.equal(h.confirms.length, 1);
-  assert.equal(h.confirms[0].title, "Reset Oscar's prompt?");
+  assert.equal(h.confirms[0].title, "Reset the Code Reviewer's prompt?");
   assert.equal(h.confirms[0].ok, 'Reset to built-in');
   assert.equal(h.requests.some((r) => r.method === 'DELETE'), false, 'nothing is deleted before the confirm');
   const r = await h.confirms[0].action();
@@ -225,7 +225,7 @@ test('unsaved edits: closing, Escape and another row ask first; Cancel keeps the
   await h.$('agents-dialog').fire('cancel', { preventDefault: () => { prevented = true; } });
   assert.equal(prevented, true, 'Escape does not close over unsaved edits');
   assert.equal(h.$('agents-dialog').open, true);
-  assert.equal(h.confirms.at(-1).title, "Discard changes to Oscar's prompt?");
+  assert.equal(h.confirms.at(-1).title, "Discard changes to the Code Reviewer's prompt?");
 
   await h.row(0).edit.fire('click');
   assert.equal(h.confirms.length, 2, 'another row asks too');
@@ -263,7 +263,7 @@ test('a refused save is shown in the editor, which keeps the draft and the focus
   await h.type('New review prompt [REVIEW_APPROVED] [CHANGES_REQUESTED] [BLOCKED]');
   await h.$('prompt-panel').fire('submit');
   assert.equal(h.$('prompt-error').hidden, false);
-  assert.equal(h.$('prompt-error').textContent, "Oscar's prompt is set by scranton.config.json and cannot be changed here.");
+  assert.equal(h.$('prompt-error').textContent, "The Code Reviewer's prompt is set by scranton.config.json and cannot be changed here.");
   assert.equal(h.$('prompt-text').getAttribute('aria-invalid'), 'true');
   assert.equal(globalThis.document.activeElement, h.$('prompt-text'));
   assert.equal(h.$('prompt-text').value, 'New review prompt [REVIEW_APPROVED] [CHANGES_REQUESTED] [BLOCKED]');
@@ -390,7 +390,7 @@ test('a save reply that arrives after the drawer was closed and reopened acts on
   assert.equal(h.$('prompt-panel').hidden, false);
   assert.equal(h.$('prompt-text').value, 'Oscar draft', 'its draft is not discarded');
   assert.equal(h.confirms.length, asked, 'and nothing was asked about it');
-  assert.equal(h.$('agents-status').textContent, '', 'no "Saved Dwight\'s prompt" for a drawer that is gone');
+  assert.equal(h.$('agents-status').textContent, '', 'no "Saved the Developer\'s prompt" for a drawer that is gone');
   assert.equal(h.$('prompt-save').disabled, false, 'the new editor is not left busy');
   assert.equal(h.row(1).source.textContent, 'Custom', 'the reopened rows learn about the save');
 });

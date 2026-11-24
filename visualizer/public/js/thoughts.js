@@ -4,6 +4,7 @@
 // now at the end. No DOM in the model part, so Node can test it.
 import { CLIENT_HEADERS } from './control.js';
 import { toolLine } from './activity-model.js';
+import { instanceLabel, aboutAgent } from './state.js';
 import { stripBidi } from './format.js';
 
 export const THOUGHTS_POLL_MS = 1500;
@@ -121,12 +122,19 @@ export function createThoughtLog({ url, onChange = null, fetch: ask = (...a) => 
 // longer lists (it only left thoughts) follows.
 // agents: the run view's. thoughts: createThoughtLog().get().thoughts. tools: the run's agent_tool events.
 // tails: the /live instances (activity-model liveTails) or null. saved: the server keeps thoughts for this run.
-// -> [{ id, name, role, status, live, line, items: [{ id, kind: 'reasoning' | 'answer' | 'tool', ts, text, cut }],
+// state: the reducer state, for what an instance the view does not list is called (a custom agent by its name).
+// -> [{ id, name, short, role, about, status, live, line, items: [{ id, kind: 'reasoning' | 'answer' | 'tool', ts, text, cut }],
 //       open: { kind, label, body, cut } | null }]
-export function thoughtColumns({ agents = [], thoughts = [], tools = [], tails = null, saved = true } = {}) {
+export function thoughtColumns({ agents = [], thoughts = [], tools = [], tails = null, saved = true, state = null } = {}) {
   const byId = new Map();
   const column = (id, a = null) => {
-    if (!byId.has(id)) byId.set(id, { id, name: a?.name ?? id, role: a?.role ?? '', status: a?.status ?? 'done', live: Boolean(a?.live), line: a?.line ?? '', items: [], open: null });
+    if (!byId.has(id)) {
+      const name = a?.name ?? instanceLabel(id, state);
+      byId.set(id, {
+        id, name, short: a?.short ?? (a ? name : instanceLabel(id, state, { short: true })), role: a?.role ?? '', about: a ? a.about ?? '' : aboutAgent(id, state),
+        status: a?.status ?? 'done', live: Boolean(a?.live), line: a?.line ?? '', items: [], open: null,
+      });
+    }
     return byId.get(id);
   };
   for (const a of agents) column(a.id, a);

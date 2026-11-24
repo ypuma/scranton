@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from 'node:util';
 import { formatDuration } from './util.js';
+import { ROLE_NAMES, ROLE_SHORT } from './workflow.js';
 
 const CODES = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, blue: 34, magenta: 35, cyan: 36 };
 
@@ -9,8 +10,9 @@ export function styler(stream = process.stdout, env = process.env) {
   return Object.fromEntries(Object.entries(CODES).map(([name, code]) => [name, (s) => (on ? `\x1b[${code}m${s}\x1b[0m` : String(s))]));
 }
 
-const NAMES = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela', human: 'Human' };
-const label = (id) => NAMES[id] ?? id;
+const NAMES = { ...ROLE_NAMES, human: 'Human' };
+const SHORT = { ...ROLE_SHORT, human: 'Human' };
+const label = (id) => (Object.hasOwn(NAMES, id) ? NAMES[id] : id);
 const AGENT_COLOR = { michael: 'magenta', dwight: 'blue', angela: 'green', human: 'yellow' };
 
 const two = (n) => String(n).padStart(2, '0');
@@ -26,7 +28,8 @@ export function createTerminalLog({ stream = process.stdout, env = process.env, 
   const c = styler(stream, env);
   let customNames = {};
   const roleLabel = (id) => customNames[id] ?? label(id);
-  const who = (id) => c[AGENT_COLOR[id] ?? 'bold'](roleLabel(id).padEnd(7));
+  // The agent column uses the Short names so the longest built-in still fits it.
+  const who = (id) => c[AGENT_COLOR[id] ?? 'bold']((customNames[id] ?? (Object.hasOwn(SHORT, id) ? SHORT[id] : id)).padEnd(9));
   const print = (event, text) => {
     const time = localClock(event.ts);
     stream.write(`${c.dim(time)} ${text}\n`);

@@ -6,32 +6,44 @@ Configure the Team workflow and understand what gets reviewed, retried, and inte
 
 ## Parallelism, verification, and integration
 
-Team defaults to Scranton's durable agent loop, up to three active milestone pipelines, private Git worktrees, and the Scranton OS sandbox. Instances are named `michael`, `dwight-m1`, `angela-m1`, and so on. Role names alone do not identify a chat recipient when work is parallel. Markdown mailboxes in the Hive and controlled instance chat connect the roles; final status keywords drive handoffs.
+Team defaults to Scranton's durable agent loop, up to three active milestone pipelines, private Git worktrees, and the Scranton OS sandbox. Instances are named `michael`, `dwight-m1`, `angela-m1`, and so on; the dashboards show them as Planner, Developer · m1, and QA Tester · m1 (see [built-in roles](#built-in-roles-gates-and-system-prompts) for every name and id). Role names alone do not identify a chat recipient when work is parallel. Markdown mailboxes in the Hive and controlled instance chat connect the roles; final status keywords drive handoffs.
 
 A plan declares `dependsOn`. Omitting it makes the milestone depend on its predecessor; `[]` means independent. Unknown, self, or cyclic dependencies are rejected. A dependency is satisfied only by successful verification **and safe integration**. Skipped or failed prerequisites do not release successors.
 
 Scranton makes a private shadow repository even for dirty, uncommitted, or non-Git workspaces. `<hive>/isolation/` records the run's isolation location; on Windows the repository and worktrees normally live under `%LOCALAPPDATA%\Scranton\iso\<token>`, not in the Hive. On POSIX the Hive-local location is preferred when the path budget permits. See [isolation storage and cleanup](../ISOLATION.md#dateistände-und-sichere-übernahme). The user's repository is not used for internal branches or commits; HEAD, index, and history stay intact. Ignored dependencies/build outputs and known credential files are excluded. Install needed dependencies inside the private checkout. These exclusions are not a complete secret scanner.
 
-After `[TASK_COMPLETE]`, Angela verifies a separate worktree made from exactly Dwight's developer snapshot. Only the developer snapshot that passed every gate can be integrated. Integration is serialized and compares target files with the original baseline; overlapping user edits are reported as conflicts rather than overwritten. Diagnostic worktrees are retained. Back up the workspace before real tasks; a worktree is not a backup.
+After `[TASK_COMPLETE]`, the QA Tester verifies a separate worktree made from exactly the Developer's snapshot. Only the developer snapshot that passed every gate can be integrated. Integration is serialized and compares target files with the original baseline; overlapping user edits are reported as conflicts rather than overwritten. Diagnostic worktrees are retained. Back up the workspace before real tasks; a worktree is not a backup.
 
 **Retry is not a rebase.** The developer worktree keeps its immutable baseline, so the same conflict may recur. Abort, resolve the conflict deliberately outside the run and start fresh, or skip the milestone. Do not automatically delete user work or diagnostic artifacts. See [restore points and undo](restore-points.md).
 
 ## Built-in roles, gates, and system prompts
 
-Michael plans, Dwight implements, Oscar reviews code, Hank reviews security, and Angela verifies acceptance criteria. Gate roles are instructed not to modify files; their shell can still write and their private checkouts are never integrated. The engine defaults to Angela alone for compatibility. To add code and security review before QA:
+The five built-in agents are shown under their role names. Commands, config, environment variables, and prompt files use their ids:
+
+| Name | What it does | id | Where the id is used |
+| --- | --- | --- | --- |
+| Planner | Breaks the request into milestones, judges progress when a milestone fails and, in a chat, writes the final reply. | `michael` | config `agents.michael`, `SCRANTON_MICHAEL_*`, prompt file `michael.md` |
+| Developer | Implements one milestone at a time and fixes what the checks report. | `dwight` | config `agents.dwight`, `SCRANTON_DWIGHT_*`, prompt file `dwight.md` |
+| Code Reviewer | Reviews each milestone's changes for defects, regressions and test coverage. Never edits the project. | `oscar` | `--gates`, config `agents.oscar`, `SCRANTON_OSCAR_*`, prompt file `oscar.md` |
+| Security Auditor | Audits each milestone's changes for exploitable weaknesses. Never edits the project. | `hank` | `--gates`, config `agents.hank`, `SCRANTON_HANK_*`, prompt file `hank.md` |
+| QA Tester | Runs the tests and the program against every acceptance criterion. Never edits the project. | `angela` | `--gates`, config `agents.angela`, `SCRANTON_ANGELA_*`, prompt file `angela.md` |
+
+Before 2026-11-24 these agents were shown as Michael, Dwight, Oscar, Hank, and Angela. Only the names changed: saved runs and existing configs keep working, and text an older run already wrote (handoff summaries, reports) keeps the first names.
+
+Gate roles are instructed not to modify files; their shell can still write and their private checkouts are never integrated. The engine defaults to the QA Tester alone for compatibility. To add code and security review before QA:
 
 ```powershell
 node bin/scranton.js run "Review and implement the change" --gates "oscar+hank,angela"
 node bin/scranton.js demo --scenario changes_once --gates "oscar,hank,angela" --delay 0
 ```
 
-Equivalent config: `"workflow": {"gates": [["oscar", "hank"], ["angela"]]}`. A comma separates sequential stages; a plus joins concurrent gates. Each role may appear once; empty stages are invalid. Parallel results are evaluated in list order. One failed stage produces a combined report for Dwight and counts as one failed cycle. `[BLOCKED]` or infrastructure failures pause after the whole stage finishes; Retry repeats only that stage. Integration follows only after every gate passes. Automatic also applies in Docker. Oscar and Hank accept `SCRANTON_OSCAR_PROVIDER`, `SCRANTON_OSCAR_MODEL`, `SCRANTON_OSCAR_THINKING` and their `SCRANTON_HANK_*` counterparts.
+Equivalent config: `"workflow": {"gates": [["oscar", "hank"], ["angela"]]}`. A comma separates sequential stages; a plus joins concurrent gates. Each role may appear once; empty stages are invalid. Parallel results are evaluated in list order. One failed stage produces a combined report for the Developer and counts as one failed cycle. `[BLOCKED]` or infrastructure failures pause after the whole stage finishes; Retry repeats only that stage. Integration follows only after every gate passes. Automatic also applies in Docker. The Code Reviewer and the Security Auditor accept `SCRANTON_OSCAR_PROVIDER`, `SCRANTON_OSCAR_MODEL`, `SCRANTON_OSCAR_THINKING` and their `SCRANTON_HANK_*` counterparts.
 
 Custom prompts are scoped to the data directory: `<hive>/prompts/<role>.md` or `<data>/prompts/<role>.md` in Registry mode. Precedence is explicit `agents.<role>.skill`, saved prompt, then built-in prompt. Frontmatter is removed. The workflow receives the resolved run snapshot; Docker gets no prompt mount. Edits apply to subsequent runs. Events record source and SHA-256, not prompt text. See [Control API §9](../CONTROL.md#9-roles-gate-workflow-and-custom-prompts).
 
 ## Custom agents and models
 
-Under **Agents**, create up to twelve custom reviewers with a name, title, handoff instruction, allowed read tools, and unique success/failure keywords. Each agent has an editable system prompt. Without a saved prompt, Scranton generates a starter from its current definition; resetting restores the starter. Michael and Dwight remain fixed roles with configurable models and prompts. Custom agents are gates, not additional developers.
+Under **Agents**, create up to twelve custom reviewers with a name, title, handoff instruction, allowed read tools, and unique success/failure keywords. Each agent has an editable system prompt. Without a saved prompt, Scranton generates a starter from its current definition; resetting restores the starter. The Planner and the Developer remain fixed roles with configurable models and prompts. Custom agents are gates, not additional developers.
 
 Model and Thinking are saved per agent in `agents.json` under `--data` or `--hive`. In every Team sandbox mode precedence is run selection, environment, `scranton.config.json`, `agents.json`, then Automatic. Environment- or config-pinned fields are locked in the editor. Thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
@@ -46,7 +58,7 @@ Create `seclint` first via **Agents** or `POST /api/agents` in the same data sco
 
 ## Circuit breaker and human decisions
 
-A milestone keeps cycling while it makes progress. After a failed cycle, Scranton first checks without a model call: did Dwight deliver the same file state (`no_change`), or did the complete failure report repeat (`repeat`, ignoring case and whitespace)? Digits are preserved: “5 tests failed” differs from “3 tests failed.” Either rule counts as a stall. Otherwise Michael compares up to the last four cycles with the acceptance criteria and assesses whether the previous issue is resolved or clearly narrowed. Rewording or alternating variants of the same problem, or a failed progress check, also count as stalls.
+A milestone keeps cycling while it makes progress. After a failed cycle, Scranton first checks without a model call: did the Developer deliver the same file state (`no_change`), or did the complete failure report repeat (`repeat`, ignoring case and whitespace)? Digits are preserved: “5 tests failed” differs from “3 tests failed.” Either rule counts as a stall. Otherwise the Planner compares up to the last four cycles with the acceptance criteria and assesses whether the previous issue is resolved or clearly narrowed. Rewording or alternating variants of the same problem, or a failed progress check, also count as stalls.
 
 Scranton asks for feedback, retry, skip, or abort once any threshold is reached:
 
@@ -77,8 +89,8 @@ node bin/scranton.js run "How is this codebase organized?" --conversation
 node bin/scranton.js demo --scenario question --conversation
 ```
 
-The CLI shows role messages and a separate reply at the end. Michael can answer a question directly without a plan or milestones. After a planned task, he writes a closing report; on failure or timeout a deterministic summary replaces it. The demo illustrates the question path without a model call.
+The CLI shows role messages and a separate reply at the end. The Planner can answer a question directly without a plan or milestones. After a planned task, it writes a closing report; on failure or timeout a deterministic summary replaces it. The demo illustrates the question path without a model call.
 
 The engine and CLI default to off (`--no-conversation`); enable it with `--conversation`, `execution.conversation:true`, or `SCRANTON_CONVERSATION=1`. The web UI sends `conversation:true`. In Registry mode, earlier replies can enter [bounded follow-up context](projects-chats-context.md#context-system), not a full transcript. Replies are untrusted text; no extra tools or grants are enabled.
 
-Only in conversation mode does Michael's staged prompt get an extra section for planning, answering, or reporting. Stored prompts are unchanged. Failed report text remains visible as an agent message. The CLI and terminal dashboard remove control and bidi characters from messages; large suppressed terminal messages do not push visible events out of the event tail.
+Only in conversation mode does the Planner's staged prompt get an extra section for planning, answering, or reporting. Stored prompts are unchanged. Failed report text remains visible as an agent message. The CLI and terminal dashboard remove control and bidi characters from messages; large suppressed terminal messages do not push visible events out of the event tail.

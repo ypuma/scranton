@@ -347,12 +347,12 @@ test('Enter and Space open and close the focused row without the default action'
 test('an open row shows the full timestamp, source and type as text; a closed row stays one line', () => {
   const h = harness();
   h.add(3);
-  assert.match(h.row(2).text, /^ 2026-11-0[789] \d\d:\d\d dwight /, 'a closed row of another day has its date and time, nothing more');
+  assert.match(h.row(2).text, /^ 2026-11-0[789] \d\d:\d\d Developer /, 'a closed row of another day has its date and time, nothing more');
   for (const td of h.row(2).childNodes) assert.equal(td.title, '', `${td.className} has no tooltip-only text`);
   h.cell(2).focus();
   h.key('Enter');
   assert.match(h.cell(2).text, new RegExp(`Time\\s+${ENTRY_TS(2).replace(/[.]/g, '\\.')}`), 'the full ts is in the focused cell');
-  assert.match(h.cell(2).text, /Source\s+dwight/);
+  assert.match(h.cell(2).text, /Source\s+Developer \(dwight\)/);
   assert.match(h.cell(2).text, /Type\s+handoff/);
   assert.match(h.cell(2).text, /row 2/);
   h.key('Enter');

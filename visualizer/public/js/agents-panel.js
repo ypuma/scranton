@@ -16,6 +16,7 @@ import { stripBidi } from './format.js';
 
 const $ = (id) => document.getElementById(id);
 const lines = (t) => String(t ?? '').replace(/\r\n?/g, '\n');
+const capital = (t) => `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -247,10 +248,16 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
       const kind = el('span', 'role-kind');
       head.append(name, title, source, kind);
       const detail = el('div', 'role-detail');
+      // what the agent does, and the id that config files and the CLI know it by
+      const about = el('span', 'role-about');
+      const does = el('span', 'role-does');
+      const id = el('span', 'agent-id');
+      id.append('id ', el('code', '', r.id));
+      about.append(does, id);
       const keywords = el('span', 'role-keywords');
       const toolsLine = el('span', 'role-tools mono');
       const model = el('span', 'role-model');
-      detail.append(keywords, toolsLine, model);
+      detail.append(about, keywords, toolsLine, model);
       const actions = el('div', 'account-actions');
       const edit = el('button', 'btn btn-small');
       edit.type = 'button';
@@ -263,7 +270,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
       actions.append(edit, settings);
       li.append(head, detail, actions);
       e.list.append(li);
-      row = { li, name, title, source, kind, keywords, tools: toolsLine, model, edit, settings };
+      row = { li, name, title, does, source, kind, keywords, tools: toolsLine, model, edit, settings };
       rows.set(r.id, row);
     }
     const v = roleView(r);
@@ -271,6 +278,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     row.li.dataset.builtin = String(r.builtin);
     setText(row.name, r.name);
     setText(row.title, r.title);
+    setText(row.does, r.description ? `${r.description} ` : '');
     setText(row.source, v.source, v.sourceTone);
     setText(row.kind, v.kind);
     row.keywords.replaceChildren(...r.keywords.map((k) => el('span', 'kw-chip mono', k)));
@@ -280,10 +288,10 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     setText(row.model, v.model);
     row.model.title = `Model: ${v.model}`;
     setText(row.edit, v.action);
-    row.edit.setAttribute('aria-label', `${v.action} of ${r.name}`);
+    row.edit.setAttribute('aria-label', `${v.action} of ${r.inText}`);
     row.edit.setAttribute('aria-expanded', String(editing === r.id));
     row.edit.disabled = busy;
-    row.settings.setAttribute('aria-label', `Settings of ${r.name}`);
+    row.settings.setAttribute('aria-label', `Settings of ${r.inText}`);
     row.settings.setAttribute('aria-expanded', String(settingsFor === r.id));
     row.settings.disabled = busy;
   }
@@ -294,7 +302,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     if (!r) return;
     const v = roleView(r);
     const editable = r.prompt.editable;
-    setText(e.title, `${r.name}'s system prompt`);
+    setText(e.title, `${capital(r.inText)}'s system prompt`);
     e.text.readOnly = !editable;
     const bytes = utf8Bytes(e.text.value);
     setText(e.count, editable ? `${bytes} / ${PROMPT_MAX_BYTES} bytes` : `${bytes} bytes`, bytes > PROMPT_MAX_BYTES ? 'error' : '');
@@ -476,7 +484,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     await load();
     if (at !== gen || !e.dialog.open) return;
     const button = closeEditor({ force: true, focus: false });
-    setText(e.status, `Saved ${r.name}'s prompt. Runs started from now on use it.`);
+    setText(e.status, `Saved ${r.inText}'s prompt. Runs started from now on use it.`);
     (button ?? e.status).focus();
   });
 
@@ -502,7 +510,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
         await load();
         if (at !== gen || !e.dialog.open) return {};
         const button = closeEditor({ force: true, focus: false });
-        setText(e.status, `${r.name}'s prompt is the ${r.builtin ? 'built-in' : 'starter'} one again.`);
+        setText(e.status, `${capital(r.inText)}'s prompt is the ${r.builtin ? 'built-in' : 'starter'} one again.`);
         return { focus: button ?? e.status };
       },
     });
@@ -529,7 +537,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     closeOthers('settings');
     gen += 1;
     settingsFor = id;
-    setText(e.sTitle, `${r.name}'s settings`);
+    setText(e.sTitle, `${capital(r.inText)}'s settings`);
     e.sIdentity.hidden = r.builtin;
     const d = defaultKeywords(r.id);
     e.sName.value = r.builtin ? '' : r.name;
@@ -615,7 +623,7 @@ export function createAgentsPanel({ getControl, confirm, onChange = () => {} }) 
     await load();
     if (at !== gen || !e.dialog.open) return;
     const button = closeSettings({ force: true, focus: false });
-    setText(e.status, `Saved ${r.name}'s settings. Runs started from now on use them.`);
+    setText(e.status, `Saved ${r.inText}'s settings. Runs started from now on use them.`);
     (button ?? e.status).focus();
   });
 

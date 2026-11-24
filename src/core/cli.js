@@ -19,6 +19,7 @@ import { formatRunSummary, quotePathArgument, formatCommandScope } from './run-s
 import { listRestorePoints, undoRun, workspaceState } from './restore-points.js';
 import { randomUUID } from 'node:crypto';
 import { AGENT_IDS } from './state.js';
+import { ROLE_NAMES, roleWithId } from './workflow.js';
 import { isLoopbackAddress } from './network.js';
 import { createAuthService } from './auth.js';
 import os from 'node:os';
@@ -40,8 +41,10 @@ const POLICIES = ['ask', 'abort', 'skip', 'hive'];
 export const HELP = `Project Scranton - durable multi-agent harness
 
 Usage:
-  scranton run "<request>" [options]       Plan, build and test a request (Michael, Dwight, Angela)
+  scranton run "<request>" [options]       Plan, build and test a request (${ROLE_NAMES.michael}, ${ROLE_NAMES.dwight}, ${ROLE_NAMES.angela})
   scranton agent <michael|dwight|oscar|hank|angela> "<task>" [--workspace DIR]
+                                           ${AGENT_IDS.slice(0, 3).map(roleWithId).join(', ')},
+                                           ${AGENT_IDS.slice(3).map(roleWithId).join(', ')}
                                            Run one audited, isolated agent; private changes are not integrated
   scranton recover [--hive DIR | --data DIR --project ID --chat ID] [--confirm-stopped]
                                            Inspect ownership; recover gone runs (confirm stopped for unknown/cleanup warnings)
@@ -85,7 +88,8 @@ Usage:
 
 Options:
   --conversation       Publish agent messages and a final reply (--no-conversation disables)
-  --gates STAGES       Ordered gates, e.g. oscar+hank,angela
+  --gates STAGES       Ordered gate ids, e.g. oscar+hank,angela (${ROLE_NAMES.oscar} and
+                       ${ROLE_NAMES.hank} in parallel, then ${ROLE_NAMES.angela})
   --parallel N         Maximum concurrent milestone pipelines (default 3)
   --trusted-host       Explicitly trust host execution (worktrees remain isolated)
   --sandbox MODE       scranton (default) | docker | host (requires --trusted-host)
@@ -104,7 +108,7 @@ Options:
   --request-file FILE  run: UTF-8 (optional BOM) or BOM-marked UTF-16; leading { requires strict v1 envelope
                        Otherwise literal text, minus one final LF/CRLF/CR; nonblank, max 32768 chars / 262144 bytes
   --config FILE        Config file (default ./scranton.config.json)
-  --no-plan            run: skip Michael's planning, use one milestone for the whole request
+  --no-plan            run: skip the Planner's planning, use one milestone for the whole request
   --max-cycles N       Cycle limit (safety), 1..50 (default 12)
   --max-stalled N      Stop after N cycles without progress, 1..10 (default 2)
   --milestone-tokens N Token budget per milestone, 0 = off (default 500000)
@@ -276,7 +280,7 @@ export async function runCli(argv, { stdout = process.stdout, stderr = process.s
       saveAgent(config, rest[1], patch);
       stdout.write('Agent settings saved.\n'); return 0;
     }
-    if (command === 'agent' && !AGENT_IDS.includes(rest[0])) throw new UsageError(`agent must be one of: ${AGENT_IDS.join(', ')}`);
+    if (command === 'agent' && !AGENT_IDS.includes(rest[0])) throw new UsageError(`agent must be one of: ${AGENT_IDS.map(roleWithId).join(', ')}`);
     const io = { stdout, stderr, stdin, env, cwd, begin };
     switch (command) {
       case 'projects':
@@ -885,7 +889,7 @@ async function cmdDemo(values, { stdout, stderr, stdin, env, cwd, begin }) {
 }
 
 async function cmdAgent(agentId, task, config, { stdout, stderr, env, begin }) {
-  if (!AGENT_IDS.includes(agentId)) throw new UsageError(`agent needs one of: ${AGENT_IDS.join(', ')}`);
+  if (!AGENT_IDS.includes(agentId)) throw new UsageError(`agent needs one of: ${AGENT_IDS.map(roleWithId).join(', ')}`);
   if (!task.trim()) throw new UsageError(`agent ${agentId} needs a task, e.g. scranton agent ${agentId} "say hi"`);
   // Standalone agents retain the same lease and sandbox guarantees as a run.
   const orchestrator = new Orchestrator({ config, noPlan: true, extraEnv: env, stdout,

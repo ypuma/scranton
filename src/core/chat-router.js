@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { promptName } from './workflow.js';
 
 export class ChatRouter {
   constructor({ hiveDir, runId, emit, maxMessages = 500, maxText = 16000 }) {
@@ -17,7 +18,14 @@ export class ChatRouter {
     fs.mkdirSync(this.spool, { recursive: true });
   }
 
-  register(id) { if (!this.instances.has(id)) this.instances.set(id, { queue: [], runner: null, terminal: false }); }
+  // name and milestone say who the id is ("QA Tester, m1"): since the rename an id no longer reads as its agent.
+  register(id, name = null, milestone = null) {
+    if (!this.instances.has(id)) this.instances.set(id, { queue: [], runner: null, terminal: false, name: name ? [promptName(name, id), milestone].filter(Boolean).join(', ') : null });
+  }
+
+  label(id) { const name = this.instances.get(id)?.name; return name ? `${id} (${name})` : id; }
+
+  recipients() { return [...this.instances].map(([id, { name }]) => `\`${id}\`${name ? ` (${name})` : ''}`).join(', '); }
 
   record(type, fields) {
     fs.appendFileSync(this.journal, `${JSON.stringify({ type, runId: this.runId, ...fields })}\n`);
@@ -40,7 +48,7 @@ export class ChatRouter {
     else if (this.count >= this.maxMessages || (this.counts.get(from) ?? 0) >= 100) reason = 'Message limit reached';
     const message = { id, from, to: typeof to === 'string' ? to : '', text: typeof text === 'string' ? text.slice(0, this.maxText) : '', delivery: reason ? 'rejected' : 'queued', ...(reason ? { reason } : {}) };
     this.record('chat_message', message);
-    if (reason) return { ok: false, id, delivery: 'rejected', reason, error: reason };
+    if (reason) return { ok: false, id, delivery: 'rejected', reason, error: reason.startsWith('Unknown recipient') ? `${reason}. Exact recipient IDs: ${this.recipients()}` : reason };
     this.count++; this.counts.set(from, (this.counts.get(from) ?? 0) + 1);
     target.queue.push(message);
     if (target.runner) await this.flush(to);
@@ -63,7 +71,7 @@ export class ChatRouter {
         target.inFlight = message;
         let ack;
         try {
-          ack = await target.runner.sendMessage(`[Message from ${message.from}; id ${message.id}]\n${message.text}`);
+          ack = await target.runner.sendMessage(`[Message from ${this.label(message.from)}; id ${message.id}]\n${message.text}`);
         } catch (error) {
           ack = { ok: false, delivery: 'unknown', error: error?.message ?? 'Steer acknowledgement failed' };
         }

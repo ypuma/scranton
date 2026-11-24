@@ -52,14 +52,14 @@ test('every event type becomes its entry, in order, with a unique id and a known
   assert.equal(out[1].text, 'Plan ready: 2 milestones');
   assert.equal(out[2].text, 'm1 started: Parser');
   assert.deepEqual(pick(out[3], ['who', 'context', 'text', 'final', 'truncated']),
-    { who: { id: 'dwight', name: 'Dwight', title: 'Developer' }, context: 'm1 · cycle 1', text: 'Reading the parser first.', final: false, truncated: false });
-  assert.deepEqual(pick(out[4], ['who', 'context', 'text', 'tone']), { who: { id: 'dwight', name: 'Dwight', title: 'Developer' }, context: 'm1', text: 'read src/cli.js', tone: null });
+    { who: { id: 'dwight', name: 'Developer', title: 'Writes the code', inText: 'the Developer' }, context: 'm1 · cycle 1', text: 'Reading the parser first.', final: false, truncated: false });
+  assert.deepEqual(pick(out[4], ['who', 'context', 'text', 'tone']), { who: { id: 'dwight', name: 'Developer', title: 'Writes the code', inText: 'the Developer' }, context: 'm1', text: 'read src/cli.js', tone: null });
   assert.equal(out[5].final, true);
-  assert.deepEqual(pick(out[6], ['who', 'context', 'text', 'tone']), { who: { id: 'oscar', name: 'Oscar', title: 'Reviewer' }, context: 'm1 · cycle 1', text: 'Approved', tone: 'ok' });
+  assert.deepEqual(pick(out[6], ['who', 'context', 'text', 'tone']), { who: { id: 'oscar', name: 'Code Reviewer', title: 'Reviews the changes', inText: 'the Code Reviewer' }, context: 'm1 · cycle 1', text: 'Approved', tone: 'ok' });
   assert.equal(out[6].keyword, 'REVIEW_APPROVED', 'the verdict in the run panel\'s words, the keyword kept beside it');
   assert.deepEqual(pick(out[7], ['text', 'tone']), { text: 'm1 cycle 1 passed: All gates passed', tone: 'ok' });
   assert.deepEqual(pick(out[8], ['text', 'tone']), { text: 'm1 passed', tone: 'ok' });
-  assert.deepEqual(pick(out[9], ['kind', 'who', 'context', 'text', 'tone']), { kind: 'human', who: { id: 'human', name: 'You', title: '' }, context: 'to dwight-m1', text: 'Keep it short.', tone: null });
+  assert.deepEqual(pick(out[9], ['kind', 'who', 'context', 'text', 'tone']), { kind: 'human', who: { id: 'human', name: 'You', title: '' }, context: 'to the Developer (m1)', text: 'Keep it short.', tone: null });
 });
 
 test('exactly one reply: the run_reply, with the outcome and the totals of the run line under it', () => {
@@ -76,7 +76,7 @@ test('exactly one reply: the run_reply, with the outcome and the totals of the r
   const replies = out.filter((x) => x.kind === 'reply');
   assert.equal(replies.length, 1);
   assert.deepEqual(replies[0], {
-    id: `rep-${RUN}`, runId: RUN, kind: 'reply', ts: '2026-11-11T09:00:05.000Z', who: { id: 'michael', name: 'Michael', title: 'Orchestrator' },
+    id: `rep-${RUN}`, runId: RUN, kind: 'reply', ts: '2026-11-11T09:00:05.000Z', who: { id: 'michael', name: 'Planner', title: 'Plans the work', inText: 'the Planner' },
     context: 'Success · 1/1 milestones · 1.5k tokens · $0.020 · 7s', text: 'Done.', truncated: false, tone: 'ok', replyKind: 'report',
   });
   assert.equal(out.at(-1).kind, 'reply', 'the summary of run_finished adds no second reply');
@@ -129,7 +129,7 @@ test('the tools of one instance between two of its messages are one line: the co
 test('a human question, then the answer; steering messages with their delivery', () => {
   const asked = adapt([START, ['hitl_request', { milestoneId: 'm2', reason: '2 consecutive failed cycles on m2.', options: ['feedback', 'retry'] }]]).at(-1);
   assert.deepEqual(pick(asked, ['kind', 'who', 'context', 'text', 'tone']),
-    { kind: 'question', who: { id: 'michael', name: 'Michael', title: 'Orchestrator' }, context: 'm2', text: '2 consecutive failed cycles on m2.', tone: 'warn' });
+    { kind: 'question', who: { id: 'michael', name: 'Planner', title: 'Plans the work', inText: 'the Planner' }, context: 'm2', text: '2 consecutive failed cycles on m2.', tone: 'warn' });
   const out = adapt([
     START,
     ['hitl_request', { milestoneId: 'm2', reason: 'Stuck.', options: ['feedback', 'retry'] }],
@@ -145,15 +145,15 @@ test('a human question, then the answer; steering messages with their delivery',
   ]);
   assert.deepEqual(out.slice(1).map((x) => [x.kind, x.context, x.text, x.tone]), [
     ['question', 'm2', 'Stuck.', null],
-    ['human', 'm2', 'You chose Feedback for Dwight\n\nTreat a missing file as empty.', null],
+    ['human', 'm2', 'You chose Feedback for the Developer\n\nTreat a missing file as empty.', null],
     ['question', '', 'Stuck again.', null],
     ['human', '', 'You chose Retry', null],
-    ['human', 'to dwight-m2 · queued', 'One', null],
+    ['human', 'to the Developer (m2) · queued', 'One', null],
     ['human', 'to gone-m9 · rejected: unknown recipient', 'Two', 'fail'],
-    ['human', 'to dwight-m2 · delivery unknown', 'Three', 'warn'],
-    ['agent', 'to angela-m2', 'Ready for QA.', null],
+    ['human', 'to the Developer (m2) · delivery unknown', 'Three', 'warn'],
+    ['agent', 'to the QA Tester (m2)', 'Ready for QA.', null],
   ], 'an answered question is no longer waiting; a late queued echo does not undo an unknown delivery');
-  assert.deepEqual(pick(out.at(-1), ['who', 'final']), { who: { id: 'dwight', name: 'Dwight', title: 'Developer' }, final: false });
+  assert.deepEqual(pick(out.at(-1), ['who', 'final']), { who: { id: 'dwight', name: 'Developer', title: 'Writes the code', inText: 'the Developer' }, final: false });
   const over = adapt([START, ['hitl_request', { milestoneId: null, reason: 'Stuck.', options: ['abort'] }], ['run_finished', { status: 'aborted', summary: 'Stopped' }]]);
   assert.equal(over[1].tone, null, 'nobody answers a run that is over');
 });
@@ -161,10 +161,10 @@ test('a human question, then the answer; steering messages with their delivery',
 test('a message sent from this page shows as queued until the stream echoes it', () => {
   const outbox = [{ id: 'c9', runId: RUN, to: 'dwight-m1', text: 'Use todos.json', delivery: 'queued', ts: '2026-11-11T09:01:00.000Z', stale: false }];
   const local = adapt([START], { outbox }).at(-1);
-  assert.deepEqual(pick(local, ['id', 'kind', 'context', 'text']), { id: `chat-${RUN}-c9`, kind: 'human', context: 'to dwight-m1 · queued', text: 'Use todos.json' });
-  assert.equal(adapt([START], { outbox: [{ ...outbox[0], stale: true }] }).at(-1).context, 'to dwight-m1 · queued, not picked up yet');
+  assert.deepEqual(pick(local, ['id', 'kind', 'context', 'text']), { id: `chat-${RUN}-c9`, kind: 'human', context: 'to the Developer (m1) · queued', text: 'Use todos.json' });
+  assert.equal(adapt([START], { outbox: [{ ...outbox[0], stale: true }] }).at(-1).context, 'to the Developer (m1) · queued, not picked up yet');
   const echoed = adapt([START, ['chat_message', { id: 'c9', from: 'human', to: 'dwight-m1', text: 'Use todos.json', delivery: 'delivered' }]], { outbox });
-  assert.deepEqual(echoed.filter((x) => x.kind === 'human').map((x) => [x.id, x.context]), [[`chat-${RUN}-c9`, 'to dwight-m1']], 'once, under the same id');
+  assert.deepEqual(echoed.filter((x) => x.kind === 'human').map((x) => [x.id, x.context]), [[`chat-${RUN}-c9`, 'to the Developer (m1)']], 'once, under the same id');
   assert.equal(adapt([START], { outbox: [{ ...outbox[0], runId: 'another-run' }] }).length, 1, 'a message of another run is not shown here');
 });
 
@@ -181,10 +181,10 @@ test('a run without agent messages still reads as a conversation: mailbox summar
     ['run_finished', { status: 'partial', summary: '0 of 1 milestones passed' }],
   ]);
   assert.deepEqual(out.slice(1).map((x) => [x.kind, x.who?.name ?? null, x.context ?? null, x.text, x.tone ?? null]), [
-    ['agent', 'Michael', 'm1 · task to Dwight', 'm1: Todo storage', null],
-    ['agent', 'Dwight', 'm1 · handoff to Angela', 'Dwight finished m1: Implemented m1.', null],
+    ['agent', 'Planner', 'm1 · task to the Developer', 'm1: Todo storage', null],
+    ['agent', 'Developer', 'm1 · handoff to the QA Tester', 'Dwight finished m1: Implemented m1.', null],
     ['activity', null, null, 'm1 cycle 1 failed: Angela reported [TEST_FAILED]', 'fail'],
-    ['agent', 'Angela', 'm1 · bug report to Dwight', 'QA failed: done 1 crashes.', null],
+    ['agent', 'QA Tester', 'm1 · bug report to the Developer', 'QA failed: done 1 crashes.', null],
     ['activity', null, null, 'm1 skipped', 'warn'],
     ['reply', 'Scranton', 'Partial · 0/1 milestones · 8s', '0 of 1 milestones passed', 'fail'],
   ], 'the request to the planner and the question to the human are not repeated as agent messages');
@@ -206,8 +206,8 @@ test('the bundled demo recording reads as a conversation with one reply', () => 
   assert.match(out.at(-1).context, /^Success · 3\/3 milestones · 3 files written · [\d.]+k tokens · \$\d+\.\d+ · \dm \d\ds$/);
   assert.ok(out.filter((x) => x.kind === 'agent').length >= 8, 'tasks, handoffs and bug reports');
   assert.deepEqual(out.filter((x) => x.kind === 'question').map((x) => x.tone), [null], 'the question of the recording was answered');
-  assert.ok(out.some((x) => x.kind === 'human' && /^You chose Feedback for Dwight\n\nTreat a missing todos\.json/.test(x.text)));
-  assert.ok(out.some((x) => x.kind === 'human' && x.context === 'to dwight-m2' && x.text === 'Keep the commands short: add, list and done.'));
+  assert.ok(out.some((x) => x.kind === 'human' && /^You chose Feedback for the Developer\n\nTreat a missing todos\.json/.test(x.text)));
+  assert.ok(out.some((x) => x.kind === 'human' && x.context === 'to the Developer (m2)' && x.text === 'Keep the commands short: add, list and done.'));
   assert.ok(out.length < sample.length / 2, `${out.length} entries for ${sample.length} events`);
 });
 
@@ -247,7 +247,7 @@ test('hostile model text: bidi and control characters go, the 16000 cap holds, t
     ['run_started', { request: 'x', roles: [{ id: 'seclint', name: 'Sec\u202Elint', title: 'Li\u0007nt', kind: 'gate' }] }],
     msg('seclint', 'Checked.', { final: true }),
   ]) });
-  assert.deepEqual(named[1].who, { id: 'seclint', name: 'Seclint', title: 'Lint' });
+  assert.deepEqual(named[1].who, { id: 'seclint', name: 'Seclint', title: 'Lint', inText: 'Seclint' });
 });
 
 test('earlier runs: the request and the reply straight from the run list, the detail once its events are there', () => {
@@ -267,7 +267,7 @@ test('earlier runs: the request and the reply straight from the run list, the de
     ['r1', 'request'], ['r1', 'reply'], ['r2', 'request'], ['r2', 'reply'], ['r3', 'request'], ['r3', 'reply'], [RUN, 'request'], [RUN, 'agent'],
   ]);
   assert.deepEqual(pick(out[1], ['id', 'who', 'replyKind', 'text', 'truncated', 'tone', 'context', 'ts']), {
-    id: 'rep-r1', who: { id: 'michael', name: 'Michael', title: 'Orchestrator' }, replyKind: 'answer', text: 'It runs agents.', truncated: true, tone: 'ok', context: 'Success', ts: '2026-11-10T10:01:00.000Z',
+    id: 'rep-r1', who: { id: 'michael', name: 'Planner', title: 'Plans the work', inText: 'the Planner' }, replyKind: 'answer', text: 'It runs agents.', truncated: true, tone: 'ok', context: 'Success', ts: '2026-11-10T10:01:00.000Z',
   });
   assert.deepEqual(pick(out[3], ['who', 'replyKind', 'text', 'tone', 'context']), { who: { id: 'system', name: 'Scranton', title: '' }, replyKind: 'summary', text: 'm1 passed, m2 failed', tone: 'fail', context: 'Partial' },
     'a run without a stored reply shows its summary and status');
@@ -298,13 +298,13 @@ test('long messages, redraw keys, labels and what is announced', () => {
     ['hitl_request', { milestoneId: 'm2', reason: 'Stuck on m2.', options: ['retry'] }], ['run_reply', { from: 'michael', kind: 'answer', text: 'It is parseArgs.\n\n[ANSWER_READY]' }]]);
   const [request, agent, activity, question, reply] = out;
   assert.match(entryLabel(request, now), /^You, \d\d:\d\d:\d\d$/);
-  assert.match(entryLabel(agent, now), /^Dwight, Developer, m2 · cycle 1, \d\d:\d\d:\d\d$/);
-  assert.match(entryLabel(question, now), /^Question from Michael, m2, waiting for an answer, \d\d:\d\d:\d\d$/);
-  assert.match(entryLabel(reply, now), /^Answer from Michael, \d\d:\d\d:\d\d$/);
+  assert.match(entryLabel(agent, now), /^Developer, Writes the code, m2 · cycle 1, \d\d:\d\d:\d\d$/);
+  assert.match(entryLabel(question, now), /^Question from the Planner, m2, waiting for an answer, \d\d:\d\d:\d\d$/);
+  assert.match(entryLabel(reply, now), /^Answer from the Planner, \d\d:\d\d:\d\d$/);
   assert.deepEqual([request, agent, activity].map(announcement), ['', '', ''], 'only a reply and a waiting question are announced');
-  assert.equal(announcement(question), 'Michael asks: Stuck on m2.');
+  assert.equal(announcement(question), 'The Planner asks: Stuck on m2.');
   assert.equal(announcement({ ...question, tone: null }), '', 'an answered question is not');
-  assert.equal(announcement(reply), 'Answer from Michael: It is parseArgs.');
+  assert.equal(announcement(reply), 'Answer from the Planner: It is parseArgs.');
 
   assert.equal(entryKey(agent), entryKey({ ...agent }));
   assert.notEqual(entryKey(agent), entryKey(agent, true), 'opened and closed are drawn differently');

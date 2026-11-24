@@ -2,7 +2,8 @@
 // in one shape for both engines: { agents, board, usage }. The Team side reads the reducer state and the /live
 // poll, the Pipeline side the run document its view polls. Pure: no DOM, no fetch.
 import {
-  AGENT_IDS, lanesOf, isLive, isBusy, settledStatus, laneGate, gateView, displayName, roleTitle, own, activeRoles, workflowOf, isGate,
+  AGENT_IDS, lanesOf, isLive, isBusy, settledStatus, laneGate, gateView, displayName, shortName, roleTitle, instanceLabel, aboutAgent, own,
+  activeRoles, workflowOf, isGate,
   dependencyState, humanNeeded, customRoles, freshUsage, addUsage, countWritten, USAGE_POINTS_MAX, TOUCHED_MAX,
   checkView, TRIP_WORD,
 } from './state.js';
@@ -25,7 +26,6 @@ export const BOARD_COLUMNS = [
 ];
 export const NO_REASONING = 'This model shows no reasoning; its answer is shown instead.';
 
-const LANE_ROLE = { michael: 'Planner', dwight: 'Developer', oscar: 'Reviewer', hank: 'Security', angela: 'QA' };
 const ACTIVE = new Set(['starting', 'thinking', 'working']);
 const PHASES = ['thinking', 'text', 'tool', 'idle'];
 const CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
@@ -37,11 +37,6 @@ const stamp = (ts) => {
   const t = Date.parse(ts ?? '');
   return Number.isFinite(t) ? t : null;
 };
-
-// What a lane is called by its role: a custom gate by the title the run gave it.
-export function laneRole(agent, state = null) {
-  return own(LANE_ROLE, agent) ?? (roleTitle(agent, state) || displayName(agent, state));
-}
 
 // ------------------------------------------------------------ live text
 
@@ -133,7 +128,9 @@ function teamLine(x, tail, gate) {
   }
 }
 
-function teamAgent(state, x, id, tails, { name, role, gate, tailId = id, asRole = false }) {
+// name: "Developer \u00b7 m1"; short: the same for a chip; role: what the agent does; about: the name's tooltip
+function teamAgent(state, x, id, tails, { gate, tailId = id, asRole = false }) {
+  const agent = x.agent ?? id;
   const active = ACTIVE.has(x.status);
   const tail = active && tails ? own(tails, tailId) ?? null : null;
   const shown = active || x.status === 'error' || x.status === 'blocked' ? null : gate;
@@ -143,7 +140,8 @@ function teamAgent(state, x, id, tails, { name, role, gate, tailId = id, asRole 
   if (status === 'stopped') line = /^(Done|Idle)$/.test(line) ? 'Stopped with the run' : line.replace(/^Failed: /, '');
   else if (status === 'unused') line = 'Not used in this run';
   return {
-    id, agent: x.agent ?? id, name, role, status, live: isLive(x) && x.status !== 'idle', busy: isBusy(x),
+    id, agent, name: instanceLabel(id, state), short: instanceLabel(id, state, { short: true }), role: roleTitle(agent, state), about: aboutAgent(id, state),
+    status, live: isLive(x) && x.status !== 'idle', busy: isBusy(x),
     line, gate: shown?.result ?? null, ...liveText(tail), files: x.touchedFiles ?? [],
   };
 }
@@ -153,12 +151,7 @@ function agentSources(state) {
   if (!state?.runId) return [];
   const lanes = lanesOf(state);
   if (lanes.length) {
-    return lanes.map((i) => ({
-      x: i, id: i.id, opts: {
-        name: i.id, gate: laneGate(state, i),
-        role: [laneRole(i.agent, state), i.milestoneId && i.milestoneId !== 'plan' ? i.milestoneId : ''].filter(Boolean).join(' · '),
-      },
-    }));
+    return lanes.map((i) => ({ x: i, id: i.id, opts: { gate: laneGate(state, i) } }));
   }
   // JSON transport has role-only statuses, but live.json uses the same exact invocation ids as RPC.
   const current = state.currentMilestoneId;
@@ -166,7 +159,7 @@ function agentSources(state) {
     && state.milestones.some((m) => m.id === current && m.status === 'active') ? current : null;
   return activeRoles(state).filter((id) => own(state.agents, id)).map((id) => ({
     x: state.agents[id], id, opts: {
-      name: displayName(id, state), role: laneRole(id, state), gate: isGate(state, id) ? gateView(state, id, null) : null, asRole: true,
+      gate: isGate(state, id) ? gateView(state, id, null) : null, asRole: true,
       tailId: id === 'michael' ? id : milestone ? `${id}-${milestone}` : current || state.activeMilestoneIds?.length ? null : id,
     },
   }));
@@ -242,7 +235,7 @@ function milestoneGates(state, m, mine) {
     const g = own(m.gates ?? {}, id);
     const current = g && !(Number.isInteger(g.cycle) && m.cycles > g.cycle) ? g.result : null;
     const running = mine.some((i) => i.agent === id && ACTIVE.has(i.status));
-    return { id, name: displayName(id, state), result: running ? 'running' : current ?? 'pending' };
+    return { id, name: shortName(id, state), full: displayName(id, state), result: running ? 'running' : current ?? 'pending' };
     // a milestone that is over has no gate still to run: only the results it recorded are shown (a journal from
     // before gate_result recorded none)
   }).filter((g) => m.status === 'active' || (g.result !== 'pending' && g.result !== 'running'));
@@ -270,7 +263,11 @@ export function teamBoard(state, agents = teamAgents(state)) {
       id: m.id, title: m.title, column, state: word, loud: column === 'blocked' || word === 'blocked',
       note: dependencyText(dep, m),
       reason: failed ? m.lastReason : m.status !== 'passed' && m.status !== 'active' && m.status !== 'pending' ? str(m.lastReason) : '',
-      agents: m.status === 'active' ? mine.filter(isLive).map((i) => ({ id: i.id, status: i.status, line: lines.get(i.id)?.line ?? i.status })) : [],
+      // on the card of its milestone an instance is its role; which instance it is, is a hover away
+      agents: m.status === 'active' ? mine.filter(isLive).map((i) => ({
+        id: i.id, name: shortName(i.agent, state), about: [instanceLabel(i.id, state), aboutAgent(i.id, state)].filter(Boolean).join(': '),
+        status: i.status, line: lines.get(i.id)?.line ?? i.status,
+      })) : [],
       attempt: m.cycles ?? 0, failed: failedCycles(m), gates: milestoneGates(state, m, mine),
       // the last progress check (a run from before it has none): { word, how, reason, meter }
       check: check && { word: check.word, how: check.how, reason: check.reason, meter: check.meter },
@@ -480,7 +477,8 @@ function chatTotal(rows, runId, current) {
 }
 
 // usage: contract section 2 shape. names(id) -> what an agent is called. order: agent ids in display order.
-function usageView(usage, { rows = [], runId = null, names = (id) => id, order = [], total = null, estimated = false, costSeries = true } = {}) {
+// full(id) -> the name in full, where names says it short for a table column.
+function usageView(usage, { rows = [], runId = null, names = (id) => id, full = names, order = [], total = null, estimated = false, costSeries = true } = {}) {
   const u = usage ?? freshUsage();
   const run = {
     cost: total ? total.cost : u.cost, tokens: total?.tokens ?? u.tokens, input: total?.input ?? u.input, output: total?.output ?? u.output,
@@ -491,7 +489,7 @@ function usageView(usage, { rows = [], runId = null, names = (id) => id, order =
   const whole = byCost ? u.cost : u.tokens;
   const agents = ids.map((id) => {
     const a = u.byAgent[id];
-    return { id, name: names(id), calls: a.calls, tokens: a.tokens, input: a.input, output: a.output, cost: a.cost, share: whole > 0 ? (byCost ? count(a.cost) : a.tokens) / whole : 0 };
+    return { id, name: names(id), full: full(id), calls: a.calls, tokens: a.tokens, input: a.input, output: a.output, cost: a.cost, share: whole > 0 ? (byCost ? count(a.cost) : a.tokens) / whole : 0 };
   });
   let last = stamp(u.startedAt);
   const series = u.series.map((p) => {
@@ -509,7 +507,7 @@ function usageView(usage, { rows = [], runId = null, names = (id) => id, order =
 
 export function teamUsage(state, runs = []) {
   const order = [...AGENT_IDS, ...customRoles(state).map((r) => r.id)];
-  return usageView(state?.usage, { rows: runs, runId: state?.runId ?? null, names: (id) => displayName(id, state), order });
+  return usageView(state?.usage, { rows: runs, runId: state?.runId ?? null, names: (id) => shortName(id, state), full: (id) => displayName(id, state), order });
 }
 
 // run.usage: parseUsage of the response; run.calls: foldCalls of its llm_call events, for a server without usage.

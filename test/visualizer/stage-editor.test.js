@@ -36,7 +36,7 @@ test('parseControl: defaults.agents is the catalog; gates in catalog order, mode
     workflow: { gates: [['oscar', 'seclint'], ['nobody', 'angela']] },
   }));
   assert.deepEqual(gateCatalog(c).map((g) => [g.id, g.name, g.builtin]), [
-    ['oscar', 'Oscar', true], ['hank', 'Hank', true], ['angela', 'Angela', true], ['seclint', 'Seclint', false], ['docs2', 'Doris', false],
+    ['oscar', 'Code Reviewer', true], ['hank', 'Security Auditor', true], ['angela', 'QA Tester', true], ['seclint', 'Seclint', false], ['docs2', 'Doris', false],
   ]);
   assert.deepEqual(roleIds(c), [...RUN, 'seclint', 'docs2']);
   assert.deepEqual(c.models, { michael: null, dwight: null, oscar: null, hank: null, angela: null, seclint: PICK, docs2: null }, 'an id outside the catalog is no role');
@@ -49,7 +49,7 @@ test('the stage choice with custom gates: grouped by number, catalog order insid
   assert.deepEqual(workflowGates({ stages: { seclint: 2, oscar: 1, hank: 1, angela: 2 } }, order), [['oscar', 'hank'], ['angela', 'seclint']]);
   assert.deepEqual(workflowGates({ stages: { gone: 1, angela: 2 } }, order), [['angela']]);
   assert.equal(buildWorkflow({ stages: { gone: 1 } }, order).error, WORKFLOW_ERROR);
-  assert.equal(buildWorkflow({ stages: { docs2: '6' } }, order, { docs2: 'Doris' }).error, "Doris's stage must be a whole number from 1 to 5.");
+  assert.equal(buildWorkflow({ stages: { docs2: '6' } }, order, { docs2: 'Doris' }).error, 'The stage of Doris must be a whole number from 1 to 5.');
   assert.deepEqual(parseStoredWorkflow(JSON.stringify({ stages: { gone: 1, seclint: 2 } }), order), { stages: { seclint: 2 } });
   assert.equal(parseStoredWorkflow(JSON.stringify({ stages: { gone: 1 } }), order), null, 'a choice left without a gate is no choice');
   const c = parseControl(withAgents());

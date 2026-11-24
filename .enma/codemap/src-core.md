@@ -265,8 +265,10 @@ by: "core"
 ---
 file: "src/core/workflow.js"
 kind: "where"
-text: "The gate workflow vocabulary lives here:\n- GATE_ROLES (oscar, hank, angela), PASS_KEYWORDS per gate, ROLE_NAMES.\n- normalizeWorkflow({gates}): validates the normalized array-of-arrays form. Unknown, duplicate, non-gate and empty stages are refused with status 400.\n- activeRoles(config, noPlan): michael unless noPlan, then dwight, then the gates. It decides which roles need models (validateDockerModels).\n\nThe engine default is [[\"angela\"]] (legacy event order). The UI defaults to [[\"oscar\",\"hank\"],[\"angela\"]]. The CLI uses --gates \"oscar+hank,angela\": comma separates stages, plus runs roles in parallel. The spec is .enma/roles-contract.md."
-hash: "shape:46c6bc6aa03bfa95"
-written: "2026-11-09"
+text: "The gate workflow vocabulary AND the names of the built-in agents live here.\n- Names (since 2026-11-24 the agents are shown under role names; ids never changed): `ROLE_NAMES` (michael Planner, dwight Developer, oscar Code Reviewer, hank Security Auditor, angela QA Tester), `ROLE_SHORT` (Planner / Developer / Reviewer / Security / QA), `ROLE_TITLES` (the short \"does\" phrase, also the `title` of a built-in in GET /api/agents), `ROLE_DESCRIPTIONS`. Helpers: `roleInSentence` (\"the Developer\"; custom names stay bare), `roleWithId` (\"Developer (id dwight)\" for CLI / config messages), `promptName(name, id)` (a name made safe for model-facing lists: only letters, digits, space and `_ . & / + ' -`, else the id). Every Node module and the terminal dashboard take the words from here; the browser has the same four tables in visualizer/public/js/state.js and test/visualizer/agent-names.test.js compares the two.\n- Gates: GATE_ROLES (oscar, hank, angela), PASS_KEYWORDS per gate, normalizeWorkflow({gates}) validates the array-of-arrays form (unknown, duplicate, non-gate and empty stages are refused with status 400), activeRoles(config, noPlan): michael unless noPlan, then dwight, then the gates (decides which roles need models).\nThe engine default is [[\"angela\"]] (legacy event order). The UI defaults to [[\"oscar\",\"hank\"],[\"angela\"]]. The CLI uses --gates \"oscar+hank,angela\"."
+see_also: ".enma/agent-names-contract.md (names, what must not change); .enma/roles-contract.md (gates); test/core/agent-names.test.js"
+hash: "shape:4e3fef52c40ac24b"
+written: "2026-11-24"
+commit: "617462f"
 by: "core"
 ---

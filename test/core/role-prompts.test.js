@@ -67,7 +67,7 @@ for (const role of ['oscar', 'hank']) {
     assert.notEqual(prompts[role], prompts[role === 'oscar' ? 'hank' : 'oscar']);
     const angelaLines = new Set(angela.split(/\r?\n/));
     for (const line of prompts[role].split(/\r?\n/).filter((line) => line.length >= 60)) {
-      assert.equal(angelaLines.has(line), false, `${role} must not copy Angela's long line: ${line}`);
+      assert.equal(angelaLines.has(line), false, `${role} must not copy the QA Tester's long line: ${line}`);
     }
   });
 
@@ -78,7 +78,7 @@ for (const role of ['oscar', 'hank']) {
     assert.match(text, /read-only/i);
     assert.match(text, /installs/i);
     assert.match(text, /network access beyond what .+ strictly needs/i);
-    assert.match(text, /own fresh checkout of Dwight's immutable developer snapshot/);
+    assert.match(text, /own fresh checkout of the Developer's immutable developer snapshot/);
     assert.match(text, /(?:nothing a gate changes is ever integrated|Gate modifications are never integrated)/);
     assert.match(text, /```markdown\r?\n## /);
     assert.match(text, /- Location: <file:line>/);

@@ -3,7 +3,7 @@
 // conversation and what a screen reader is told. No DOM, so Node can test it and any adapter can reuse it.
 //
 // Entry: { id, runId, kind: 'request' | 'agent' | 'activity' | 'human' | 'question' | 'reply', ts,
-//          who?: { id, name, title }, context?, text?, final?, truncated?, tone?: 'ok' | 'fail' | 'warn' | null,
+//          who?: { id, name, title, inText? (the name inside a sentence: "the Planner") }, context?, text?, final?, truncated?, tone?: 'ok' | 'fail' | 'warn' | null,
 //          replyKind?: 'answer' | 'report' | 'summary' | 'result', keyword?: the protocol keyword behind an activity line }
 // A reply's context is its outcome line; a question with tone 'warn' is still waiting for its answer.
 import { stripBidi, formatWhen } from './format.js';
@@ -105,8 +105,9 @@ export function entryKey(x, open = false) {
 // The accessible name of an entry: who, as what, about what, when.
 export function entryLabel(x, now = Date.now()) {
   const name = x.who?.name || 'Scranton';
-  const lead = x.kind === 'reply' ? `${REPLY_LABEL[x.replyKind] ?? 'Reply'} from ${name}`
-    : x.kind === 'question' ? `Question from ${name}`
+  const from = x.who?.inText || name;
+  const lead = x.kind === 'reply' ? `${REPLY_LABEL[x.replyKind] ?? 'Reply'} from ${from}`
+    : x.kind === 'question' ? `Question from ${from}`
       : [name, x.who?.title].filter(Boolean).join(', ');
   const about = x.kind === 'reply' ? '' : x.context;
   const waiting = x.kind === 'question' && x.tone === 'warn' ? 'waiting for an answer' : '';
@@ -115,7 +116,8 @@ export function entryLabel(x, now = Date.now()) {
 
 // What the page announces: a new reply and a question that waits for its answer, nothing else. -> text or ''
 export function announcement(x) {
-  if (x.kind === 'reply') return `${REPLY_LABEL[x.replyKind] ?? 'Reply'} from ${x.who?.name || 'Scranton'}: ${cleanLine(splitKeyword(x.text).text, 160)}`;
-  if (x.kind === 'question' && x.tone === 'warn') return `${x.who?.name || 'Scranton'} asks: ${cleanLine(x.text, 160)}`;
+  const who = x.who?.inText || x.who?.name || 'Scranton';
+  if (x.kind === 'reply') return `${REPLY_LABEL[x.replyKind] ?? 'Reply'} from ${who}: ${cleanLine(splitKeyword(x.text).text, 160)}`;
+  if (x.kind === 'question' && x.tone === 'warn') return `${who.charAt(0).toUpperCase()}${who.slice(1)} asks: ${cleanLine(x.text, 160)}`;
   return '';
 }

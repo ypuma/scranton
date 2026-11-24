@@ -7,7 +7,21 @@ export const PARTICIPANTS = [...AGENT_IDS, 'human'];
 export const GATE_ROLES = ['oscar', 'hank', 'angela'];
 // what the engine runs when run_started reports no workflow (every run before gates existed)
 export const LEGACY_GATES = Object.freeze([Object.freeze(['angela'])]);
-export const ROLE_TITLES = { michael: 'Orchestrator', dwight: 'Developer', oscar: 'Reviewer', hank: 'Security', angela: 'QA' };
+// What the built-in agents are called (.enma/agent-names-contract.md). The one table of the browser: every other
+// module asks displayName, shortName, roleTitle, roleDescription, instanceLabel or theName. src/core/workflow.js
+// holds the same four for Node; test/visualizer/agent-names.test.js compares them.
+export const ROLE_NAMES = { michael: 'Planner', dwight: 'Developer', oscar: 'Code Reviewer', hank: 'Security Auditor', angela: 'QA Tester' };
+// where there is no room: a table column, a chip, a card's foot
+export const ROLE_SHORT = { michael: 'Planner', dwight: 'Developer', oscar: 'Reviewer', hank: 'Security', angela: 'QA' };
+// what an agent does, shown beside its name
+export const ROLE_TITLES = { michael: 'Plans the work', dwight: 'Writes the code', oscar: 'Reviews the changes', hank: 'Checks security', angela: 'Tests the result' };
+export const ROLE_DESCRIPTIONS = {
+  michael: 'Breaks the request into milestones, judges progress when a milestone fails and, in a chat, writes the final reply.',
+  dwight: 'Implements one milestone at a time and fixes what the checks report.',
+  oscar: 'Reviews each milestone\'s changes for defects, regressions and test coverage. Never edits the project.',
+  hank: 'Audits each milestone\'s changes for exploitable weaknesses. Never edits the project.',
+  angela: 'Runs the tests and the program against every acceptance criterion. Never edits the project.',
+};
 // a gate in the workflow summary: "Review + Security -> Tests"
 export const GATE_STEP = { oscar: 'Review', hank: 'Security', angela: 'Tests' };
 export const GATE_RESULTS = ['passed', 'failed', 'blocked', 'error'];
@@ -58,7 +72,7 @@ const RUN_PERMISSIONS = ['ask', 'auto', 'bypass'];
 const ACCESS_BY_WORD = { order: 'you asked for it', mode: 'permission mode', human: 'by you', timeout: 'no answer in time' };
 const QUOTE_MAX = 200;
 
-const NAMES = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela', human: 'Human' };
+const NAMES = { ...ROLE_NAMES, human: 'Human' };
 // what a gate card says about its result for the cycle
 const GATE_LABEL = {
   oscar: { passed: 'Approved', failed: 'Changes requested' },
@@ -135,6 +149,50 @@ export function displayName(id, state = null) {
 
 export function roleTitle(id, state = null) {
   return own(ROLE_TITLES, id) ?? customRole(state, id)?.title ?? '';
+}
+
+export function shortName(id, state = null) {
+  return own(ROLE_SHORT, id) ?? displayName(id, state);
+}
+
+// What a tooltip says an agent does; a custom agent has only the title its author gave it.
+export function roleDescription(id, state = null) {
+  return own(ROLE_DESCRIPTIONS, id) ?? customRole(state, id)?.title ?? '';
+}
+
+// Where an instance works, read from its id: 'dwight-m1' -> 'm1'. The id's own suffix, so two instances of a role
+// never read the same; the planner's 'plan' lane is the Planner itself. An id that does not start with its role
+// says its milestone, else itself.
+function instanceWhere(id, role, state) {
+  if (id === role) return '';
+  if (id.startsWith(`${role}-`)) return id.slice(role.length + 1).replace(/^plan$/, '');
+  const m = state?.instances?.[id]?.milestoneId;
+  return m && m !== 'plan' ? m : id;
+}
+
+// What a participant or an instance is called: 'dwight-m1' -> "Developer \u00b7 m1", 'dwight' -> "Developer". An id
+// of no known role stays as it is. short: with the name for narrow places ("Security \u00b7 m1").
+export function instanceLabel(id, state = null, { short = false } = {}) {
+  const role = roleOf(id, state);
+  if (!role) return String(id ?? '?');
+  const where = instanceWhere(id, role, state);
+  return [short ? shortName(role, state) : displayName(role, state), where].filter(Boolean).join(' \u00b7 ');
+}
+
+// The same inside a sentence: "the Developer", "the Developer (m1)". The names of custom agents and "Human" take
+// no article.
+export function theName(id, state = null) {
+  const role = roleOf(id, state);
+  if (!role) return String(id ?? '?');
+  const where = instanceWhere(id, role, state);
+  return `${AGENT_IDS.includes(role) ? 'the ' : ''}${displayName(role, state)}${where ? ` (${where})` : ''}`;
+}
+
+// What a name's tooltip adds to it: what the agent does, and the raw id where the label is not the id.
+export function aboutAgent(id, state = null) {
+  const role = roleOf(id, state);
+  const raw = typeof id === 'string' && id !== instanceLabel(id, state) ? `(id ${id})` : '';
+  return [role ? roleDescription(role, state) : '', raw].filter(Boolean).join(' ');
 }
 
 // What workflowText calls the custom gates of a run: their names.
@@ -284,7 +342,7 @@ function freshAgent() {
     lastKeyword: null,
     lastExitCode: null,
     updatedAt: null,
-    // seq of the last agent_status for the role itself (no instanceId): Michael overseeing or waiting on a human
+    // seq of the last agent_status for the role itself (no instanceId): the planner overseeing or waiting on a human
     roleSeq: 0,
     totals: { runs: 0, input: 0, output: 0, cost: 0, durationMs: 0 },
   };
@@ -665,7 +723,7 @@ function apply(s, e) {
         a.activity = busyLane.activity || 'Thinking...';
       }
       if (e.agent !== 'dwight' || (e.status !== 'thinking' && e.status !== 'working')) break;
-      // Dwight picking up work after a failed cycle opens the next one.
+      // The developer picking up work after a failed cycle opens the next one.
       const lane = inst?.milestoneId ?? s.currentMilestoneId;
       if (lane === s.currentMilestoneId) {
         if (!s.cycleOpen && s.currentMilestoneId) {
@@ -1066,7 +1124,7 @@ export function lanesOf(state) {
 }
 
 // The role card of a parallel run: status of the loudest live lane, never the last event's lane alone.
-// A role-only status newer than every live lane (Michael overseeing, or blocked on a human after his lane
+// A role-only status newer than every live lane (the planner overseeing, or blocked on a human after its lane
 // ended idle or in error) is the role's current word and wins.
 // -> the role aggregate plus { lanes, live, busy, focus } (focus = instance id the card speaks for)
 export function roleView(state, id) {
@@ -1083,9 +1141,11 @@ export function roleView(state, id) {
   if (!top) return view;
   view.status = top.status;
   view.tool = top.tool;
+  // the card already says who: a lane is named by where it works (the planner's own lane by nothing)
+  const at = (i) => instanceWhere(i.id, id, state);
   view.activity = busy.length > 1
-    ? `${busy.length} lanes: ${busy.map((i) => `${i.id} ${i.status}`).join(', ')}`
-    : `${top.id}: ${top.activity || top.status}`;
+    ? `${busy.length} lanes: ${busy.map((i) => [at(i), i.status].filter(Boolean).join(' ')).join(', ')}`
+    : [at(top), top.activity || top.status].filter(Boolean).join(': ');
   return view;
 }
 
@@ -1165,7 +1225,7 @@ export function budgetText(c) {
 export function checkView(m) {
   const c = m?.progressCheck;
   if (!c) return null;
-  const how = c.source === 'rule' ? CHECK_HOW[c.rule] ?? 'rule' : c.source === 'michael' ? 'judged by Michael' : '';
+  const how = c.source === 'rule' ? CHECK_HOW[c.rule] ?? 'rule' : c.source === 'michael' ? `judged by ${theName('michael')}` : '';
   return {
     cycle: c.cycle, verdict: c.verdict, word: VERDICT_WORD[c.verdict], how, reason: c.reason,
     meter: [stalledText(c), budgetText(c)].filter(Boolean).join(' · '),
@@ -1210,6 +1270,8 @@ function clip(text, max) {
   return t.length > max ? `${t.slice(0, max - 3)}...` : t;
 }
 
+const capital = (t) => `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
+
 // The first line of a message that says something, for a one-line log row.
 function firstLine(text, max) {
   const lines = String(text ?? '').split('\n').filter((l) => l.trim());
@@ -1236,7 +1298,7 @@ export function describe(e, state = null) {
       return { tone: 'info', text: `Milestone ${(e.index ?? 0) + 1}/${e.total ?? '?'} started: ${clip(e.title, 120)}` };
     case 'hive_write':
       return { tone: e.kind === 'bug_report' ? 'bad' : e.kind === 'hitl' || e.kind === 'feedback' ? 'warn' : 'info',
-        text: `${displayName(e.from)} -> ${displayName(e.to)} ${String(e.kind ?? 'note').replace('_', ' ')}: ${clip(e.summary, 140)}` };
+        text: `${instanceLabel(e.from, state)} -> ${instanceLabel(e.to, state)} ${String(e.kind ?? 'note').replace('_', ' ')}: ${clip(e.summary, 140)}` };
     case 'agent_status':
       if (e.status === 'idle') return null;
       if (e.status === 'error' || e.status === 'blocked') return { tone: 'bad', text: `${e.status}: ${clip(e.activity, FAILURE_TEXT_MAX)}` };
@@ -1267,7 +1329,7 @@ export function describe(e, state = null) {
     case 'access_request': {
       const mode = e.mode === 'write' ? 'write' : 'read';
       const prot = ACCESS_PROTECTED.includes(e.protected) ? ` (protected: ${e.protected})` : '';
-      return { tone: 'warn', text: `${displayName(e.agent, state)} asks to ${mode} outside the project: ${clip(e.path, 240)}${prot}${e.reason ? ` - ${clip(e.reason, 140)}` : ''}` };
+      return { tone: 'warn', text: `${capital(theName(e.agent, state))} asks to ${mode} outside the project: ${clip(e.path, 240)}${prot}${e.reason ? ` - ${clip(e.reason, 140)}` : ''}` };
     }
     case 'access_decision': {
       const granted = e.decision === 'granted';
@@ -1300,11 +1362,13 @@ export function describe(e, state = null) {
       const wt = normalizeWorktree(e.worktree, state?.workspace);
       const sb = normalizeSandbox(e.sandbox);
       const bits = [wt?.mode === 'worktree' ? 'worktree' : wt ? 'shared workspace' : null, sb ? `sandbox ${sb.mode}` : null].filter(Boolean);
-      return { tone: 'info', text: `${e.instanceId} started${e.milestoneId ? ` for ${e.milestoneId}` : ''}${bits.length ? ` · ${bits.join(' · ')}` : ''}` };
+      // the milestone is said once: by "for m1" where the event names it, else by the label
+      const who = e.milestoneId ? displayName(roleOf(e.instanceId, state) ?? e.instanceId, state) : instanceLabel(e.instanceId, state);
+      return { tone: 'info', text: `${who} started${e.milestoneId ? ` for ${e.milestoneId}` : ''}${bits.length ? ` · ${bits.join(' · ')}` : ''}` };
     }
     case 'chat_message':
       return { tone: e.delivery === 'rejected' ? 'bad' : 'info',
-        text: `${e.from} -> ${e.to} message${e.delivery === 'rejected' ? ' rejected' : ''}: ${clip(e.text, 140)}` };
+        text: `${instanceLabel(e.from, state)} -> ${instanceLabel(e.to, state)} message${e.delivery === 'rejected' ? ' rejected' : ''}: ${clip(e.text, 140)}` };
     case 'chat_delivery':
       if (e.delivery === 'unknown') {
         return { tone: 'warn', text: `Message ${clip(e.id, 12)} delivery unknown - not resent automatically${e.reason ? `: ${clip(e.reason, 120)}` : ''}` };

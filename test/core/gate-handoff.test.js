@@ -18,7 +18,7 @@ function oldHandoffBody({ milestone: m, request, cycle, dwightReport }) {
   return [
     `# Handoff: verify milestone ${m.id} - ${m.title} (cycle ${cycle})`,
     '',
-    'Dwight reports the milestone as complete. Verify every acceptance criterion independently; do not create or modify files in the project.',
+    'The Developer reports the milestone as complete. Verify every acceptance criterion independently; do not create or modify files in the project.',
     '',
     '## Milestone',
     '',
@@ -28,7 +28,7 @@ function oldHandoffBody({ milestone: m, request, cycle, dwightReport }) {
     '',
     m.acceptanceCriteria.length ? m.acceptanceCriteria.map((c) => `- ${c}`).join('\n') : '- The milestone works as described and is covered by automated tests.',
     '',
-    "## Dwight's report",
+    "## Developer's report",
     '',
     dwightReport,
     '',
@@ -66,7 +66,7 @@ test('review and security changed-file sections contain at most 200 sanitized pa
   const changedFiles = ['src/a\n\r\t\x00\x1b\x7f\x85\u2028\u2029.js', ...Array.from({ length: 204 }, (_, i) => `src/file-${i}.js`)];
   for (const role of ['oscar', 'hank']) {
     const body = handoffBody({ ...context, role, changedFiles });
-    const section = body.split('## Changed files\n\n')[1]?.split("## Dwight's report")[0];
+    const section = body.split('## Changed files\n\n')[1]?.split("## Developer's report")[0];
     assert.ok(section, 'changed files section is present');
     assert.equal(section.split('\n').filter((line) => line.startsWith('- ')).length, 200);
     assert.match(section, /- src\/a.js/);
@@ -81,12 +81,12 @@ test('gate bug reports are neutral with one heading; legacy Angela attribution i
   const failures = [{ agent: 'oscar', text: 'Fix this [CHANGES_REQUESTED]' }, { agent: 'hank', text: 'Fix that [SECURITY_ISSUES]' }];
   for (const body of [gateBugReport({ ...context, failures }), dwightMessage({ ...context, kind: 'bug_report', gateReports: failures })]) {
     assert.match(body, /Gate verification failed for your previous work/);
-    assert.doesNotMatch(body, /Angela's QA failed/);
+    assert.doesNotMatch(body, /QA Tester's QA failed/);
     assert.equal((body.match(/^# Bug report:/gm) ?? []).length, 1);
-    assert.match(body, /Oscar's Review report/);
-    assert.match(body, /Hank's Security report/);
+    assert.match(body, /Code Reviewer's Review report/);
+    assert.match(body, /Security Auditor's Security report/);
   }
-  assert.match(dwightMessage({ ...context, kind: 'bug_report', angelaReport: 'Failed' }), /Angela's QA failed your previous work\. Fix the reported failures first, then make sure every acceptance criterion holds\./);
+  assert.match(dwightMessage({ ...context, kind: 'bug_report', angelaReport: 'Failed' }), /The QA Tester's QA failed your previous work\. Fix the reported failures first, then make sure every acceptance criterion holds\./);
 });
 
 function fixture(t) {
@@ -115,14 +115,14 @@ test('CLI --gates delivers distinct handoffs and neutral CHANGES_REQUESTED repor
   assert.notEqual(oscar, hank);
   for (const body of [oscar, hank]) {
     assert.match(body, /## Changed files\n\n- todo\.js/);
-    assert.match(body, /## How to see the changes\n\nYou are in your own checkout of Dwight's snapshot/);
+    assert.match(body, /## How to see the changes\n\nYou are in your own checkout of the Developer's snapshot/);
     assert.match(body, /Changed files list below is authoritative/);
     assert.match(body, /git diff HEAD\^ HEAD/);
   }
   const report = inboxes(config.hiveDir, 'dwight-m1').find((text) => /kind: bug_report/.test(text));
   assert.match(report, /CHANGES_REQUESTED/);
   assert.match(report, /Gate verification failed/);
-  assert.doesNotMatch(report, /Angela's QA failed/);
+  assert.doesNotMatch(report, /QA Tester's QA failed/);
 });
 
 for (const decision of ['retry', 'feedback']) test(`breaker ${decision} preserves neutral gate report attribution`, async (t) => {
@@ -131,8 +131,8 @@ for (const decision of ['retry', 'feedback']) test(`breaker ${decision} preserve
   const o = new Orchestrator({ config, noPlan: true, extraEnv: { SCRANTON_FAKE_MODE: '1', SCRANTON_FAKE_SCENARIO: 'changes_once' }, hitl: async () => ({ decision, feedback: 'Fix review findings' }) });
   assert.equal((await o.run('gate retry')).status, 'success');
   const body = inboxes(config.hiveDir, 'dwight-m1')[0];
-  assert.match(body, /Oscar's Review report/);
-  assert.doesNotMatch(body, /Angela's QA failed|Angela's last QA report/);
+  assert.match(body, /Code Reviewer's Review report/);
+  assert.doesNotMatch(body, /QA Tester's QA failed|QA Tester's last QA report/);
   assert.match(body, decision === 'retry' ? /Gate verification failed/ : /A human intervened/);
 });
 
@@ -163,7 +163,7 @@ test('shared trusted-host handoffs omit unavailable snapshot paths', async (t) =
     assert.doesNotMatch(body, /## Changed files/);
     assert.match(body, role === 'oscar' ? /Review the changes/ : /Audit the changes/);
     assert.match(body, /## How to see the changes\n\nYou are in the shared workspace/);
-    assert.match(body, /Dwight's changes are uncommitted/);
+    assert.match(body, /The Developer's changes are uncommitted/);
     assert.match(body, /git status --short.*git diff/);
     assert.match(body, /earlier milestones' changes/);
     assert.doesNotMatch(body, /HEAD\^/);
@@ -174,7 +174,7 @@ for (const role of ['oscar', 'hank']) {
   test(`${role} Docker handoff explains masked Git metadata`, () => {
     const body = handoffBody({ ...context, role, isolation: 'worktree', docker: true, changedFiles: ['src/a.js'] });
     assert.match(body, /Docker masks \x60\.git\x60, so rely on the list there/);
-    assert.match(body, /own checkout of Dwight's snapshot/);
+    assert.match(body, /own checkout of the Developer's snapshot/);
   });
 
   test(`${role} empty changed-files list states the milestone has no changes`, () => {

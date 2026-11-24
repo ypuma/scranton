@@ -27,15 +27,15 @@ Scranton is an open-source harness for running AI coding agents against a local 
 
 ### Team roles
 
-| Role | Responsibility |
+| Role (id) | Responsibility |
 | --- | --- |
-| Michael | Turns the request into a validated milestone plan. |
-| Dwight | Implements a milestone and writes tests. |
-| Oscar | Reviews code for correctness, maintainability, and regressions. |
-| Hank | Reviews security, including trust boundaries, inputs, and secrets. |
-| Angela | Verifies acceptance criteria against the exact developer snapshot. |
+| Planner (`michael`) | Turns the request into a validated milestone plan. |
+| Developer (`dwight`) | Implements a milestone and writes tests. |
+| Code Reviewer (`oscar`) | Reviews code for correctness, maintainability, and regressions. |
+| Security Auditor (`hank`) | Reviews security, including trust boundaries, inputs, and secrets. |
+| QA Tester (`angela`) | Verifies acceptance criteria against the exact developer snapshot. |
 
-The Team engine defaults to Angela as its verification gate. You can add Oscar, Hank, or custom reviewers and configure which gates run in parallel.
+The Team engine defaults to the QA Tester as its verification gate. You can add the Code Reviewer, the Security Auditor, or custom reviewers and configure which gates run in parallel.
 
 ## Highlights
 
@@ -79,7 +79,7 @@ flowchart LR
     H -->|Skip or abort| S[Stop milestone or run]
 ```
 
-Gate failures can return work to Dwight. A blocked gate can also pause for a human decision; retrying that gate repeats only its stage. [See the Team workflow](docs/guide/team-roles-gates.md).
+Gate failures can return work to the Developer. A blocked gate can also pause for a human decision; retrying that gate repeats only its stage. [See the Team workflow](docs/guide/team-roles-gates.md).
 
 ## Install
 

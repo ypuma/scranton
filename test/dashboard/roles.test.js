@@ -18,17 +18,17 @@ test('workflow panels show ordered roles, parallel stage and both gate lanes', (
   const f = roleFixture();
   for (const width of [80, 100, 119, 120, 140]) {
     const out = render(f, { width, height: width < 120 ? 24 : 40 });
-    for (const word of ['OSCAR', 'HANK', 'ANGELA', 'oscar || hank (parallel)', 'oscar-m1', 'hank-m1']) assert.ok(out.includes(word), `missing ${word} at ${width}\n${out}`);
+    for (const word of ['CODE REVIEWER', 'SECURITY AUDITOR', 'QA TESTER', 'Reviewer || Security (parallel)', 'm1: Reviewing', 'm1: Auditing']) assert.ok(out.includes(word), `missing ${word} at ${width}\n${out}`);
     assert.match(panelRows(out), /gate  APPROVED/);
     assert.doesNotMatch(panelRows(out), /CHANGES/);
-    const title = out.split('\n').find((l) => l.includes('MICHAEL'));
-    assert.ok(title.includes('DWIGHT'));
-    assert.equal(title.includes('OSCAR'), width >= 120, 'five columns start at 120; two-row grid below');
+    const title = out.split('\n').find((l) => l.includes('PLANNER'));
+    assert.ok(title.includes('DEVELOPER'));
+    assert.equal(title.includes('CODE REVIEWER'), width >= 120, 'five columns start at 120; two-row grid below');
     const log = out.split('\n').findIndex((l) => l.includes('Event log'));
     assert.ok(log > 0 && out.split('\n').length - log - 2 >= 3, 'keep at least three event rows');
   }
   const unicode = render(f, { ascii: false });
-  assert.ok(unicode.includes('oscar ∥ hank (parallel)'));
+  assert.ok(unicode.includes('Reviewer ∥ Security (parallel)'));
 });
 
 test('failed stage shows one current result per gate and readable gate log entries', () => {
@@ -36,41 +36,42 @@ test('failed stage shows one current result per gate and readable gate log entri
   const boxes = panelRows(out);
   assert.equal(boxes.match(/gate  CHANGES/g)?.length, 1);
   assert.equal(boxes.match(/gate  SECURITY ISSUES/g)?.length, 1);
-  assert.match(out, /oscar gate failed CHANGES_REQUESTED/);
-  assert.match(out, /hank gate failed SECURITY_ISSUES/);
+  assert.match(out, /Reviewer gate failed CHANGES_REQUESTED/);
+  assert.match(out, /Security gate failed SECURITY_ISSUES/);
   assert.doesNotMatch(boxes, /gate  TEST PASSED/);
   assert.match(panelRows(render(roleFixture('failed'), { width: 120 })), /SECURITY ISSUES/, 'full verdict fits a narrow column');
 });
 
 test('passed three-stage workflow keeps listed order and all final results', () => {
   const out = render(roleFixture('passed'));
-  const titles = out.split('\n').find((l) => l.includes('MICHAEL'));
-  assert.match(titles, /MICHAEL.*DWIGHT.*HANK.*OSCAR.*ANGELA/);
-  assert.match(out, /Stage 1: hank -> Stage 2: oscar -> Stage 3: angela/);
+  const titles = out.split('\n').find((l) => l.includes('PLANNER'));
+  assert.match(titles, /PLANNER.*DEVELOPER.*SECURITY AUDITOR.*CODE REVIEWER.*QA TESTER/);
+  assert.match(out, /Stage 1: Security -> Stage 2: Reviewer -> Stage 3: QA/);
   for (const label of ['SECURITY PASSED', 'APPROVED', 'TEST PASSED']) assert.equal(panelRows(out).split(label).length - 1, 1);
 });
 
 test('workflow comes from same-run start event or state; inactive roles stay omitted', () => {
   const f = roleFixture();
   delete f.state.execution;
-  assert.match(render(f), /OSCAR.*HANK/);
+  assert.match(render(f), /CODE REVIEWER.*SECURITY AUDITOR/);
   f.state.execution = { workflow: { gates: [['hank']] } };
   f.events = [];
   const out = render(f);
-  assert.match(out, /HANK/);
-  assert.doesNotMatch(out, /OSCAR|ANGELA/);
+  assert.match(out, /SECURITY AUDITOR/);
+  assert.doesNotMatch(out, /CODE REVIEWER|QA TESTER/);
   f.state.execution = undefined;
   f.events = [{ ...roleFixture().events[0], runId: 'other-run' }];
-  assert.doesNotMatch(render(f), /OSCAR|HANK/);
+  assert.doesNotMatch(render(f), /CODE REVIEWER|SECURITY AUDITOR/);
 });
 
 test('compact workflow uses one row per role below 24 rows', () => {
   const out = render(roleFixture('failed'), { width: 120, height: 23 });
-  for (const id of ['MICHAEL', 'DWIGHT', 'OSCAR', 'HANK', 'ANGELA']) {
-    assert.equal(out.split('\n').filter((l) => l.includes(id)).length, 1);
+  // compact rows carry the Short names, which other rows (stage line, lanes, log) use in title case
+  for (const name of ['PLANNER', 'DEVELOPER', 'REVIEWER', 'SECURITY', 'QA']) {
+    assert.equal(out.split('\n').filter((l) => new RegExp(`^ \\S ${name} `).test(l)).length, 1);
   }
-  assert.match(out, /OSCAR.*CHANGES/);
-  assert.match(out, /HANK.*SECURITY ISSUES/);
+  assert.match(out, /REVIEWER.*CHANGES/);
+  assert.match(out, /SECURITY .*SECURITY ISSUES/);
   assert.doesNotMatch(out, /\+-/);
 });
 
@@ -144,7 +145,7 @@ test('legacy role fixture is byte-identical to the old renderer', async () => {
     const [width, height] = dimensions.split('x').map(Number);
     const out = render(f, { width, height, ascii: ascii === 'true' });
     assert.equal(createHash('sha256').update(out.replace(/\b\d{2}:\d{2}:\d{2}\b/g, '[TIME]')).digest('hex'), expected, size);
-    assert.doesNotMatch(out, /OSCAR|HANK|Stage/);
+    assert.doesNotMatch(out, /CODE REVIEWER|SECURITY AUDITOR|Stage/);
   }
 });
 

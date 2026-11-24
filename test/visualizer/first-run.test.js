@@ -173,8 +173,8 @@ test('Chat: the plan as its milestones with the raw message one click away, the 
 
   const gate = list.querySelectorAll('.chat-entry').find((x) => x.dataset.kind === 'activity');
   const line = gate.querySelector('.chat-act');
-  assert.equal(line.textContent, 'Hank · m1 · cycle 1 · No security issues');
-  assert.equal(line.title, 'Hank · m1 · cycle 1 · No security issues [SECURITY_PASSED]');
+  assert.equal(line.textContent, 'Security Auditor · m1 · cycle 1 · No security issues');
+  assert.equal(line.title, 'Security Auditor · m1 · cycle 1 · No security issues [SECURITY_PASSED]');
 });
 
 // writes, then reads: the files the developer wrote, then the ones it only read
@@ -296,7 +296,7 @@ test('the empty states ask for an account only when the Accounts panel can open 
 
 test('newcomer words: roles before names, where the default folder is, and the Options line in plain words', () => {
   const html = read('index.html');
-  assert.ok(html.includes('<span>Team <span class="hint">a planner (Michael) splits the request into milestones, a developer (Dwight) builds each one, and reviewers check every turn</span></span>'));
+  assert.ok(html.includes('<span>Team <span class="hint">the Planner splits the request into milestones, the Developer builds each one, and the Code Reviewer, the Security Auditor and the QA Tester check every turn</span></span>'));
   assert.ok(html.includes('fixed steps: a planner writes a plan you approve, implementers build it, the project checks and a reviewer verify it, and you approve the changes before they reach the folder'));
   assert.ok(html.includes('Leave it empty to create a new folder for the project under Documents/Scranton/projects in your user folder.'));
 });

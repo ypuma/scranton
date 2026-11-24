@@ -44,10 +44,10 @@ test('callView: a command, the path or paths of a file change, anything else as 
   assert.deepEqual(callView(item({ tool: 'edit', args: {} })).text, '(no path given)');
   assert.deepEqual(callView(item({ tool: 'grep', args: { pattern: '<img src=x>' } })), { title: 'Use grep', label: 'Arguments', text: '{\n  "pattern": "<img src=x>"\n}' });
   assert.equal(callView(item({ args: { command: 'x'.repeat(5000) } })).text.length, 2000);
-  assert.equal(whoText(item()), 'Dwight \u00b7 dwight-m1');
-  assert.equal(whoText(item({ instanceId: 'michael', agent: 'michael' })), 'Michael');
+  assert.equal(whoText(item()), 'Developer \u00b7 m1');
+  assert.equal(whoText(item({ instanceId: 'michael', agent: 'michael' })), 'Planner');
   assert.equal(whoText({}), 'An agent');
-  assert.equal(askedText(item()), 'Approval needed: Dwight \u00b7 dwight-m1 wants to run a shell command: npm test');
+  assert.equal(askedText(item()), 'Approval needed: the Developer (m1) wants to run a shell command: npm test');
 });
 
 test('countdown: minutes and seconds to the deadline, hours when long, and what happens once it is up', () => {
@@ -123,14 +123,14 @@ test('the panel: one card per pending call with an inverted badge, the agent, th
   const text = (card, cls) => all(card).find((n) => ` ${n.className} `.includes(` ${cls} `)).textContent;
   assert.equal(text(one, 'approval-badge'), BADGE);
   assert.equal(BADGE, 'Approval needed');
-  assert.equal(text(one, 'approval-who'), 'Dwight \u00b7 dwight-m1');
+  assert.equal(text(one, 'approval-who'), 'Developer \u00b7 m1');
   assert.equal(text(one, 'approval-title'), 'Run a shell command');
   assert.equal(text(one, 'approval-args'), 'npm test');
   assert.equal(text(one, 'approval-left'), '5:00 left');
   assert.equal(text(two, 'approval-args'), 'docs/<b>.md');
   assert.ok(all(two).every((n) => n.tagName !== 'B'), 'model text is never markup');
   assert.equal(h.said.length, 1, 'both said once, in one announcement');
-  assert.match(h.said[0], /^Approval needed: Dwight \u00b7 dwight-m1 wants to run a shell command: npm test Approval needed: Angela/);
+  assert.match(h.said[0], /^Approval needed: the Developer \(m1\) wants to run a shell command: npm test Approval needed: the QA Tester/);
 
   // the next poll a second later: the countdown moves, nothing is announced again
   h.ctx.now = NOW + 1000;

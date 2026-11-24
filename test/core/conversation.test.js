@@ -93,7 +93,7 @@ for (const isolation of ['shared', 'worktree']) {
     assert.equal(run.events.some((e) => ['plan_ready', 'milestone_started'].includes(e.type)), false);
     assert.equal(run.events.filter((e) => e.type === 'agent_message' && e.final).length, 0);
     assert.deepEqual(fs.readdirSync(run.workspace), []);
-    assert.equal(run.events.at(-1).summary, 'Answered by Michael');
+    assert.equal(run.events.at(-1).summary, 'Answered by the Planner');
     assert.ok(!run.state.reply.text.includes('[ANSWER_READY]'));
   });
   test(`${isolation}: report crash and missing keyword fall back without changing milestone result`, (t) => {
@@ -196,7 +196,7 @@ test('report digest includes skip reasons and planning instructions do not requi
   const result = await o.run('Build');
   assert.equal(result.status, 'partial');
   const inbox = fs.readFileSync(path.join(f.hive, 'michael', 'inbox.md'), 'utf8');
-  assert.match(inbox, /Dwight reported \[BLOCKED\]/);
+  assert.match(inbox, /The Developer reported \[BLOCKED\]/);
   assert.match(inbox, /m2 .*skipped/);
 });
 

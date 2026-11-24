@@ -56,7 +56,7 @@ test('staged Michael system prompt overrides plan-only rules for builtin and cus
     await o.run('How does the Team orchestrator handle a request?');
     const staged = fs.readFileSync(path.join(f.hive, 'michael/system.md'), 'utf8');
     if (conversation) {
-      assert.match(staged, /## Conversation mode/, 'Michael receives conversation system override');
+      assert.match(staged, /## Conversation mode/, 'the Planner receives conversation system override');
       assert.match(staged, /Required answer/); assert.match(staged, /overrides any earlier rule/);
       for (const keyword of ['PLAN_READY', 'ANSWER_READY', 'REPORT_READY']) assert.ok(staged.includes(`[${keyword}]`));
     } else assert.doesNotMatch(staged, /## Conversation mode/);
@@ -151,7 +151,7 @@ test('question demo asks a matching question and scripted messages describe the 
   const f = fixture(t);
   const { events } = runCli(f, 'question', 'demo');
   assert.equal(events[0].request, 'How does the Team orchestrator handle a request?', 'question demo default is a question');
-  assert.match(events.at(-2).text, /Michael.*plan.*Dwight.*implement.*Angela.*verify/);
+  assert.match(events.at(-2).text, /the Planner.*plan.*the Developer.*implement.*the QA Tester.*verify/);
   const happy = runCli(f, 'happy');
   for (let i = 0; i < happy.events.length; i++) {
     const e = happy.events[i]; if (e.type !== 'agent_tool') continue;
@@ -165,7 +165,7 @@ test('off-mode proof detects payload, state and inbox leaks independently', (t) 
   const f = fixture(t); runCli(f, 'question');
   const baseline = conversationProof({ ...f, packageRoot: path.resolve('.') });
   for (const [file, replacement, field] of [
-    ['events.jsonl', s => s.replace('Answered by Michael', 'CONVERSATION_LEAK'), 'events'],
+    ['events.jsonl', s => s.replace('Answered by the Planner', 'CONVERSATION_LEAK'), 'events'],
     ['state.json', s => s.replace('"status": "finished"', '"status": "CONVERSATION_LEAK"'), 'stateBytes'],
     ['michael/inbox.md', s => s + '\nCONVERSATION_LEAK\n', 'planningInbox'],
   ]) {

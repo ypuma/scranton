@@ -30,7 +30,7 @@ for (const tty of [false, true]) {
     const out = t.output();
     assert.match(out, /Circuit breaker: m2 failed 3 cycles/);
     assert.match(out, /\| line one/);
-    assert.match(out, /\[f\] feedback for Dwight.*\[r\] retry.*\[s\] skip milestone.*\[a\] abort/);
+    assert.match(out, /\[f\] feedback for the Developer.*\[r\] retry.*\[s\] skip milestone.*\[a\] abort/);
   });
 
   test(`[${mode}] r, s and a (any case, any trailing text) map to retry, skip, abort`, async () => {
@@ -96,10 +96,10 @@ test('an abort signal cancels a pending prompt', async () => {
 
 test('feedbackTarget and skipLabel are shown (planning prompt)', async () => {
   const t = terminal({ tty: false });
-  const answer = t.ask({ ...ctx, feedbackTarget: 'Michael', skipLabel: 'skip planning' });
+  const answer = t.ask({ ...ctx, feedbackTarget: 'the Planner', skipLabel: 'skip planning' });
   t.stdin.write('a\n');
   await answer;
-  assert.match(t.output(), /feedback for Michael.*\[s\] skip planning/);
+  assert.match(t.output(), /feedback for the Planner.*\[s\] skip planning/);
 });
 
 test('isInteractive needs a TTY on both streams', () => {

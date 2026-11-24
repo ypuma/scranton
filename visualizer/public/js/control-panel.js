@@ -10,7 +10,7 @@ import {
 } from './control.js';
 import { trustKey, isTrusted, rememberTrust } from './trust.js';
 import { formatClock, stripBidi } from './format.js';
-import { workflowText } from './state.js';
+import { workflowText, theName, roleDescription } from './state.js';
 import { RUN_DEFAULTS_KEY, parseRunDefaults } from './prefs.js';
 import { scopedUrl, runStartError, buildFollowUp } from './scope.js';
 
@@ -202,7 +202,9 @@ export function createControlPanel({
       const row = gateRows.get(g.id) ?? gateRow(g.id, Object.hasOwn(WORKFLOW_DEFAULT.stages, g.id) ? WORKFLOW_DEFAULT.stages[g.id] : last);
       row.name.textContent = g.name;
       row.title.textContent = g.title || 'custom gate';
-      row.stage.setAttribute('aria-label', `Stage of ${g.name}, 1 to ${list.length}`);
+      // what the gate does, in full, is a hover away
+      row.li.title = g.builtin ? roleDescription(g.id) : '';
+      row.stage.setAttribute('aria-label', `Stage of ${g.builtin ? theName(g.id) : g.name}, 1 to ${list.length}`);
       gateRows.set(g.id, row);
     }
     e.gateList.replaceChildren(...list.map((g) => gateRows.get(g.id).li));

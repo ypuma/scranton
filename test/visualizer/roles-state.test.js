@@ -95,8 +95,8 @@ test('gate_result: state per role, milestone and instance, and a results line in
 
   const lines = s.log.filter((l) => l.type === 'gate_result');
   assert.deepEqual(lines.map((l) => [l.category, l.tone, l.source]), [['results', 'bad', 'oscar-m1'], ['results', 'good', 'hank-m1']]);
-  assert.equal(lines[0].text, 'Oscar gate failed: CHANGES_REQUESTED \u00b7 m1 \u00b7 cycle 1 \u00b7 stage 1');
-  assert.equal(describe({ type: 'gate_result', agent: 'angela', result: 'blocked', keyword: null }).text, 'Angela gate blocked: no keyword');
+  assert.equal(lines[0].text, 'Code Reviewer gate failed: CHANGES_REQUESTED \u00b7 m1 \u00b7 cycle 1 \u00b7 stage 1');
+  assert.equal(describe({ type: 'gate_result', agent: 'angela', result: 'blocked', keyword: null }).text, 'QA Tester gate blocked: no keyword');
 
   assert.deepEqual([gateView(s, 'oscar').label, gateView(s, 'hank').label], ['Changes requested', 'No security issues']);
   assert.equal(gateView(s, 'angela'), null, 'stage 2 was skipped');

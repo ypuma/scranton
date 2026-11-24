@@ -6,6 +6,7 @@ import path from 'node:path';
 import { renderDashboard } from '../../src/dashboard/render.js';
 import { createHiveSource } from '../../src/dashboard/source.js';
 import { stripAnsi, visibleWidth } from '../../src/dashboard/text.js';
+import { ROLE_NAMES } from '../../src/core/workflow.js';
 
 const root = path.resolve('.scratch/ca-fix-dashboard');
 const cli = path.resolve('bin/scranton.js');
@@ -71,8 +72,9 @@ for (const [name, flags, invoked] of cases) test(`real-engine ${name}: workflow 
   const out = stripAnsi(renderDashboard(state, source.events, { width: 160, height: 50, color: false, ascii: true, now }));
   const displayed = ['michael', 'dwight', ...events[0].execution.workflow.gates.flat()];
   for (const id of ['michael', 'dwight', 'oscar', 'hank', 'angela', 'seclint']) {
-    if (displayed.includes(id)) assert.match(out, new RegExp(id.toUpperCase()));
-    else assert.doesNotMatch(out, new RegExp(id.toUpperCase()), `uninvoked role ${id}`);
+    const title = (ROLE_NAMES[id] ?? id).toUpperCase();
+    if (displayed.includes(id)) assert.match(out, new RegExp(title));
+    else assert.doesNotMatch(out, new RegExp(title), `uninvoked role ${id}`);
   }
   if (name === 'custom') for (const text of ['SECLINT', 'Static security', 'PASSED']) assert.ok(out.includes(text), `missing custom metadata/verdict ${text}`);
 });

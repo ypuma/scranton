@@ -59,8 +59,8 @@ test('agents: the five built-ins in order, then the custom roles of the run in r
   assert.equal(displayName('docs2', s), 'Doris');
   assert.equal(roleTitle('docs2', s), 'Docs');
   // the built-ins keep their own names, also when the run does not list them
-  assert.equal(displayName('hank', s), 'Hank');
-  assert.equal(roleTitle('hank', s), 'Security');
+  assert.equal(displayName('hank', s), 'Security Auditor');
+  assert.equal(roleTitle('hank', s), 'Checks security');
 
   assert.equal(createState().roles, undefined, 'absent before any run');
   assert.equal('roles' in createState(), false);
@@ -132,7 +132,7 @@ test('gate_result of a custom gate: per role, milestone and lane, its totals, an
   assert.equal(gateView(run([['gate_result', { milestoneId: 'm1', cycle: 1, stage: 0, agent: 'oscar', instanceId: 'oscar-m1', result: 'passed', keyword: 'REVIEW_APPROVED' }]]), 'oscar').label, 'Approved');
 });
 
-test('lanes: custom lanes after the built-in roles, shown with their id and the custom title', () => {
+test('lanes: custom lanes after the built-in roles, shown with their name, where they work and the custom title', () => {
   const s = run([
     ...lint('passed', 'SECLINT_PASSED'),
     ['instance_started', { instanceId: 'docs2-m1', agent: 'docs2', milestoneId: 'm1' }],
@@ -143,12 +143,14 @@ test('lanes: custom lanes after the built-in roles, shown with their id and the 
   installDom();
   const list = new FakeEl();
   createLanes({ block: new FakeEl(), list, exec: new FakeEl() }).render(s);
-  const rows = Object.fromEntries(list.childNodes.map((li) => [li.childNodes[1].childNodes[0].textContent, li]));
-  assert.equal(rows['seclint-m1'].childNodes[1].childNodes[1].textContent, 'Lint \u00b7 m1');
-  assert.equal(rows['docs2-m1'].childNodes[1].childNodes[1].textContent, 'Docs \u00b7 m1');
+  const rows = Object.fromEntries(list.childNodes.map((li) => [li.dataset.lane, li]));
+  const said = (id) => rows[id].childNodes[1].childNodes.map((n) => n.textContent);
+  assert.deepEqual(said('seclint-m1'), ['Seclint \u00b7 m1', 'Lint'], 'the name the run gave it, never the raw id');
+  assert.deepEqual(said('docs2-m1'), ['Doris \u00b7 m1', 'Docs']);
+  assert.match(rows['seclint-m1'].childNodes[1].childNodes[0].title, /\(id seclint-m1\)$/, 'the id is a hover away');
   assert.equal(rows['seclint-m1'].dataset.gate, 'passed');
   assert.equal(rows['seclint-m1'].childNodes[3].textContent, '\u2713 Passed \u00b7 cycle 1');
-  assert.equal(rows['angela-m1'].childNodes[1].childNodes[1].textContent, 'QA \u00b7 m1', 'a built-in keeps its role word');
+  assert.deepEqual(said('angela-m1'), ['QA Tester \u00b7 m1', 'Tests the result'], 'a built-in says its name and what it does');
 });
 
 function mount() {

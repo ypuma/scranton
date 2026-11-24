@@ -94,7 +94,7 @@ test('provider diagnostic reaches workflow failure, terminal state, output and o
   const result = await f.runner.done;
   const expected = 'Provider stream error (insufficient_quota): Plan exhausted';
   assert.equal(result.failure.message, expected); assert.equal(calls, 1);
-  assert.ok(f.events.some(e => JSON.stringify(e).includes(`Dwight could not run: ${expected}`)), JSON.stringify(f.events));
+  assert.ok(f.events.some(e => JSON.stringify(e).includes(`The Developer could not run: ${expected}`)), JSON.stringify(f.events));
   assert.equal((await f.runtime.getEvent(f.runner.workflowId, 'agent_state')).detail.message, expected);
   const rows = []; for await (const r of f.runtime.readStream(f.runner.workflowId, 'output')) rows.push(r.value);
   assert.ok(rows.some(r => r.type === 'error' && r.message === expected));

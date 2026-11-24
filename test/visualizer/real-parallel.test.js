@@ -206,7 +206,7 @@ test('identical human messages echoed one after the other each keep their own en
   assert.deepEqual(outbox.map((o) => o.id), [id2]);
   assert.deepEqual(renders(states[2]), [[id1, 'delivered', false], [id2, 'delivered', false]]);
   assert.deepEqual(outbox, []);
-  assert.deepEqual(said, ['Message to dwight-m1 delivered', 'Message to dwight-m1 delivered'], 'each delivery announced once');
+  assert.deepEqual(said, ['Message to the Developer (m1) delivered', 'Message to the Developer (m1) delivered'], 'each delivery announced once');
 });
 
 test('a refused spool command is logged, never put into the transcript', () => {
@@ -311,6 +311,6 @@ test('an unknown delivery is neither delivered nor rejected, and a late queued e
   s = reduce(s, e('chat_message', { id: 'c1', from: 'human', to: 'dwight-m1', text: 'hi', delivery: 'queued' }));
   assert.equal(s.chat[0].delivery, 'unknown');
   assert.equal(deliveryNews(new Map([['c1', 'queued']]), new Map([['c1', 'unknown']]), [{ id: 'c1', to: 'dwight-m1' }]),
-    'Message to dwight-m1: delivery unknown, it is not resent automatically');
+    'Message to the Developer (m1): delivery unknown, it is not resent automatically');
   assert.equal(createState().chat.length, 0);
 });

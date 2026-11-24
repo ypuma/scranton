@@ -90,7 +90,7 @@ test('agent cards: the meta line is labelled parts that wrap; closed it leaves t
     ['agent-totals', 'Totals ', '1 run\u00a0· 1.5k tok\u00a0· $0.020'],
   ]);
   assert.deepEqual(meta.querySelector('.agent-totals').querySelector('.meta-value').children.map((n) => n.textContent), ['1 run', '1.5k tok', '$0.020'], 'each figure is one piece');
-  assert.deepEqual([card.querySelector('h3').title, card.querySelector('.role').title], ['Michael', card.querySelector('.role').textContent], 'a cut name or role is a hover away');
+  assert.deepEqual([card.querySelector('h3').title, card.querySelector('.role').title], ['Planner: Breaks the request into milestones, judges progress when a milestone fails and, in a chat, writes the final reply.', card.querySelector('.role').textContent.replace('\u00a0', ' ')], 'what the agent does in full, and the role line in plain spaces, are a hover away');
 
   // drawn again only when it says something else: an opened line keeps its nodes, and so a selection in it
   const tool = () => meta.querySelector('.fact-tool').querySelector('.meta-value');
@@ -106,7 +106,7 @@ test('agent cards: the meta line is labelled parts that wrap; closed it leaves t
   const line = rule('.agent-meta');
   assert.match(line, /display: flex;\s*flex-wrap: wrap;/);
   assert.doesNotMatch(line, /nowrap|ellipsis|overflow: hidden/);
-  assert.match(rule('.agent-meta > span'), /overflow-wrap: anywhere/);
+  assert.match(rule('.agent-meta > span'), /min-width: 0; overflow-wrap: break-word;/);
   assert.match(rule('.agent-more:not([open]) .fact-tool'), /display: none/);
   assert.match(rule('.agent-totals .meta-value > span'), /white-space: nowrap/);
   // opened: label and value side by side, the value under its label when the card is narrow
@@ -203,7 +203,7 @@ test('activity panel: the filter wraps instead of scrolling, the log keeps its h
   assert.match(rule('.log thead th'), /position: sticky;\s*top: 0;/);
   assert.match(rule('.log td'), /padding: var\(--s2\) var\(--s3\);/);
   const table = rule('.log');
-  assert.match(table, /--c-source: calc\(12ch \+ 1\.5rem\);/, 'an instance id like michael-m12 fits the Source column');
+  assert.match(table, /--c-source: calc\(15ch \+ 1\.5rem\);/, 'an instance like "Developer · m12" fits the Source column');
   // narrow: the Detail heading is laid out like the detail cell, not hidden in one pixel
   const narrow = css.slice(css.indexOf('@container (max-width: 34.9rem)'), css.indexOf('.log[data-filter="main"] tbody tr[data-cat="ticks"]'));
   assert.match(narrow, /\.log thead \{ position: sticky; top: 0;/);

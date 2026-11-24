@@ -5,7 +5,7 @@ export const MAX_MILESTONES = 7;
 const FENCE = /```[ \t]*(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi;
 
 /**
- * Parse Michael's answer: the LAST json fence that holds a valid `{ milestones: [...] }` wins.
+ * Parse the Planner's answer: the LAST json fence that holds a valid `{ milestones: [...] }` wins.
  * Returns `{ milestones }` with ids normalised to m1..mN, or `{ error }`.
  */
 export function parsePlan(text) {

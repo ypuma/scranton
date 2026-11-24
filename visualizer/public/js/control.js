@@ -2,7 +2,7 @@
 // the human-answer phase, notification and title decisions. No DOM, so Node can test it.
 import { stripBidi, formatWhen } from './format.js';
 import {
-  normalizeExecution, normalizeWorkflow, workflowText, displayName, AGENT_IDS, GATE_ROLES, LEGACY_GATES, ROLE_ID_RE, ROLE_TITLES,
+  normalizeExecution, normalizeWorkflow, workflowText, displayName, roleTitle, theName, AGENT_IDS, GATE_ROLES, LEGACY_GATES, ROLE_ID_RE,
   breakerTitle,
 } from './state.js';
 import { PERMISSIONS, PERMISSION_DEFAULT, permissionOf } from './access.js';
@@ -11,7 +11,7 @@ import { PERMISSIONS, PERMISSION_DEFAULT, permissionOf } from './access.js';
 export const CLIENT_HEADERS = Object.freeze({ 'X-Scranton-Client': '1' });
 export const CONTROL_HEADERS = Object.freeze({ 'Content-Type': 'application/json', ...CLIENT_HEADERS });
 export const DECISIONS = ['feedback', 'retry', 'skip', 'abort'];
-export const DECISION_LABEL = { feedback: 'Feedback for Dwight', retry: 'Retry', skip: 'Skip milestone', abort: 'Abort run' };
+export const DECISION_LABEL = { feedback: `Feedback for ${theName('dwight')}`, retry: 'Retry', skip: 'Skip milestone', abort: 'Abort run' };
 export const CONFIRM_DECISIONS = new Set(['skip', 'abort']);
 // a Team request of more than 4000 chars travels in a file, not in argv (context-budget-contract section 7)
 export const REQUEST_MAX = 32768;
@@ -65,7 +65,7 @@ export const WORKFLOW_ERROR = 'Turn on at least one gate.';
 export const STAGE_MAX = 15;
 // what the drawer kept before the stage editor: three boxes and the parallel toggle
 const LEGACY_CHOICE = ['review', 'security', 'tests', 'parallel'];
-const BUILTIN_GATES = GATE_ROLES.map((id) => Object.freeze({ id, name: displayName(id), title: ROLE_TITLES[id], builtin: true }));
+const BUILTIN_GATES = GATE_ROLES.map((id) => Object.freeze({ id, name: displayName(id), title: roleTitle(id), builtin: true }));
 
 function stageNumber(v) {
   const t = typeof v === 'number' ? String(v) : typeof v === 'string' ? v.trim() : '';
@@ -151,7 +151,7 @@ export function buildWorkflow(choice, order = GATE_ROLES, names = null) {
       if (!Object.hasOwn(choice.stages ?? {}, id)) continue;
       const n = stageNumber(choice.stages[id]);
       if (!Number.isInteger(n) || n < 1 || n > max) {
-        return { error: `${names?.[id] ?? displayName(id)}'s stage must be a whole number from 1 to ${max}.`, field: `stage.${id}` };
+        return { error: `The stage of ${names?.[id] ?? theName(id)} must be a whole number from 1 to ${max}.`, field: `stage.${id}` };
       }
     }
   }
@@ -169,8 +169,9 @@ function parseAgentList(v) {
     const builtin = AGENT_IDS.includes(a.id);
     out.push({
       id: a.id,
-      name: str(a.name) || displayName(a.id),
-      title: str(a.title) || ROLE_TITLES[a.id] || '',
+      // a built-in agent is called what the table says, whatever the server sends
+      name: builtin ? displayName(a.id) : str(a.name) || a.id,
+      title: builtin ? roleTitle(a.id) : str(a.title),
       kind: ['planner', 'developer', 'gate'].includes(a.kind) ? a.kind : GATE_ROLES.includes(a.id) || !builtin ? 'gate' : a.id === 'michael' ? 'planner' : 'developer',
       builtin,
       gate: builtin ? GATE_ROLES.includes(a.id) : a.gate !== false,
@@ -511,7 +512,7 @@ export function buildHitlRequest({ decision, feedback } = {}, pending = null) {
   if (!pending.options.includes(decision)) return { error: `"${decision}" is not offered for this pause.` };
   if (decision !== 'feedback') return { body: { decision } };
   const text = raw(feedback).trim();
-  if (!text) return { error: 'Write the feedback Dwight should get.', field: 'feedback' };
+  if (!text) return { error: `Write the feedback ${theName('dwight')} should get.`, field: 'feedback' };
   if (text.length > FEEDBACK_MAX) return { error: `The feedback is ${text.length} characters; the limit is ${FEEDBACK_MAX}.`, field: 'feedback' };
   return { body: { decision, feedback: text } };
 }

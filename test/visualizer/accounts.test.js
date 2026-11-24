@@ -263,7 +263,7 @@ test('buildModels: only roles that are not on their default, and only models of 
   assert.deepEqual(buildModels({ michael: '', dwight: '', angela: '' }, cat), { models: {} });
   assert.deepEqual(buildModels({ dwight: modelKey('openai', 'gpt-a') }, cat), { models: { dwight: { provider: 'openai', model: 'gpt-a' } } });
   assert.deepEqual(buildModels({ michael: modelKey('anthropic', 'claude-a') }, cat).field, 'models.michael');
-  assert.match(buildModels({ angela: modelKey('openai', 'nope') }, cat).error, /Angela's model/);
+  assert.match(buildModels({ angela: modelKey('openai', 'nope') }, cat).error, /^The model picked for the QA Tester is not available any more\./);
   assert.equal(buildModels({ angela: 'garbage' }, cat).field, 'models.angela');
 });
 

@@ -41,7 +41,7 @@ export function initialState() {
 }
 
 const FINAL_STATUS = { success: 'finished', partial: 'finished', aborted: 'aborted', failed: 'failed' };
-// Mailbox writes that start a new Dwight cycle.
+// Mailbox writes that start a new Developer cycle.
 const DWIGHT_CYCLE_KINDS = new Set(['task', 'bug_report', 'feedback']);
 
 /** Pure reducer: state.json is always the fold of events.jsonl. Returns a new state. */

@@ -205,7 +205,7 @@
     <p class="hitl-reason mono" id="hitl-reason"></p>
     <div class="hitl-actions" id="hitl-actions" role="group" aria-label="Your decision"></div>
     <form class="hitl-feedback" id="hitl-feedback" hidden novalidate>
-      <label for="hitl-text">Feedback for Dwight <span class="hint">sent to his inbox, then the milestone continues</span></label>
+      <label for="hitl-text">Feedback for the Developer <span class="hint">sent to its inbox, then the milestone continues</span></label>
       <textarea id="hitl-text" rows="4" maxlength="16000" aria-describedby="hitl-count"></textarea>
       <div class="form-foot">
         <span class="dictate" data-dictate="hitl-text" hidden></span>
@@ -704,7 +704,7 @@
       <div class="drawer-body">
         <div class="field" role="radiogroup" aria-labelledby="f-engine-label" id="f-engine" hidden>
           <span class="field-label" id="f-engine-label">Engine</span>
-          <label class="check"><input type="radio" name="engine" value="team" id="f-engine-team" checked><span>Team <span class="hint">a planner (Michael) splits the request into milestones, a developer (Dwight) builds each one, and reviewers check every turn</span></span></label>
+          <label class="check"><input type="radio" name="engine" value="team" id="f-engine-team" checked><span>Team <span class="hint">the Planner splits the request into milestones, the Developer builds each one, and the Code Reviewer, the Security Auditor and the QA Tester check every turn</span></span></label>
           <label class="check" id="f-engine-pipeline-row"><input type="radio" name="engine" value="pipeline" id="f-engine-pipeline" aria-describedby="f-engine-pipeline-hint"><span>Pipeline <span class="hint" id="f-engine-pipeline-hint">fixed steps: a planner writes a plan you approve, implementers build it, the project checks and a reviewer verify it, and you approve the changes before they reach the folder</span></span></label>
         </div>
         <p class="form-error team-only" id="config-error" role="alert" hidden></p>
@@ -782,28 +782,33 @@
           <p class="hint" id="models-status" hidden></p>
           <div class="model-grid" id="model-grid">
             <div class="field" id="model-row-michael">
-              <label for="f-model-michael">Michael <span class="hint">orchestrator</span></label>
-              <select id="f-model-michael" data-role="michael" aria-describedby="f-model-michael-note"></select>
+              <label for="f-model-michael">Planner <span class="hint">Plans the work</span></label>
+              <select id="f-model-michael" data-role="michael" aria-describedby="f-model-michael-about f-model-michael-note"></select>
+              <span class="hint model-about" id="f-model-michael-about">Breaks the request into milestones, judges progress when a milestone fails and, in a chat, writes the final reply. <span class="agent-id">id <code>michael</code></span></span>
               <span class="hint" id="f-model-michael-note" hidden></span>
             </div>
             <div class="field" id="model-row-dwight">
-              <label for="f-model-dwight">Dwight <span class="hint">developer</span></label>
-              <select id="f-model-dwight" data-role="dwight" aria-describedby="f-model-dwight-note"></select>
+              <label for="f-model-dwight">Developer <span class="hint">Writes the code</span></label>
+              <select id="f-model-dwight" data-role="dwight" aria-describedby="f-model-dwight-about f-model-dwight-note"></select>
+              <span class="hint model-about" id="f-model-dwight-about">Implements one milestone at a time and fixes what the checks report. <span class="agent-id">id <code>dwight</code></span></span>
               <span class="hint" id="f-model-dwight-note" hidden></span>
             </div>
             <div class="field" id="model-row-oscar">
-              <label for="f-model-oscar">Oscar <span class="hint">reviewer</span></label>
-              <select id="f-model-oscar" data-role="oscar" aria-describedby="f-model-oscar-note"></select>
+              <label for="f-model-oscar">Code Reviewer <span class="hint">Reviews the changes</span></label>
+              <select id="f-model-oscar" data-role="oscar" aria-describedby="f-model-oscar-about f-model-oscar-note"></select>
+              <span class="hint model-about" id="f-model-oscar-about">Reviews each milestone's changes for defects, regressions and test coverage. Never edits the project. <span class="agent-id">id <code>oscar</code></span></span>
               <span class="hint" id="f-model-oscar-note" hidden></span>
             </div>
             <div class="field" id="model-row-hank">
-              <label for="f-model-hank">Hank <span class="hint">security</span></label>
-              <select id="f-model-hank" data-role="hank" aria-describedby="f-model-hank-note"></select>
+              <label for="f-model-hank">Security Auditor <span class="hint">Checks security</span></label>
+              <select id="f-model-hank" data-role="hank" aria-describedby="f-model-hank-about f-model-hank-note"></select>
+              <span class="hint model-about" id="f-model-hank-about">Audits each milestone's changes for exploitable weaknesses. Never edits the project. <span class="agent-id">id <code>hank</code></span></span>
               <span class="hint" id="f-model-hank-note" hidden></span>
             </div>
             <div class="field" id="model-row-angela">
-              <label for="f-model-angela">Angela <span class="hint">QA</span></label>
-              <select id="f-model-angela" data-role="angela" aria-describedby="f-model-angela-note"></select>
+              <label for="f-model-angela">QA Tester <span class="hint">Tests the result</span></label>
+              <select id="f-model-angela" data-role="angela" aria-describedby="f-model-angela-about f-model-angela-note"></select>
+              <span class="hint model-about" id="f-model-angela-about">Runs the tests and the program against every acceptance criterion. Never edits the project. <span class="agent-id">id <code>angela</code></span></span>
               <span class="hint" id="f-model-angela-note" hidden></span>
             </div>
           </div>
@@ -1149,7 +1154,7 @@
         </div>
         <form class="keyform agent-form" id="create-panel" hidden novalidate aria-labelledby="create-title">
           <h3 class="keyform-title" id="create-title">New gate agent</h3>
-          <p class="hint keyform-note">A read-only gate that checks Dwight's work after each developer turn. Turn it on for a run under New run, Workflow.</p>
+          <p class="hint keyform-note">A read-only gate that checks the Developer's work after each of its turns. Turn it on for a run under New run, Workflow.</p>
           <div class="field-row">
             <div class="field">
               <label for="create-id">Id <span class="hint">a-z, 0-9</span></label>
@@ -1253,7 +1258,7 @@
             </div>
           </div>
           <div class="field" id="settings-instruction-row" hidden>
-            <label for="settings-instruction">Handoff instruction <span class="hint">how Dwight's work is checked</span></label>
+            <label for="settings-instruction">Handoff instruction <span class="hint">how the Developer's work is checked</span></label>
             <textarea id="settings-instruction" rows="5" maxlength="1000" aria-describedby="settings-instruction-count"></textarea>
             <div class="agent-instruction-foot">
               <span class="dictate" data-dictate="settings-instruction" hidden></span>
@@ -1503,7 +1508,7 @@
             <div class="context-blocks" id="context-sections"></div>
           </section>
           <section class="dreams-section" id="context-developer-section" aria-labelledby="context-developer-title" hidden>
-            <h3 class="keyform-title" id="context-developer-title">Developer brief <span class="hint">sent to Dwight with each task</span></h3>
+            <h3 class="keyform-title" id="context-developer-title">Developer brief <span class="hint">sent to the Developer with each task</span></h3>
             <p class="hint" id="context-developer-usage"></p>
             <p class="hint" id="context-developer-empty" hidden>Empty: the developer gets no conversation context with its next task.</p>
             <div class="context-blocks" id="context-developer"></div>

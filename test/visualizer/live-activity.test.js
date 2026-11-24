@@ -188,7 +188,7 @@ test('agent_finished never makes a lane: a serial JSON run names its instance th
   assert.deepEqual(s.instances, {});
   assert.deepEqual([s.usage.tokens, s.usage.calls], [35, 1], 'the pending sum is found by the instance id both events carry');
   assert.deepEqual(s.agents.dwight.touchedFiles.map((f) => f.path), ['a.js'], 'the role keeps the files, so a serial run shows them');
-  assert.deepEqual(teamAgents(s).map((a) => [a.id, a.name, a.role, a.files.length]), [['michael', 'Michael', 'Planner', 0], ['dwight', 'Dwight', 'Developer', 1], ['angela', 'Angela', 'QA', 0]]);
+  assert.deepEqual(teamAgents(s).map((a) => [a.id, a.name, a.role, a.files.length]), [['michael', 'Planner', 'Plans the work', 0], ['dwight', 'Developer', 'Writes the code', 1], ['angela', 'QA Tester', 'Tests the result', 0]]);
 });
 
 // ------------------------------------------------------------ what an agent is doing now
@@ -226,9 +226,9 @@ test('teamAgents: name, role, status and one line for what each instance does no
     return [a.name, a.role, a.status, a.line, a.live, a.busy];
   };
   assert.deepEqual(teamAgents(state).map((a) => a.id), ['michael-plan', 'dwight-m1', 'angela-m1'], 'reading order');
-  assert.deepEqual(row(state, 'dwight-m1'), ['dwight-m1', 'Developer · m1', 'working', 'Editing src/cli.js', true, true]);
-  assert.deepEqual(row(state, 'angela-m1'), ['angela-m1', 'QA · m1', 'thinking', 'Thinking', true, true], '"Thinking..." is the status word, said once');
-  assert.deepEqual(row(state, 'michael-plan'), ['michael-plan', 'Planner', 'waiting', 'Overseeing', true, false]);
+  assert.deepEqual(row(state, 'dwight-m1'), ['Developer · m1', 'Writes the code', 'working', 'Editing src/cli.js', true, true]);
+  assert.deepEqual(row(state, 'angela-m1'), ['QA Tester · m1', 'Tests the result', 'thinking', 'Thinking', true, true], '"Thinking..." is the status word, said once');
+  assert.deepEqual(row(state, 'michael-plan'), ['Planner', 'Plans the work', 'waiting', 'Overseeing', true, false]);
   assert.deepEqual(teamAgents(state).find((a) => a.id === 'dwight-m1').files, [{ path: 'src/cli.js', kind: 'edit', ts: state.instances['dwight-m1'].lastTool.ts }]);
 
   let s = add(state, e, [status('dwight', 'm1', 'thinking', 'Thinking...')]);
@@ -343,7 +343,7 @@ test('team board: every rule of contract section 5, first match wins', () => {
   assert.deepEqual(column(s, 'm1'), { column: 'in_review', word: 'in review' });
   let card = teamBoard(s).columns[2].cards[0];
   assert.deepEqual(card.agents.map((a) => [a.id, a.status, a.line]), [['dwight-m1', 'idle', 'Finished: TASK_COMPLETE'], ['oscar-m1', 'working', 'Reviewing']]);
-  assert.deepEqual(card.gates, [{ id: 'oscar', name: 'Oscar', result: 'running' }, { id: 'angela', name: 'Angela', result: 'pending' }]);
+  assert.deepEqual(card.gates, [{ id: 'oscar', name: 'Reviewer', full: 'Code Reviewer', result: 'running' }, { id: 'angela', name: 'QA', full: 'QA Tester', result: 'pending' }]);
   assert.deepEqual([card.attempt, card.failed], [1, 0]);
 
   // the cycle failed and the developer redoes the work: the card really moves back
@@ -355,7 +355,7 @@ test('team board: every rule of contract section 5, first match wins', () => {
   assert.deepEqual(column(s, 'm1'), { column: 'in_progress', word: 'in progress' }, 'between the verdict and the retry it is the developer\'s again');
   card = teamBoard(s).columns[1].cards[0];
   assert.deepEqual([card.attempt, card.failed, card.reason], [1, 1, 'Oscar requested changes']);
-  assert.deepEqual(card.gates[0], { id: 'oscar', name: 'Oscar', result: 'failed' });
+  assert.deepEqual(card.gates[0], { id: 'oscar', name: 'Reviewer', full: 'Code Reviewer', result: 'failed' });
   s = add(s, e, [status('dwight', 'm1', 'thinking', 'Thinking...')]);
   assert.deepEqual(column(s, 'm1'), { column: 'in_progress', word: 'in progress' });
   card = teamBoard(s).columns[1].cards[0];
@@ -383,7 +383,7 @@ test('team board: every rule of contract section 5, first match wins', () => {
   // a milestone that is over has no gate "not run yet": only results it recorded for its last cycle are shown
   assert.deepEqual(teamBoard(s).columns[4].cards[0].gates, [], 'a journal without gate_result for the passing cycle says nothing');
   const judged = add(s, e, [['gate_result', { agent: 'angela', milestoneId: 'm1', cycle: 2, stage: 1, result: 'passed', keyword: 'TEST_PASSED' }]]);
-  assert.deepEqual(teamBoard(judged).columns[4].cards[0].gates, [{ id: 'angela', name: 'Angela', result: 'passed' }]);
+  assert.deepEqual(teamBoard(judged).columns[4].cards[0].gates, [{ id: 'angela', name: 'QA', full: 'QA Tester', result: 'passed' }]);
   for (const [st, col] of [['skipped', 'done'], ['failed', 'blocked'], ['aborted', 'blocked'], ['blocked', 'blocked']]) {
     const end = add(s, e, [['milestone_finished', { milestoneId: 'm2', status: st, reason: 'why' }]]);
     assert.deepEqual(column(end, 'm2'), { column: col, word: st }, st);
@@ -562,7 +562,7 @@ test('team usage: the run, the agents with their share, and the chat total from 
   assert.deepEqual(runs.map((r) => r.usage), [{ tokens: 1000, cost: 0.1 }, null, { tokens: 1, cost: 1 }]);
   const u = teamRunView({ state: s, runs }).usage;
   assert.deepEqual(u.run, { cost: 0.04, tokens: 500, input: 380, output: 120, calls: 2, estimated: false });
-  assert.deepEqual(u.agents.map((a) => [a.id, a.name, a.calls, a.tokens, a.cost, Math.round(a.share * 100)]), [['dwight', 'Dwight', 1, 400, 0.03, 75], ['angela', 'Angela', 1, 100, 0.01, 25]]);
+  assert.deepEqual(u.agents.map((a) => [a.id, a.name, a.calls, a.tokens, a.cost, Math.round(a.share * 100)]), [['dwight', 'Developer', 1, 400, 0.03, 75], ['angela', 'QA', 1, 100, 0.01, 25]]);
   assert.deepEqual(u.chat, { tokens: 1500, cost: 0.14, runs: 2, of: 3, estimated: false }, 'the run on screen counts as it stands now, not as the list last knew it');
   assert.deepEqual(u.series.map((p) => [p.at - T0, p.tokens, p.cost]), [[5000, 400, 0.03], [6000, 500, 0.04]]);
   assert.equal(u.startedAt, T0 + 5000);
@@ -635,7 +635,7 @@ test('chartModel: cumulative steps, stacked by agent, with a total, ticks, a rea
   const u = chartUsage();
   const m = chartModel(u, { metric: 'cost', width: 320, height: 150 });
   assert.equal(m.empty, undefined);
-  assert.deepEqual(m.bands.map((b) => [b.id, b.name, b.tone, b.label]), [['dwight', 'Dwight', 0, '$0.020'], ['angela', 'Angela', 1, '$0.020']]);
+  assert.deepEqual(m.bands.map((b) => [b.id, b.name, b.tone, b.label]), [['dwight', 'Developer', 0, '$0.020'], ['angela', 'QA', 1, '$0.020']]);
   assert.equal(m.total.label, '$0.040');
   assert.deepEqual(m.yTicks.map((t) => t.label), ['$0.00', '$0.020', '$0.040']);
   assert.equal(m.yTicks[0].y, m.plot.bottom, 'zero is the baseline');
@@ -649,13 +649,13 @@ test('chartModel: cumulative steps, stacked by agent, with a total, ticks, a rea
   assert.equal(cmds.at(-1)[0], m.plot.right);
   for (const b of m.bands) assert.match(b.d, /^M[\d. ]+(L[\d. ]+)+Z$/, 'a closed area');
   assert.deepEqual(m.points.map((p) => p.text), [
-    '0s · $0.010 total · Dwight $0.010', '1s · $0.020 total · Dwight $0.010 · Angela $0.010',
-    '2s · $0.030 total · Dwight $0.020 · Angela $0.010', '3s · $0.040 total · Dwight $0.020 · Angela $0.020',
+    '0s · $0.010 total · Developer $0.010', '1s · $0.020 total · Developer $0.010 · QA $0.010',
+    '2s · $0.030 total · Developer $0.020 · QA $0.010', '3s · $0.040 total · Developer $0.020 · QA $0.020',
   ]);
   assert.ok(m.points.every((p, i) => !i || (p.x > m.points[i - 1].x && p.y < m.points[i - 1].y)), 'later and higher');
-  assert.equal(m.summary, 'Cumulative cost over 3s: $0.040 (Dwight $0.020, Angela $0.020)');
+  assert.equal(m.summary, 'Cumulative cost over 3s: $0.040 (Developer $0.020, QA $0.020)');
   assert.equal(m.latest, '$0.040 after 3s');
-  assert.deepEqual([m.columns, m.rows.at(-1)], [['Dwight', 'Angela'], { time: '3s', total: '$0.040', parts: ['$0.020', '$0.020'] }]);
+  assert.deepEqual([m.columns, m.rows.at(-1)], [['Developer', 'QA'], { time: '3s', total: '$0.040', parts: ['$0.020', '$0.020'] }]);
 
   const tok = chartModel(u, { metric: 'tokens' });
   assert.deepEqual([tok.total.label, tok.yTicks.map((t) => t.label)], ['4.0k', ['0', '2.0k', '4.0k']]);
@@ -712,15 +712,15 @@ test('railMode: beside the transcript on a wide window, a toggle on a narrow one
 test('liveLine: one line while the rail is out of sight and the run is going, nothing otherwise', () => {
   const { e, state } = working();
   const view = teamRunView({ state });
-  assert.equal(liveLine(view, 'closed'), 'dwight-m1 · Editing src/cli.js · +1 more');
+  assert.equal(liveLine(view, 'closed'), 'Developer · m1 · Editing src/cli.js · +1 more');
   assert.equal(liveLine(view, 'open'), '', 'the rail says it');
   assert.equal(liveLine(view, 'overlay'), '');
   assert.equal(liveLine(view, 'none'), '');
   const one = teamRunView({ state: add(state, e, [finished('angela', 'm1', null, 'TEST_PASSED')]) });
-  assert.equal(liveLine(one, 'closed'), 'dwight-m1 · Editing src/cli.js');
+  assert.equal(liveLine(one, 'closed'), 'Developer · m1 · Editing src/cli.js');
   // the one that runs a tool leads, whatever the reading order
   const later = teamRunView({ state: add(state, e, [status('dwight', 'm1', 'thinking', 'Thinking...'), tool('angela', 'm1', 'bash', { detail: 'node --test', command: 'node --test' }), status('angela', 'm1', 'working', 'Working...')]) });
-  assert.equal(liveLine(later, 'closed'), 'angela-m1 · Running node --test · +1 more');
+  assert.equal(liveLine(later, 'closed'), 'QA Tester · m1 · Running node --test · +1 more');
   const paused = teamRunView({ state: add(state, e, [finished('angela', 'm1', null), finished('dwight', 'm1', null), ['hitl_request', { milestoneId: 'm1', reason: 'Stuck.', options: [] }]]) });
   assert.equal(liveLine(paused, 'closed'), 'Waiting for your answer: Stuck.', 'nobody is busy: what the run waits for');
   const over = teamRunView({ state: add(state, e, [['run_finished', { status: 'success', summary: 'ok' }]]) });

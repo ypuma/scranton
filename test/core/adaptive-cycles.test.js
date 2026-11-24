@@ -73,7 +73,7 @@ for (const [name, options, rule, count] of [
   if (rule === 'no_change') assert.equal(f.calls.some(c => c.agentId === 'michael'), false);
   if (name === 'token budget') {
     const used = events.filter(e => e.type === 'agent_usage').reduce((sum, e) => sum + e.usage.input + e.usage.output, 0);
-    assert.equal(trip.tokens, used); assert.ok(used >= 54, 'Michael usage included');
+    assert.equal(trip.tokens, used); assert.ok(used >= 54, 'Planner usage included');
   }
 });
 
@@ -213,7 +213,7 @@ test('progress mail is Michael-originated in the Hive and terminal log', async t
     assert.equal(event.from, 'michael'); assert.equal(event.to, 'michael');
     log(event);
   }
-  assert.match(output, /Michael -> Michael/);
+  assert.match(output, /Planner -> Planner/);
   assert.doesNotMatch(output, /Human/);
   assert.match(fs.readFileSync(path.join(f.config.hiveDir, 'michael-m1', 'inbox.md'), 'utf8'), /from: michael/);
 });

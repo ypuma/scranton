@@ -44,7 +44,7 @@ test('buildModels: the picks are checked and sent whatever the sandbox; a demo s
   assert.deepEqual(buildModels(ALL, cat, {}).models, { michael: A, dwight: A, angela: A });
   assert.deepEqual(buildModels({ ...NONE, dwight: GPT }, cat, { noPlan: true }).models, { dwight: A });
   assert.equal(buildModels({ angela: 'garbage' }, cat, {}).field, 'models.angela', 'an unavailable model is named');
-  assert.equal(buildModels({ angela: modelKey('openai', 'gone') }, cat, {}).error, "Angela's model is not available any more. Pick another one or the default.");
+  assert.equal(buildModels({ angela: modelKey('openai', 'gone') }, cat, {}).error, 'The model picked for the QA Tester is not available any more. Pick another one or the default.');
   assert.deepEqual(buildModels(ALL, cat, { demo: true }), { models: {} }, 'a demo uses no model');
 });
 

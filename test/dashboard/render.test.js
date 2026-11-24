@@ -29,7 +29,7 @@ test('idle fixture: no state.json shows the idle screen', async () => {
   assert.doesNotMatch(out, /Munder|Difflin|Paper|Branch|Agent Floor/);
   assert.match(out, /No run yet - start one with: scranton run "\.\.\."  or  scranton demo/);
   assert.match(out, /\[IDLE\]/);
-  assert.match(out, /MICHAEL/);
+  assert.match(out, /PLANNER/);
   assert.match(out, /q quit/);
   assert.ok(out.includes(HIVE));
 });
@@ -47,16 +47,17 @@ test('running fixture: Dwight is working mid-cycle', async () => {
   for (const text of [
     '[RUNNING]', 'run 20250614-101502-k7f3', 'Request  Build a small todo CLI',
     'Milestone 2/3: JSON file storage', 'Cycle 2', 'Breaker ●○○ 1/3',
-    'MICHAEL · Orchestrator', 'DWIGHT · Developer', 'ANGELA · QA',
+    // the fixture stands for a hive written before the rename: its own words stay, labels from ids are new
+    'PLANNER · Plans the work', 'DEVELOPER · Writes the code', 'QA TESTER · Tests the result',
     '● WORKING', '○ WAITING', 'Writing code...', 'Waiting for Dwight', 'edit  src/store.js',
     'last  TASK_COMPLETE', 'last  TEST_FAILED', 'last  PLAN_READY',
     '2 runs · 87.6k tok · $0.174', '1 run · 20.4k tok · $0.041',
     '✓ Project skeleton and CLI parsing', '● JSON file storage', '○ Tests and README',
-    'Event log', 'dwight -> angela  handoff  m2 ready: todos persisted to todos.json',
-    'angela   bash  npm test', 'cycle 1 FAILED  m2  1 failed in a row',
-    'angela -> dwight  bug_report  list crashes when todos.json is missing (ENOENT)',
+    'Event log', 'Developer -> QA  handoff  m2 ready: todos persisted to todos.json',
+    'QA       bash  npm test', 'cycle 1 FAILED  m2  1 failed in a row',
+    'QA -> Developer  bug_report  list crashes when todos.json is missing (ENOENT)',
   ]) assert.ok(out.includes(text), `missing ${JSON.stringify(text)}\n${out}`);
-  assert.match(out, /\b\d{2}:\d{2}:\d{2}   dwight   edit  src\/store\.js/);
+  assert.match(out, /\b\d{2}:\d{2}:\d{2}   Developer  edit  src\/store\.js/);
   assert.doesNotMatch(out, /CIRCUIT BREAKER TRIPPED - answer/);
 });
 
@@ -74,7 +75,7 @@ test('tripped fixture: loud breaker line, paused badge and full meter', async ()
   for (const text of [
     '[PAUSED]', 'CIRCUIT BREAKER TRIPPED - answer in the orchestrator terminal', 'Breaker ●●● 3/3', '■ BLOCKED',
     'Human needed: Milestone m2 failed 3 test cycles in a row', 'BLOCKED', 'Needs a human!',
-    'CIRCUIT BREAKER TRIPPED  m2  3/3 failed cycles', 'HUMAN NEEDED', 'michael -> human  hitl',
+    'CIRCUIT BREAKER TRIPPED  m2  3/3 failed cycles', 'HUMAN NEEDED', 'Planner -> Human  hitl',
   ]) assert.ok(out.includes(text), `missing ${JSON.stringify(text)}\n${out}`);
 
   const colored = render(f, { color: true });
@@ -231,11 +232,11 @@ test('sanitize strips bidi controls, and they take no width', async () => {
 
 test('panels sit side by side from 100 columns and stack below', async () => {
   const f = await fixture('running');
-  const row = (out) => out.split('\n').find((l) => l.includes('MICHAEL'));
-  assert.ok(row(render(f, { width: 100 })).includes('DWIGHT'));
-  assert.ok(!row(render(f, { width: 99 })).includes('DWIGHT'));
+  const row = (out) => out.split('\n').find((l) => l.includes('PLANNER'));
+  assert.ok(row(render(f, { width: 100 })).includes('DEVELOPER'));
+  assert.ok(!row(render(f, { width: 99 })).includes('DEVELOPER'));
   const small = render(f, { width: 80, height: 16 }).split('\n');
-  assert.ok(small.some((l) => /MICHAEL\s+WAITING\s+Waiting for Dwight/.test(l)), 'expected compact one-liners');
+  assert.ok(small.some((l) => /PLANNER\s+WAITING\s+Waiting for Dwight/.test(l)), 'expected compact one-liners');
 });
 
 test('no line exceeds the width, frames fill the height exactly', async () => {

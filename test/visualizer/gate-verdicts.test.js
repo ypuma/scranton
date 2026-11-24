@@ -79,7 +79,7 @@ test('every instance lane shows its own verdict once', () => {
   const list = new FakeEl();
   const lanes = createLanes({ block: new FakeEl(), list, exec: new FakeEl() });
   lanes.render(s);
-  const rows = Object.fromEntries(list.childNodes.map((li) => [li.childNodes[1].childNodes[0].textContent, li]));
+  const rows = Object.fromEntries(list.childNodes.map((li) => [li.dataset.lane, li]));
   for (const [id, verdict, result] of [['oscar-m1', '\u2715 Changes requested \u00b7 cycle 1', 'failed'], ['oscar-m2', '\u2713 Approved \u00b7 cycle 1', 'passed']]) {
     const li = rows[id];
     assert.equal(li.dataset.gate, result, id);
@@ -95,7 +95,7 @@ test('a gate card that has not run yet: one status, what it waits for, and no me
   const { pipeline, card } = mount();
   pipeline.render(s);
   assert.deepEqual(pipelineColumns(s), [['michael'], ['dwight'], ['oscar', 'hank'], ['angela']]);
-  for (const [id, waits] of [['oscar', 'Waits for Dwight'], ['hank', 'Waits for Dwight'], ['angela', 'After review + security']]) {
+  for (const [id, waits] of [['oscar', 'Waits for the Developer'], ['hank', 'Waits for the Developer'], ['angela', 'After review + security']]) {
     const p = parts(card(id));
     assert.equal(p.status, 'idle', id);
     assert.equal(p.activity.textContent, waits, id);
@@ -113,7 +113,7 @@ test('a gate card that has not run yet: one status, what it waits for, and no me
   assert.equal(parts(card('angela')).more.hidden, true, 'every role, not only gates');
   assert.equal(parts(card('angela')).activity.textContent, 'After review + security');
 
-  // a lane that only says its state ("dwight-m1: Idle") is not said a second time under the status either
+  // a lane that only says its state ("m1: Idle") is not said a second time under the status either
   pipeline.render(run([
     ['instance_started', { instanceId: 'dwight-m1', agent: 'dwight', milestoneId: 'm1' }],
     ['agent_status', { agent: 'dwight', instanceId: 'dwight-m1', milestoneId: 'm1', status: 'idle', activity: 'Idle' }],
@@ -126,7 +126,8 @@ test('the lane count stays a separate part of the role line, so a crowded row ca
   const { pipeline, card } = mount();
   pipeline.render(run(FAILS_THEN_PASSES));
   const role = parts(card('oscar')).role;
-  assert.equal(role.childNodes[0], 'Reviewer');
+  assert.equal(role.childNodes[0], 'Reviews the changes');
   assert.equal(role.childNodes[1].className, 'role-lanes');
-  assert.equal(role.childNodes[1].textContent, ' \u00b7 2 lanes');
+  // the separator stays with the text before it, the count wraps in one piece (agent-card-wrap.test.js)
+  assert.deepEqual(role.childNodes[1].childNodes.map(text), ['\u00a0\u00b7 ', '2 lanes']);
 });

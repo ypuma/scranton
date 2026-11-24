@@ -200,13 +200,13 @@ test('news about a sent message that comes in on another tab is marked unseen un
   h.$('chat-to').value = 'dwight-m1';
   h.$('chat-text').value = 'Use todos.json';
   await h.$('chat-form').fire('submit');
-  assert.match(h.$('chat-status').textContent, /^Queued for dwight-m1\./);
+  assert.match(h.$('chat-status').textContent, /^Queued for the Developer \(m1\)\./);
   assert.equal(h.$('chat-status').dataset.unseen, 'false', 'said while the tab is open');
   h.tab(false);
   h.stream.push(['chat_message', { id: 'msg-1', from: 'human', to: 'dwight-m1', text: 'Use todos.json', delivery: 'queued' }]);
   h.stream.push(['chat_delivery', { id: 'msg-1', delivery: 'delivered' }]);
   h.panel.render();
-  assert.equal(h.$('chat-status').textContent, 'Message to dwight-m1 delivered');
+  assert.equal(h.$('chat-status').textContent, 'Message to the Developer (m1) delivered');
   assert.equal(h.$('chat-status').dataset.unseen, 'true', 'shown on the tab that is open');
   h.tab(true);
   assert.equal(h.$('chat-status').dataset.unseen, 'false');

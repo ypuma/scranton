@@ -1,6 +1,6 @@
 # Working on Project Scranton
 
-Scranton is an open-source multi-agent harness with its own tools, LLM clients and durable agent runtime. Pi has been removed from agent execution. Michael plans milestones; Dwight implements; Angela verifies with read-only tools and commands. Oscar, Hank and custom roles can add gates. Agents run separate workflows in private worktrees. Live instance chat accompanies durable Hive mailboxes; final status keywords drive handoff, and a milestone keeps cycling while it makes progress; it pauses for a human when it stalls, uses its token budget or hits the safety cycle cap (`src/core/progress.js`). Terminal and web dashboards show progress.
+Scranton is an open-source multi-agent harness with its own tools, LLM clients and durable agent runtime. Pi has been removed from agent execution. The Planner (`michael`) plans milestones; the Developer (`dwight`) implements; the QA Tester (`angela`) verifies with read-only tools and commands. The Code Reviewer (`oscar`), the Security Auditor (`hank`) and custom roles can add gates. Agents run separate workflows in private worktrees. Live instance chat accompanies durable Hive mailboxes; final status keywords drive handoff, and a milestone keeps cycling while it makes progress; it pauses for a human when it stalls, uses its token budget or hits the safety cycle cap (`src/core/progress.js`). Terminal and web dashboards show progress.
 
 ## Module map
 

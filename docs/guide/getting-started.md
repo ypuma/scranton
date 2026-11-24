@@ -18,7 +18,8 @@ node bin/scranton.js help
 node bin/scranton.js login chatgpt
 node bin/scranton.js accounts
 
-# Optional: pin models for the three default Team roles. Otherwise use Automatic.
+# Optional: pin models for the three default Team roles: Planner (michael), Developer (dwight)
+# and QA Tester (angela). Otherwise use Automatic.
 node bin/scranton.js agents --hive .scranton-hive
 node bin/scranton.js agent set-model michael --provider openai --model gpt-6.2-sol --hive .scranton-hive
 node bin/scranton.js agent set-model dwight --provider openai --model gpt-6.2-sol --hive .scranton-hive

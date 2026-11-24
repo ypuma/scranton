@@ -29,7 +29,7 @@ test('workflowGates: gates on the same stage side by side, the stages in order',
   assert.deepEqual(workflowGates(stages({ angela: '1', hank: ' 1 ' })), [['hank', 'angela']], 'typed numbers count; catalog order inside a stage');
   assert.deepEqual(buildWorkflow(stages({})), { error: WORKFLOW_ERROR, field: 'workflow' });
   assert.equal(WORKFLOW_ERROR, 'Turn on at least one gate.');
-  assert.deepEqual(buildWorkflow(stages({ oscar: '9' })), { error: "Oscar's stage must be a whole number from 1 to 3.", field: 'stage.oscar' });
+  assert.deepEqual(buildWorkflow(stages({ oscar: '9' })), { error: 'The stage of the Code Reviewer must be a whole number from 1 to 3.', field: 'stage.oscar' });
   assert.deepEqual(buildWorkflow(stages({ oscar: 'x' })).field, 'stage.oscar');
   assert.deepEqual(buildWorkflow(stages({ oscar: '0' })).field, 'stage.oscar');
 });
@@ -99,7 +99,7 @@ test('drawer: a new user gets review and security side by side, then the tests, 
   await h.open();
   assert.deepEqual(h.ids(), ['oscar', 'hank', 'angela'], 'an older server: the built-in gates');
   assert.deepEqual(h.shown(), { oscar: 1, hank: 1, angela: 2 });
-  assert.deepEqual(['oscar', 'hank', 'angela'].map((id) => h.row(id).name.textContent), ['Oscar', 'Hank', 'Angela']);
+  assert.deepEqual(['oscar', 'hank', 'angela'].map((id) => h.row(id).name.textContent), ['Code Reviewer', 'Security Auditor', 'QA Tester']);
   assert.equal(h.$('f-gates-summary').textContent, 'Review + Security \u2192 Tests, after each developer turn');
   for (const role of ROLES5) assert.equal(h.$(`model-row-${role}`).hidden, false, role);
   assert.equal(h.$('f-model-oscar').childNodes[0].textContent, 'Automatic');
@@ -167,7 +167,7 @@ test('drawer: a stage out of range is an error on that stage, and nothing is sen
   await h.open();
   await h.pick(Object.fromEntries(ROLES5.map((r) => [r, GPT])));
   await h.stage('hank', 7);
-  assert.equal(h.$('f-gates-summary').textContent, "Hank's stage must be a whole number from 1 to 3.");
+  assert.equal(h.$('f-gates-summary').textContent, 'The stage of the Security Auditor must be a whole number from 1 to 3.');
   await h.$('run-form').fire('submit');
   assert.deepEqual(h.posts, []);
   assert.equal(h.row('hank').stage.getAttribute('aria-invalid'), 'true');

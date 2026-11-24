@@ -70,13 +70,13 @@ test('a send that gets an id clears the draft, says it is queued and tracks the 
   const sent = h.$('chat-form').fire('submit');
   await h.tick();
   assert.deepEqual(h.posts, [{ url: '/api/projects/core/chats/a/chat', body: { runId: 'run-a', to: 'dwight-m1', text: 'Use todos.json' } }]);
-  assert.equal(h.$('chat-status').textContent, 'Sending to dwight-m1...');
+  assert.equal(h.$('chat-status').textContent, 'Sending to the Developer (m1)...');
   assert.equal(h.$('chat-send').disabled, true);
   h.answer({ id: 'msg-1', delivery: 'queued' });
   await sent;
   assert.equal(h.$('chat-text').value, '', 'draft cleared');
   assert.equal(h.$('chat-count').textContent, '0 / 16000');
-  assert.match(h.$('chat-status').textContent, /^Queued for dwight-m1\./);
+  assert.match(h.$('chat-status').textContent, /^Queued for the Developer \(m1\)\./);
   assert.equal(h.$('chat-send').disabled, false, 'the composer is free again');
   assert.deepEqual(ids(h), ['queued']);
   assert.equal(h.$('chat-list').childNodes[0].dataset.human, 'true');
@@ -85,7 +85,7 @@ test('a send that gets an id clears the draft, says it is queued and tracks the 
   h.stream.push(['chat_delivery', { id: 'msg-1', delivery: 'delivered' }]);
   h.panel.render();
   assert.deepEqual(ids(h), ['delivered'], 'the echo replaced the outbox entry');
-  assert.equal(h.$('chat-status').textContent, 'Message to dwight-m1 delivered');
+  assert.equal(h.$('chat-status').textContent, 'Message to the Developer (m1) delivered');
 });
 
 test('a message the human did not send from this panel brings no delivery news', async (t) => {
@@ -104,7 +104,7 @@ test('a delivered answer is reported as delivered', async (t) => {
   await h.tick();
   h.answer({ id: 'msg-2', delivery: 'delivered' });
   await sent;
-  assert.equal(h.$('chat-status').textContent, 'Message to dwight-m1 delivered');
+  assert.equal(h.$('chat-status').textContent, 'Message to the Developer (m1) delivered');
   assert.deepEqual(ids(h), ['delivered']);
 });
 

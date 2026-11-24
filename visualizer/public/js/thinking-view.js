@@ -174,7 +174,7 @@ export function createThinkingView({ onToggle = null } = {}) {
 
   function column(col) {
     const c = {
-      id: col.id, el: el('section', 'think-col'), glyph: el('span', 'act-glyph'), name: el('h3', 'think-name mono'), role: el('span', 'act-role'),
+      id: col.id, el: el('section', 'think-col'), glyph: el('span', 'act-glyph'), name: el('h3', 'think-name'), role: el('span', 'act-role'),
       status: el('span', 'act-status'), line: el('p', 'think-line'), scroll: el('div', 'think-scroll'), empty: el('p', 'placeholder', 'Nothing recorded for this agent.'),
       expand: button('msg-more think-expand'), only: button('icon-btn think-only'), jump: button('jump', 'Jump to latest'),
       items: new Map(), open: null, col,
@@ -290,7 +290,8 @@ export function createThinkingView({ onToggle = null } = {}) {
     c.scroll.setAttribute('aria-label', `What ${col.name} thought and did, oldest first`);
     say(c.glyph, STATUS_GLYPH[col.status] ?? '○');
     say(c.name, col.name);
-    c.name.title = col.name;
+    // what the agent does and the id of the instance are a hover away
+    c.name.title = [col.name, col.about].filter(Boolean).join(': ');
     say(c.role, col.role);
     c.role.title = col.role;
     say(c.status, col.status);
@@ -364,7 +365,8 @@ export function createThinkingView({ onToggle = null } = {}) {
       ch.el.dataset.status = col.status;
       ch.el.dataset.live = String(col.live);
       say(ch.glyph, STATUS_GLYPH[col.status] ?? '○');
-      say(ch.name, col.name);
+      // the chip says it short; its name and its tooltip say it in full
+      say(ch.name, col.short ?? col.name);
       const about = [col.name, col.role, col.status].filter(Boolean).join(', ');
       ch.el.title = about;
       ch.el.setAttribute('aria-label', about);

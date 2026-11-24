@@ -40,12 +40,12 @@ The read/display order is project notes, Dreaming memory, other chats in the pro
 
 Tokens are estimates, not provider-measured counts. No tokenizer is used: ASCII and `…` count as one unit per code point (about four English ASCII characters per token), other code points through U+2E7F count as two, and higher ones count as four. Divide by four and round up.
 
-Set a project-wide share of the model window (default **10%**, range **1–50%**) or a fixed budget (**1000–200000 tokens**). Up to **32** model-specific `provider/model` overrides take precedence over the project rule. Team caps the effective budget at half the window and **200000 tokens**, except that the **256-token** floor takes priority. Unknown windows are assumed to be **128000 tokens** and marked as assumed. Michael and Dwight have separate budgets based on their models.
+Set a project-wide share of the model window (default **10%**, range **1–50%**) or a fixed budget (**1000–200000 tokens**). Up to **32** model-specific `provider/model` overrides take precedence over the project rule. Team caps the effective budget at half the window and **200000 tokens**, except that the **256-token** floor takes priority. Unknown windows are assumed to be **128000 tokens** and marked as assumed. The Planner (id `michael`) and the Developer (id `dwight`) have separate budgets based on their models.
 
 | Limit (`src/core/context/limits.js`) | Value |
 | --- | --- |
-| Team planning (Michael) | Model-specific budget; section allowances and detailed turns scale with it (at most **12** detailed turns); transport at most **800000 characters**. |
-| Team implementation (Dwight) | One tenth of his effective budget, at least **250**, at most **2000 tokens**, never above his own budget; notes and condensed own turns, no other chats, memory, or replies. |
+| Team planning (Planner) | Model-specific budget; section allowances and detailed turns scale with it (at most **12** detailed turns); transport at most **800000 characters**. |
+| Team implementation (Developer) | One tenth of its effective budget, at least **250**, at most **2000 tokens**, never above its own budget; notes and condensed own turns, no other chats, memory, or replies. |
 | Stored project notes / Dreaming source | **16000 characters / 65536 bytes** for notes; **2000 characters** for Dreaming before pack budgeting. |
 | Other chats | At most **6 chats × 3 turns**; leftover budget only. |
 | Pipeline prompt | **4000–18750 estimated tokens** for history and context together under the engine prompt budget, not the full model window. |
@@ -53,7 +53,7 @@ Set a project-wide share of the model window (default **10%**, range **1–50%**
 | Inputs | Team request **32768 characters**; live agent messages and human feedback **16000 characters** each; Pipeline task **32768 UTF-8 bytes** and gate comment **4000 characters**. |
 | Turn collection | At most **500** own runs; **12** most recently updated sibling chats with **4** newest runs each; shared read budget **64 MiB**. The Pipeline recent-run/plan-anchor selection can separately read additional artifacts as needed. |
 
-Input character limits count JS string length, while truncation preserves whole code points. Team includes the full notes when they fit in half the pack budget; otherwise it marks them as shortened. When space is tight, detailed turns lose files, then plan, reply, and request, before becoming a one-liner. Oscar, Hank, Angela, and custom gates receive no new context. Dwight gets the brief on tasks and retries, even with no planning.
+Input character limits count JS string length, while truncation preserves whole code points. Team includes the full notes when they fit in half the pack budget; otherwise it marks them as shortened. When space is tight, detailed turns lose files, then plan, reply, and request, before becoming a one-liner. The Code Reviewer (`oscar`), the Security Auditor (`hank`), the QA Tester (`angela`), and custom gates receive no new context. The Developer gets the brief on tasks and retries, even with no planning.
 
 Only the Pipeline planner gets history and a separate `conversation_context` block. With byte allowances `H` and `C`, the respective prompt limits are `min(H, max_prompt_bytes // 4, room)` and `min(C, max_prompt_bytes // 8, room)`. Implementer and reviewer prompts are unchanged. Without `budget`, the [existing wire and prompt caps](../PIPELINE.md#cross-run-continuity) apply. Other chats supply only condensed lines, never `runs` entries.
 
@@ -80,7 +80,7 @@ node bin/scranton.js context restore --data DIR --project ID --chat ID
 
 Settings live in `<data>/projects/<id>/context/settings.json` (`{v:2,crossChat:true,budget:{mode:"percent",value:10},models:{}}`, at most **65536 bytes**; v1 remains readable). `notes.md` sits beside it. The chat marker is `<data>/projects/<id>/chats/<chat>/context/state.json` (`{v:1,resetAt:null}` or an ISO timestamp in `resetAt`). Turns and packs are derived from those files and run history, not stored as new summaries. Missing or broken settings use defaults. Unreadable, oversized, or linked artifacts are skipped individually instead of preventing a run. See [Control API §12](../CONTROL.md#12-context-system-registry-only) for documents and transport.
 
-Context is advisory: no approvals, completed steps, check success, evidence IDs, checkpoints, or execution state carry over. Fresh reads, checks, and approvals remain necessary. Credential redaction is best effort, not anonymization. Team **Files touched** is derived from Dwight's journaled `write`/`edit` events and points to paths, not proof of delivery. Condensation is deterministic, not model-generated; estimates say nothing about live-model quality.
+Context is advisory: no approvals, completed steps, check success, evidence IDs, checkpoints, or execution state carry over. Fresh reads, checks, and approvals remain necessary. Credential redaction is best effort, not anonymization. Team **Files touched** is derived from the Developer's journaled `write`/`edit` events and points to paths, not proof of delivery. Condensation is deterministic, not model-generated; estimates say nothing about live-model quality.
 
 ## Repository instructions (AGENTS.md)
 

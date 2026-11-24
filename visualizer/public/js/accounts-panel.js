@@ -1006,8 +1006,14 @@ export function createModelPicker({ openAccounts, canOpenAccounts }) {
         const note = el('span', 'hint');
         note.id = `f-model-${a.id}-note`;
         note.hidden = true;
-        s.setAttribute('aria-describedby', note.id);
-        row.append(label, s, note);
+        // the id a config file or the CLI names it by, as the built-in rows say theirs
+        const about = el('span', 'hint model-about');
+        about.id = `f-model-${a.id}-about`;
+        const id = el('span', 'agent-id');
+        id.append('id ', el('code', '', a.id));
+        about.append(id);
+        s.setAttribute('aria-describedby', `${about.id} ${note.id}`);
+        row.append(label, s, about, note);
         e.rows[a.id] = row;
         e.selects[a.id] = s;
         e.notes[a.id] = note;

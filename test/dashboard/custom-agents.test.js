@@ -31,15 +31,17 @@ test('six-role parallel run uses compact rows, custom verdicts and concurrent cu
   for (const [width, height] of [[80, 24], [140, 40]]) {
     const out = render(customFixture(), { width, height });
     const rows = panels(out).split('\n');
-    const names = ['MICHAEL', 'DWIGHT', 'OSCAR', 'SECLINT', 'POLICY', 'ANGELA'];
-    for (const name of names) assert.equal(rows.filter((line) => line.includes(name)).length, 1, `missing compact role ${name}`);
-    assert.deepEqual(rows.filter((line) => names.some((name) => line.includes(name))).map((line) => names.find((name) => line.includes(name))), names);
-    assert.doesNotMatch(out, /HANK/);
+    // compact rows lead with the Short name; 'QA' alone also appears in the stage line, so match the row start
+    const names = ['PLANNER', 'DEVELOPER', 'REVIEWER', 'SECLINT', 'POLICY', 'QA'];
+    const role = (line) => names.find((name) => new RegExp(`^ \\S ${name} `).test(line));
+    for (const name of names) assert.equal(rows.filter((line) => role(line) === name).length, 1, `missing compact role ${name}`);
+    assert.deepEqual(rows.filter(role).map(role), names);
+    assert.doesNotMatch(out, /SECURITY|Security/);
     assert.match(panels(out), /SECLINT.*PASSED/);
-    assert.match(out, /Stage 1:.*\(parallel\).*Stage 2: angela/);
-    assert.match(out, /policy-m1/);
+    assert.match(out, /Stage 1:.*\(parallel\).*Stage 2: QA/);
+    assert.match(out, /Policy - m1/);
     assert.doesNotMatch(out, /\+-/);
-    assert.match(out, /seclint gate passed SECLINT_CLEAN/);
+    assert.match(out, /SecLint gate passed SECLINT_CLEAN/);
   }
 });
 
@@ -47,8 +49,8 @@ test('custom fail and BLOCKED use own keywords; built-in review wording stays in
   const f = customFixture('failed');
   const out = render(f);
   assert.match(panels(out), /SECLINT.*FAILED/);
-  assert.match(panels(out), /OSCAR.*CHANGES/);
-  assert.match(out, /seclint gate failed SECLINT_DIRTY/);
+  assert.match(panels(out), /REVIEWER.*CHANGES/);
+  assert.match(out, /SecLint gate failed SECLINT_DIRTY/);
   const ev = f.events.find((e) => e.agent === 'seclint');
   ev.keyword = 'BLOCKED'; ev.result = 'blocked';
   assert.match(panels(render(f)), /SECLINT.*BLOCKED/);
@@ -68,7 +70,7 @@ test('metadata comes from same-run start first, state second; state-only own ver
   assert.match(render(f), /STATE NAME/);
   f.state.roles[3].name = '';
   f.state.roles[0].name = ''; f.state.roles[0].title = '';
-  assert.match(render(f), /MICHAEL/);
+  assert.match(render(f), /PLANNER/);
 });
 
 test('custom names and titles are safe and fitted even in a small five-role grid', () => {
@@ -82,6 +84,45 @@ test('custom names and titles are safe and fitted even in a small five-role grid
     for (const line of out.split('\n')) assert.ok(visibleWidth(line) <= width);
     if (ascii) assert.match(out, /^[\x00-\x7f]*$/);
     assert.match(out, /SEC/);
+  }
+});
+
+test('a long custom name is cut on its own compact row and never starves the built-in rows', () => {
+  const f = customFixture();
+  const a11y = { ...f.state.roles[3], id: 'a11y', name: 'Accessibility Reviewer', title: 'Accessibility',
+    passKeyword: 'A11Y_CLEAN', failKeyword: 'A11Y_DIRTY', keywords: ['A11Y_CLEAN', 'A11Y_DIRTY', 'BLOCKED'] };
+  const roles = [f.state.roles[0], f.state.roles[1], a11y, f.state.roles[5]];
+  const gates = [['a11y'], ['angela']];
+  f.state.roles = roles;
+  f.state.execution.workflow.gates = gates;
+  f.events = [{ ...f.events[0], roles, execution: { workflow: { gates } } }];
+  f.state.instances = {};
+  f.state.agents.a11y = { status: 'done', activity: 'Contrast checked', lastKeyword: 'A11Y_CLEAN', totals: {} };
+  f.state.agents.dwight = { ...f.state.agents.dwight, status: 'blocked', lastKeyword: 'BLOCKED' };
+  f.state.agents.angela = { ...f.state.agents.angela, status: 'done', activity: 'Two tests fail', lastKeyword: 'TEST_FAILED' };
+  const verdict = (agent, keyword, result, stage) => ({ v: 1, seq: f.events.length + 1, ts: f.state.updatedAt, runId: f.state.runId,
+    type: 'gate_result', agent, keyword, result, stage, milestoneId: 'm1', cycle: 2, instanceId: `${agent}-m1` });
+  f.events.push(verdict('a11y', 'A11Y_CLEAN', 'passed', 0));
+  f.events.push(verdict('angela', 'TEST_FAILED', 'failed', 1));
+  const builtins = [['PLANNER', 'DONE', 'PLAN_READY', 'Plan ready'], ['DEVELOPER', 'BLOCKED', 'BLOCKED', 'Snapshot ready'],
+    ['QA', 'DONE', 'TEST FAILED', 'Two tests fail']];
+  for (const width of [40, 39]) for (const ascii of [false, true]) {
+    const ell = ascii ? '...' : '…';
+    const lines = render(f, { width, height: 20, ascii }).split('\n');
+    const context = `${width} ascii=${ascii}`;
+    for (const line of lines) assert.ok(visibleWidth(line) <= width, `${context}: ${line}`);
+    const row = (name) => lines.find((line) => new RegExp(`^ ?\\S ${name}\\s`).test(line));
+    for (const [name, word, keyword, activity] of builtins) {
+      const line = row(name);
+      assert.ok(line, `${context}: missing ${name} row`);
+      const rest = line.replace(new RegExp(`^ ?\\S ${name}\\s+`), '');
+      assert.ok(rest.startsWith(`${word} `), `${context}: ${name} lost its status word: ${line}`);
+      assert.ok(rest.endsWith(` ${keyword}`), `${context}: ${name} lost its keyword: ${line}`);
+      // ASCII cuts cost three cells, so only the one-cell ellipsis is held to a visible activity at 40 columns.
+      const shown = rest.slice(word.length, -keyword.length).trim().replace(ell, '');
+      if (!ascii) assert.ok(shown.length && activity.startsWith(shown), `${context}: ${name} lost its activity: ${line}`);
+    }
+    assert.ok(lines.some((line) => line.includes(`ACCESS${ascii ? '' : 'IB'}${ell} DONE`)), `${context}: custom name not cut`);
   }
 });
 
@@ -176,8 +217,8 @@ test('single-role snapshots do not override workflow role selection', () => {
     delete f.state.execution;
     f.events = [];
     const out = render(f, { width });
-    for (const name of ['MICHAEL', 'DWIGHT', 'ANGELA']) assert.match(out, new RegExp(name));
-    assert.doesNotMatch(out, /SECLINT|OSCAR|HANK|Stage/);
+    for (const name of ['PLANNER', 'DEVELOPER', 'QA TESTER']) assert.match(out, new RegExp(name));
+    assert.doesNotMatch(out, /SECLINT|CODE REVIEWER|SECURITY AUDITOR|Stage/);
     assert.equal(out.split('\n').length, 40);
   }
 });

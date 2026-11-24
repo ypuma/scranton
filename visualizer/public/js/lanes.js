@@ -1,10 +1,10 @@
 // Instance lanes under the role overview, or role activity for JSON runs without instances:
 // with its own status, what it is doing now, the live text and recent files under it, its worktree, sandbox and
 // session, and a shortcut into the message composer.
-import { lanesOf, isLive, isBusy, laneGate } from './state.js';
+import { lanesOf, isLive, isBusy, laneGate, instanceLabel, roleTitle, aboutAgent } from './state.js';
 import { STATUS_GLYPH, GATE_GLYPH } from './pipeline.js';
 import { plural } from './format.js';
-import { teamAgents, laneRole } from './activity-model.js';
+import { teamAgents } from './activity-model.js';
 import { createLiveBlock } from './agent-live.js';
 import { statusTone } from './status-tone.js';
 
@@ -82,11 +82,12 @@ export function createLanes({ block, list, exec, onMessage }) {
     const glyph = el('span', 'lane-glyph', STATUS_GLYPH[inst.status] ?? '○');
     glyph.setAttribute('aria-hidden', 'true');
     const id = el('div', 'lane-id');
-    const name = el('span', 'lane-name mono', serial ? doing.name : inst.id);
-    name.title = inst.id;
-    const where = inst.milestoneId && inst.milestoneId !== 'plan' ? ` · ${inst.milestoneId}` : '';
-    // a custom gate is called by the title the run gave it
-    const role = el('span', 'lane-role', `${laneRole(inst.agent, s)}${where}`);
+    // "Developer · m1"; the instance id and what the agent does are a hover away
+    const label = doing?.name ?? instanceLabel(inst.id, s);
+    const name = el('span', 'lane-name mono', label);
+    name.title = [label, doing?.about ?? aboutAgent(inst.id, s)].filter(Boolean).join(': ');
+    // a custom gate says the title the run gave it
+    const role = el('span', 'lane-role', doing?.role ?? roleTitle(inst.agent, s));
     role.title = role.textContent;
     id.append(name, role);
     // a settled gate lane says its own result for the cycle instead of the keyword it finished with
@@ -110,7 +111,7 @@ export function createLanes({ block, list, exec, onMessage }) {
       const b = el('button', 'btn btn-small', 'Message');
       b.type = 'button';
       b.dataset.message = inst.id;
-      b.setAttribute('aria-label', `Message ${inst.id}`);
+      b.setAttribute('aria-label', `Message ${label}`);
       li.append(b);
     } else {
       li.append(el('span'));

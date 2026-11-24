@@ -3,7 +3,7 @@
 // the key and provider requests, and the per-role model choice of the New run drawer. No DOM, so Node can test
 // it. The API never returns token or key values; a key typed here only ever travels in one request body.
 import { stripBidi, formatClock } from './format.js';
-import { AGENT_IDS, LEGACY_GATES, ROLE_ID_RE, own } from './state.js';
+import { AGENT_IDS, LEGACY_GATES, ROLE_ID_RE, own, theName } from './state.js';
 
 export const PROVIDER_LABEL = { anthropic: 'Claude (Pro/Max)', openai: 'ChatGPT', 'google-antigravity': 'Google Antigravity', google: 'Gemini' };
 export const ACCOUNT_STATUSES = ['signed_in', 'signed_out', 'expired', 'error'];
@@ -31,7 +31,6 @@ export const AUTH_POLL_MS = 1000;
 // the server opens the sign-in page again at most once per 2 s
 export const REOPEN_MS = 2000;
 export const MODEL_ROLES = AGENT_IDS;
-export const ROLE_LABEL = { michael: 'Michael', dwight: 'Dwight', oscar: 'Oscar', hank: 'Hank', angela: 'Angela' };
 export const MODELS_KEY = 'scranton.models';
 // Scranton's own runtime calls the models on the host; a container only runs the agents' commands
 export const DOCKER_NOTE = 'In Docker only the agents\' commands run in the container. Model calls, sign-ins and API keys stay on this computer and are never passed into it.';
@@ -533,14 +532,15 @@ export function storeChoice(stored, role, value) {
 }
 
 // The roles a run starts: the built-ins in pipeline order, then its custom gates in stage order; without a plan
-// Michael has nothing to do (the server checks the same list). gates = the run's workflow stages; none given is
+// the planner has nothing to do (the server checks the same list). gates = the run's workflow stages; none given is
 // the engine default, the tests alone.
 export function runRoles({ noPlan = false, gates = LEGACY_GATES } = {}) {
   const used = new Set([...(noPlan ? [] : ['michael']), 'dwight', ...gates.flat()]);
   return [...MODEL_ROLES, ...gates.flat().filter((r) => !MODEL_ROLES.includes(r))].filter((r) => used.has(r));
 }
 
-const roleLabel = (role, names) => own(ROLE_LABEL, role) ?? (names ? own(names, role) : undefined) ?? role;
+// "the Developer"; a custom agent by the name the catalog gives it
+const roleLabel = (role, names) => (AGENT_IDS.includes(role) ? theName(role) : (names ? own(names, role) : undefined) ?? role);
 
 // The default option of a role select: what that role will actually use. configured = GET /api/control
 // defaults.models (null: not reported); a role without an agent default runs on Automatic, in every sandbox.
@@ -571,7 +571,7 @@ export function buildModels(values, catalog, run = null) {
     const c = parseModelKey(v);
     const hit = c ? findModel(catalog, c) : null;
     if (!hit || !hit.provider.signedIn) {
-      return { error: `${roleLabel(role, run?.names)}'s model is not available any more. Pick another one or the default.`, field: `models.${role}` };
+      return { error: `The model picked for ${roleLabel(role, run?.names)} is not available any more. Pick another one or the default.`, field: `models.${role}` };
     }
     models[role] = { provider: c.provider, model: c.model };
   }
